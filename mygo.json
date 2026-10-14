@@ -1,0 +1,16 @@
+{
+  "name": "JSTV Player",
+  "identifier": "com.freelxs.jstvplayer",
+  "version": "0.1.0",
+  "frontendDist": "web",
+  "macos": {
+    "infoPlist": {
+      "NSAppTransportSecurity": {
+        "NSAllowsArbitraryLoads": true,
+        "NSAllowsArbitraryLoadsForMedia": true,
+        "NSAllowsArbitraryLoadsInWebContent": true,
+        "NSAllowsLocalNetworking": true
+      }
+    }
+  }
+}

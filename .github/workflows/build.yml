@@ -1,0 +1,50 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: go vet ./...
+      - run: GOOS=darwin go vet ./...
+      - run: go test -v ./...
+
+  macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Build app (universal)
+        run: go tool mygo build -platform darwin/universal
+      - name: Package
+        run: |
+          ls -R dist | head -50
+          cd dist/darwin-universal
+          ditto -c -k --sequesterRsrc --keepParent "JSTV Player.app" ../../JSTV-Player-macos-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JSTV-Player-macos-universal
+          path: JSTV-Player-macos-universal.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JSTV-Player-macos-universal-dmg
+          path: dist/darwin-universal/*.dmg
+          if-no-files-found: error

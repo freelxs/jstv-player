@@ -1,0 +1,30 @@
+:root{color-scheme:light dark;font-family:-apple-system,system-ui,sans-serif;font-size:14px;--bg:Canvas;--line:color-mix(in srgb,CanvasText 15%,transparent);--acc:#0a84ff}
+body{margin:0;display:flex;height:100vh;overflow:hidden}
+aside{width:220px;border-right:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:6px;overflow:auto}
+.brand{font-weight:700;font-size:16px;margin-bottom:6px}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+header{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--line);align-items:center}
+header input#q{flex:1}
+input,select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:transparent;font:inherit;color:inherit}
+button{padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
+button:hover{background:color-mix(in srgb,CanvasText 8%,transparent)}
+button.active,button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+#sites button{display:block;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+nav{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px}
+nav:empty{display:none}
+#view{flex:1;overflow:auto;padding:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.card{cursor:pointer}
+.card img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:8px;background:var(--line)}
+.card .t{font-weight:600;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.muted{opacity:.6}.small{font-size:12px}
+.pager{display:flex;gap:8px;justify-content:center;margin:16px}
+.detail{display:flex;gap:16px}.detail img{width:200px;border-radius:8px}
+.eps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+h4{margin:16px 0 6px}
+dialog{border:1px solid var(--line);border-radius:12px;width:520px}
+dialog label{display:flex;flex-direction:column;gap:4px;margin:10px 0}
+dialog label.row,.row{flex-direction:row;display:flex;gap:8px;align-items:center}.end{justify-content:flex-end}
+pre#logs{max-height:200px;overflow:auto;font-size:11px;white-space:pre-wrap}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 14px;border-radius:8px;max-width:70%}
+.siteh{margin:14px 0 6px;font-weight:700}

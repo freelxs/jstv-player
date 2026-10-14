@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>JSTV Player</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside>
+  <div class="brand">JSTV Player</div>
+  <button id="btnSettings">⚙️ 设置</button>
+  <button id="btnReload">⟳ 重新加载源</button>
+  <div id="status" class="muted">未加载源</div>
+  <div id="sites"></div>
+</aside>
+<main>
+  <header>
+    <button id="back" hidden>← 返回</button>
+    <input id="q" placeholder="搜索（全部可搜索站点）" />
+    <label class="muted"><input type="checkbox" id="onlySite"> 仅当前站点</label>
+  </header>
+  <nav id="classes"></nav>
+  <section id="view"></section>
+</main>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h3>设置</h3>
+    <label>源地址（index.js 或 index.js.md5）
+      <input id="sURL" placeholder="https://example.com/path/index.js.md5" /></label>
+    <label>Node.js 路径（留空自动查找）
+      <input id="sNode" placeholder="/opt/homebrew/bin/node" /></label>
+    <label>播放器
+      <select id="sPlayer">
+        <option value="builtin">内置（WKWebView，HLS/MP4）</option>
+        <option value="iina">IINA</option>
+        <option value="mpv">mpv</option>
+        <option value="system">系统默认（open）</option>
+      </select></label>
+    <label>播放桥模板（可选，留空则关闭；{vid}、{res} 会被替换）
+      <input id="sBridge" placeholder="https://example.com/media/{vid}/{res}.mp4" /></label>
+    <label class="row"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
+    <p class="muted small">源由你自行提供和负责。本应用不内置任何源。</p>
+    <div class="row end">
+      <button value="cancel">取消</button>
+      <button id="sSave" value="save" class="primary">保存并加载</button>
+    </div>
+    <details><summary>源日志</summary><pre id="logs"></pre></details>
+  </form>
+</dialog>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
