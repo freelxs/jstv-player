@@ -14,7 +14,7 @@
 - 自动下载 `index.js`、`index.config.js`，校验 md5（默认不一致时只提示）
 - 站点列表、分类浏览与翻页、单站/全站搜索（结果逐站流式返回）
 - 详情页、多线路剧集列表、多清晰度选择
-- 播放：内置播放器、mpv（三个平台）、IINA（仅 macOS）、系统默认；需要请求头的流经本地代理转发
+- 播放：内置播放器、mpv（三个平台）、PotPlayer（仅 Windows）、IINA（仅 macOS）、系统默认；需要请求头的流经本地代理转发
 - 浅色 / 深色模式跟随系统；海报网格、骨架屏加载、空状态和错误状态（带重试）
 - 插件返回网页（`parse:1` 或 `text/html`）时在新窗口打开
 - 可选的播放桥（`/play?vid=`）：默认关闭，只有在设置里填写自己的 URL 模板后才启用
@@ -27,7 +27,8 @@
 - macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）
 - **Node.js 18+**（插件本身是 Node.js 程序）。App 会在 PATH 和常见安装位置（Homebrew、`/usr/bin`、`C:\Program Files\nodejs`、nvm、volta）查找，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io)。
-- Windows 和 Linux 的系统 web view 一般不能直接播放 HLS，所以这两个平台默认用 mpv。
+- Windows 和 Linux 的系统 web view 一般不能直接播放 HLS，所以默认用外部播放器：Windows 上依次选 PotPlayer、mpv、内置；Linux 上选 mpv、内置。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。所有外部播放器拿到的都是本地代理地址，请求头由代理加上。
+- 默认播放器只在还没保存过播放器设置时生效；已经保存过的设置不会被改动，可在设置 → 播放里切换。
 
 ## 下载
 

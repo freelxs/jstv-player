@@ -324,6 +324,9 @@ $('#subForm').addEventListener('submit', async (e) => {
 async function openSettings(tab = 'subs') {
   st.settings = await call('GetSettings');
   const s = st.settings;
+  // Only offer the OS-specific players on their OS (keep a saved one visible).
+  const os = /Windows/i.test(navigator.userAgent) ? 'win' : /Mac/i.test(navigator.userAgent) ? 'mac' : 'linux';
+  for (const o of $$('#sPlayer option[data-os]')) o.hidden = o.dataset.os !== os && o.value !== s.player;
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
   $('#sStrict').checked = !!s.strictMd5; $('#sBridge').value = s.bridgeTemplate || '';
   editSub(null); renderSubList(); setTab(tab);

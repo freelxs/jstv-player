@@ -44,7 +44,7 @@ export interface Settings {
   sourceUrl?: string;
   /** optional explicit node executable */
   nodePath: string;
-  /** builtin | iina | mpv | system */
+  /** builtin | potplayer | iina | mpv | system */
   player: string;
   /** refuse to run when index.js.md5 differs */
   strictMd5: boolean;

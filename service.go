@@ -27,7 +27,7 @@ type Settings struct {
 	// SourceURL is the pre-0.2 single address, migrated on load.
 	SourceURL string `json:"sourceUrl,omitempty"`
 	NodePath  string `json:"nodePath"`  // optional explicit node executable
-	Player    string `json:"player"`    // builtin | iina | mpv | system
+	Player    string `json:"player"`    // builtin | potplayer | iina | mpv | system
 	StrictMD5 bool   `json:"strictMd5"` // refuse to run when index.js.md5 differs
 	// BridgeTemplate is where the built-in play bridge (/play?vid=) finds
 	// media: {vid} and {res} are substituted. Empty disables the bridge.
@@ -462,6 +462,21 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		return nil
 	}
 	switch player {
+	case "potplayer":
+		if runtime.GOOS != "windows" {
+			return errors.New("PotPlayer 只支持 Windows，请改用 mpv")
+		}
+		exe := findPotPlayer()
+		if exe == "" {
+			return errors.New("未找到 PotPlayer（PotPlayerMini64.exe）：请安装，或在设置里改用 mpv")
+		}
+		cmd := potPlayerCommand(exe, u, title)
+		p.log(potPlayerCmdLine(exe, u, title))
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		go cmd.Wait()
+		return nil
 	case "iina", "mpv":
 		var name string
 		var args []string
@@ -517,12 +532,22 @@ func mpvArgs(u, title string) []string {
 }
 
 // defaultPlayer: the macOS web view plays HLS itself; on Windows and Linux
-// the web views generally do not, so mpv is the better default there.
+// the web views generally do not, so an installed external player is the
+// better default there: PotPlayer (Windows), then mpv, then built-in.
 func defaultPlayer() string {
-	if runtime.GOOS == "darwin" {
+	return pickDefaultPlayer(runtime.GOOS, findPotPlayer() != "", findExe(mpvCandidates()...) != "")
+}
+
+func pickDefaultPlayer(goos string, hasPot, hasMPV bool) string {
+	switch {
+	case goos == "darwin":
 		return "builtin"
+	case goos == "windows" && hasPot:
+		return "potplayer"
+	case hasMPV:
+		return "mpv"
 	}
-	return "mpv"
+	return "builtin"
 }
 
 // mpvCandidates lists where mpv usually lives on each platform; PATH is
