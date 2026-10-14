@@ -57,18 +57,20 @@
 ## 4. 本应用的实现
 
 ```
-macOS App (Go + MyGo, WKWebView 前端)
+桌面 App (Go + MyGo；macOS WKWebView / Windows WebView2 / Linux WebKitGTK 前端)
    │  mygo.call("Player.*")
    ▼
-Go: 下载 index.js(+md5, index.config.js) → 启动 node 子进程(bootstrap.cjs)
+Go: 取当前订阅 → 下载 index.js(+md5, index.config.js) 到 subs/<id>/ → 启动 node 子进程(bootstrap.cjs)
    │  HTTP 127.0.0.1:随机端口   /config  /spider/*/3/{init,home,category,detail,play,search}
    ▼
 Node.js: 插件 index.js
 ```
 
+切换订阅时先停止旧的 node 子进程，再为新订阅启动一个；同一时间只运行一个插件进程。
+
 播放：
 
-- 所有播放地址（「系统默认」除外）都经 Go 本地代理：注入插件给的请求头，改写 HLS 播放列表（绝对地址、分片统一为 `.ts` 扩展名），再交给内置播放器、IINA 或 mpv。
+- 所有播放地址（「系统默认」除外）都经 Go 本地代理：注入插件给的请求头，改写 HLS 播放列表（绝对地址、分片统一为 `.ts` 扩展名），再交给内置播放器、mpv 或 IINA（仅 macOS）。
 - 指向 `127.0.0.1` 的地址统一改到当前插件服务的端口（`/spider/...`、`/proxy...`）。
 - 播放前先请求首字节：HTTP 错误直接提示「该线路不可用」；`Content-Type: text/html` 或 `.html/.htm/.php` 地址在新窗口打开。
 
