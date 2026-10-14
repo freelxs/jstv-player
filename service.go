@@ -20,7 +20,12 @@ import (
 
 // Settings are kept in settings.json in the user data directory.
 type Settings struct {
-	SourceURL string `json:"sourceUrl"` // user-supplied plugin address (index.js or index.js.md5)
+	// Subscriptions are the plugin addresses the user added; Active is the
+	// ID of the one currently loaded.
+	Subscriptions []Subscription `json:"subscriptions"`
+	Active        string         `json:"active"`
+	// SourceURL is the pre-0.2 single address, migrated on load.
+	SourceURL string `json:"sourceUrl,omitempty"`
 	NodePath  string `json:"nodePath"`  // optional explicit node executable
 	Player    string `json:"player"`    // builtin | iina | mpv | system
 	StrictMD5 bool   `json:"strictMd5"` // refuse to run when index.js.md5 differs
@@ -36,6 +41,7 @@ type LoadResult struct {
 	ExpectedMD5 string        `json:"expectedMd5"`
 	Mismatch    bool          `json:"mismatch"`
 	Node        string        `json:"node"`
+	Sub         Subscription  `json:"subscription"`
 }
 
 // DetailResult is a vod with its play lines parsed.
@@ -57,6 +63,8 @@ type Player struct {
 	proxy  *catvod.HeaderProxy
 	bridge *catvod.Bridge
 
+	loadMu sync.Mutex // serializes LoadSource / switching
+
 	mu       sync.Mutex
 	settings Settings
 	host     *catvod.Host
@@ -73,9 +81,14 @@ func newPlayer(dir string) *Player {
 	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		_ = json.Unmarshal(b, &p.settings)
 	}
+	legacy := p.settings.SourceURL != ""
+	p.settings.migrate()
+	if legacy {
+		_ = p.writeSettings(p.settings)
+	}
 	p.startBridge(p.settings.BridgeTemplate)
 	if p.settings.Player == "" {
-		p.settings.Player = "builtin"
+		p.settings.Player = defaultPlayer()
 	}
 	return p
 }
@@ -103,14 +116,21 @@ func (p *Player) GetSettings() Settings {
 	return p.settings
 }
 
-// SaveSettings stores the settings.
+func (p *Player) writeSettings(s Settings) error {
+	b, _ := json.MarshalIndent(s, "", "  ")
+	return os.WriteFile(filepath.Join(p.dir, "settings.json"), b, 0o600)
+}
+
+// SaveSettings stores the general settings (player, node, md5, bridge).
+// Subscriptions are managed by the Subscription methods and kept as they are.
 func (p *Player) SaveSettings(s Settings) error {
 	if s.Player == "" {
-		s.Player = "builtin"
+		s.Player = defaultPlayer()
 	}
-	s.SourceURL = strings.TrimSpace(s.SourceURL)
-	b, _ := json.MarshalIndent(s, "", "  ")
-	if err := os.WriteFile(filepath.Join(p.dir, "settings.json"), b, 0o600); err != nil {
+	p.mu.Lock()
+	s.Subscriptions, s.Active, s.SourceURL = p.settings.Subscriptions, p.settings.Active, ""
+	p.mu.Unlock()
+	if err := p.writeSettings(s); err != nil {
 		return err
 	}
 	p.mu.Lock()
@@ -118,6 +138,67 @@ func (p *Player) SaveSettings(s Settings) error {
 	p.mu.Unlock()
 	p.startBridge(s.BridgeTemplate)
 	return nil
+}
+
+// editSubs applies f to a copy of the settings and saves the result.
+func (p *Player) editSubs(f func(s *Settings) error) (Settings, error) {
+	p.mu.Lock()
+	s := p.settings
+	s.Subscriptions = append([]Subscription(nil), s.Subscriptions...)
+	p.mu.Unlock()
+	if err := f(&s); err != nil {
+		return Settings{}, err
+	}
+	if err := p.writeSettings(s); err != nil {
+		return Settings{}, err
+	}
+	p.mu.Lock()
+	p.settings = s
+	p.mu.Unlock()
+	return s, nil
+}
+
+// AddSubscription adds a plugin address. The first one becomes active.
+func (p *Player) AddSubscription(name, url string) (Settings, error) {
+	return p.editSubs(func(s *Settings) error { _, err := s.add(name, url); return err })
+}
+
+// UpdateSubscription renames a subscription or changes its address.
+func (p *Player) UpdateSubscription(id, name, url string) (Settings, error) {
+	return p.editSubs(func(s *Settings) error { return s.update(id, name, url) })
+}
+
+// RemoveSubscription deletes a subscription and its downloaded files. When
+// it was the active one, its plugin process is stopped.
+func (p *Player) RemoveSubscription(id string) (Settings, error) {
+	wasActive := p.GetSettings().Active == id
+	s, err := p.editSubs(func(s *Settings) error { return s.remove(id) })
+	if err != nil {
+		return s, err
+	}
+	if wasActive {
+		p.loadMu.Lock()
+		p.StopSource()
+		p.loadMu.Unlock()
+	}
+	if id != "" && !strings.ContainsAny(id, `/\.`) {
+		_ = os.RemoveAll(filepath.Join(p.dir, "subs", id))
+	}
+	return s, nil
+}
+
+// SwitchSubscription makes id the active subscription and reloads it.
+func (p *Player) SwitchSubscription(id string) (*LoadResult, error) {
+	if _, err := p.editSubs(func(s *Settings) error {
+		if s.find(id) < 0 {
+			return errNoSub
+		}
+		s.Active = id
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return p.LoadSource()
 }
 
 // startBridge runs the play bridge only when the user configured a
@@ -148,18 +229,25 @@ func (p *Player) bridgeAddr() string {
 	return p.bridge.Addr()
 }
 
-// LoadSource downloads the configured plugin, starts it and lists its sites.
+// LoadSource downloads the active subscription's plugin, starts it and
+// lists its sites. Any previous plugin process is stopped first.
 func (p *Player) LoadSource() (*LoadResult, error) {
+	p.loadMu.Lock()
+	defer p.loadMu.Unlock()
 	s := p.GetSettings()
-	if s.SourceURL == "" {
-		return nil, errors.New("请先在设置中填写源地址")
+	sub, ok := s.active()
+	if !ok {
+		p.StopSource()
+		return nil, errors.New("请先添加一个订阅")
 	}
+	// Each subscription keeps its own plugin copy and data files.
+	dir := filepath.Join(p.dir, "subs", sub.ID)
 	node, err := catvod.FindNode(s.NodePath)
 	if err != nil {
 		return nil, err
 	}
-	p.log("下载源: " + s.SourceURL)
-	src, err := catvod.Fetch(nil, s.SourceURL, p.dir)
+	p.log("加载订阅「" + sub.Name + "」: " + sub.URL)
+	src, err := catvod.Fetch(nil, sub.URL, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +258,7 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 		}
 	}
 	p.StopSource()
-	h := &catvod.Host{Node: node, Dir: filepath.Join(p.dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log}
+	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log}
 	if err := h.Start(90 * time.Second); err != nil {
 		return nil, err
 	}
@@ -182,14 +270,14 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 	p.mu.Lock()
 	p.host, p.sites, p.inited = h, cfg.Video.Sites, map[string]bool{}
 	p.mu.Unlock()
-	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node}, nil
+	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node, Sub: sub}, nil
 }
 
 // StopSource stops the running source process.
 func (p *Player) StopSource() {
 	p.mu.Lock()
 	h := p.host
-	p.host = nil
+	p.host, p.sites, p.inited = nil, nil, map[string]bool{}
 	p.mu.Unlock()
 	if h != nil {
 		h.Stop()
@@ -378,15 +466,18 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		var name string
 		var args []string
 		if player == "iina" {
+			if runtime.GOOS != "darwin" {
+				return errors.New("IINA 只支持 macOS，请改用 mpv")
+			}
 			name = findExe("/Applications/IINA.app/Contents/MacOS/iina-cli", "iina")
 			if name == "" {
 				return errors.New("未找到 IINA（/Applications/IINA.app）")
 			}
 			args = iinaArgs(u)
 		} else {
-			name = findExe("mpv", "/opt/homebrew/bin/mpv", "/usr/local/bin/mpv", "/Applications/mpv.app/Contents/MacOS/mpv")
+			name = findExe(mpvCandidates()...)
 			if name == "" {
-				return errors.New("未找到 mpv（brew install mpv）")
+				return errors.New(mpvHint())
 			}
 			args = mpvArgs(u, title)
 		}
@@ -425,9 +516,55 @@ func mpvArgs(u, title string) []string {
 	return append(args, "--", u)
 }
 
+// defaultPlayer: the macOS web view plays HLS itself; on Windows and Linux
+// the web views generally do not, so mpv is the better default there.
+func defaultPlayer() string {
+	if runtime.GOOS == "darwin" {
+		return "builtin"
+	}
+	return "mpv"
+}
+
+// mpvCandidates lists where mpv usually lives on each platform; PATH is
+// checked first. GUI apps on macOS start with a minimal PATH.
+func mpvCandidates() []string {
+	home, _ := os.UserHomeDir()
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"mpv", "/opt/homebrew/bin/mpv", "/usr/local/bin/mpv", "/Applications/mpv.app/Contents/MacOS/mpv"}
+	case "windows":
+		c := []string{"mpv.exe", "mpv"}
+		for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
+			if d := os.Getenv(env); d != "" {
+				c = append(c, filepath.Join(d, "mpv", "mpv.exe"), filepath.Join(d, "Programs", "mpv", "mpv.exe"))
+			}
+		}
+		if home != "" {
+			c = append(c, filepath.Join(home, "scoop", "apps", "mpv", "current", "mpv.exe"))
+		}
+		if d := os.Getenv("ChocolateyInstall"); d != "" {
+			c = append(c, filepath.Join(d, "bin", "mpv.exe"))
+		}
+		return c
+	default:
+		return []string{"mpv", "/usr/bin/mpv", "/usr/local/bin/mpv", "/snap/bin/mpv", "/var/lib/flatpak/exports/bin/io.mpv.Mpv"}
+	}
+}
+
+func mpvHint() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "未找到 mpv（brew install mpv）"
+	case "windows":
+		return "未找到 mpv：请安装 mpv（如 scoop install mpv）并加入 PATH"
+	default:
+		return "未找到 mpv：请安装 mpv（如 sudo apt install mpv）"
+	}
+}
+
 func findExe(names ...string) string {
 	for _, n := range names {
-		if strings.Contains(n, "/") {
+		if filepath.IsAbs(n) {
 			if _, err := os.Stat(n); err == nil {
 				return n
 			}
@@ -438,11 +575,11 @@ func findExe(names ...string) string {
 	return ""
 }
 
-// playerPage is the built-in player: WKWebView plays HLS (m3u8) and MP4
-// natively; streams that need headers go through the local HeaderProxy.
+// playerPage is the built-in player: the macOS web view plays HLS (m3u8)
+// and MP4 natively, other platforms' web views mostly MP4 only; streams that need headers go through the local HeaderProxy.
 func playerPage(u, title string) string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
 <style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%}#e{position:fixed;top:8px;left:8px;color:#f88;font:13px system-ui}</style></head>
 <body><video src="` + html.EscapeString(u) + `" controls autoplay playsinline></video><div id="e"></div>
-<script>document.querySelector('video').addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 IINA / mpv'})</script></body></html>`
+<script>document.querySelector('video').addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 mpv 或 IINA'})</script></body></html>`
 }

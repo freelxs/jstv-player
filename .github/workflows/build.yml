@@ -1,14 +1,19 @@
-name: Build macOS
+name: Build
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -18,33 +23,56 @@ jobs:
         with:
           node-version: 20
       - run: go vet ./...
-      - run: GOOS=darwin go vet ./...
-      - run: go test -v ./...
+      - run: go test ./...
 
-  macos:
+  build:
     needs: test
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin/universal
+          - os: windows-latest
+            platform: windows/amd64
+          - os: ubuntu-latest
+            platform: linux/amd64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test
-        run: go test ./...
-      - name: Build app (universal)
-        run: go tool mygo build -platform darwin/universal
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }
+      - name: Build
+        run: go tool mygo build -platform ${{ matrix.platform }}
       - name: Package
+        shell: bash
         run: |
-          ls -R dist | head -50
-          cd dist/darwin-universal
-          ditto -c -k --sequesterRsrc --keepParent "JSTV Player.app" ../../JSTV-Player-macos-universal.zip
+          set -e
+          V=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          mkdir -p out
+          case "${{ matrix.platform }}" in
+            darwin/*)
+              cd dist/darwin-universal
+              ditto -c -k --sequesterRsrc --keepParent "JSTV Player.app" "../../out/JSTV-Player-$V-macos-universal.zip"
+              cp *.dmg "../../out/JSTV-Player-$V-macos-universal.dmg" ;;
+            windows/*)
+              cd dist/windows-amd64
+              ls -la
+              7z a "../../out/JSTV-Player-$V-windows-amd64.zip" "JSTV Player.exe" icon.png
+              for f in *etup*.exe; do [ -e "$f" ] && cp "$f" "../../out/JSTV-Player-$V-windows-amd64-setup.exe"; done ;;
+            linux/*)
+              cd dist/linux-amd64
+              cp *.deb "../../out/jstv-player_${V}_amd64.deb"
+              cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz" ;;
+          esac
+          ls -la ../../out
       - uses: actions/upload-artifact@v4
         with:
-          name: JSTV-Player-macos-universal
-          path: JSTV-Player-macos-universal.zip
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        with:
-          name: JSTV-Player-macos-universal-dmg
-          path: dist/darwin-universal/*.dmg
+          name: jstv-player-${{ runner.os }}
+          path: out/*
           if-no-files-found: error

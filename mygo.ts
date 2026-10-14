@@ -29,12 +29,19 @@ export interface LoadResult {
   expectedMd5: string;
   mismatch: boolean;
   node: string;
+  subscription: Subscription;
 }
 
 /** Settings are kept in settings.json in the user data directory. */
 export interface Settings {
-  /** user-supplied plugin address (index.js or index.js.md5) */
-  sourceUrl: string;
+  /**
+   * Subscriptions are the plugin addresses the user added; Active is the
+   * ID of the one currently loaded.
+   */
+  subscriptions: Subscription[];
+  active: string;
+  /** SourceURL is the pre-0.2 single address, migrated on load. */
+  sourceUrl?: string;
   /** optional explicit node executable */
   nodePath: string;
   /** builtin | iina | mpv | system */
@@ -75,10 +82,22 @@ export interface Stream {
   headers?: Record<string, string>;
 }
 
+/** Subscription is one user-supplied plugin address. */
+export interface Subscription {
+  id: string;
+  name: string;
+  /** index.js or index.js.md5 */
+  url: string;
+}
+
 // ---- Services ----
 
 /** Player is the service the page calls (window.mygo.call("Player.X", …)). */
 export const Player = {
+  /** AddSubscription adds a plugin address. The first one becomes active. */
+  addSubscription(name: string, url: string): Promise<Settings> {
+    return call("Player.AddSubscription", name, url);
+  },
   /** Category lists one page of a category. */
   category(api: string, tid: string, page: number, filters: Record<string, string>): Promise<Record<string, unknown>> {
     return call("Player.Category", api, tid, page, filters);
@@ -95,7 +114,10 @@ export const Player = {
   home(api: string): Promise<Record<string, unknown>> {
     return call("Player.Home", api);
   },
-  /** LoadSource downloads the configured plugin, starts it and lists its sites. */
+  /**
+   * LoadSource downloads the active subscription's plugin, starts it and
+   * lists its sites. Any previous plugin process is stopped first.
+   */
   loadSource(): Promise<LoadResult | null> {
     return call("Player.LoadSource");
   },
@@ -111,7 +133,17 @@ export const Player = {
   play(api: string, flag: string, id: string): Promise<Stream[]> {
     return call("Player.Play", api, flag, id);
   },
-  /** SaveSettings stores the settings. */
+  /**
+   * RemoveSubscription deletes a subscription and its downloaded files. When
+   * it was the active one, its plugin process is stopped.
+   */
+  removeSubscription(id: string): Promise<Settings> {
+    return call("Player.RemoveSubscription", id);
+  },
+  /**
+   * SaveSettings stores the general settings (player, node, md5, bridge).
+   * Subscriptions are managed by the Subscription methods and kept as they are.
+   */
   saveSettings(s: Settings): Promise<void> {
     return call("Player.SaveSettings", s);
   },
@@ -129,5 +161,13 @@ export const Player = {
   /** StopSource stops the running source process. */
   stopSource(): Promise<void> {
     return call("Player.StopSource");
+  },
+  /** SwitchSubscription makes id the active subscription and reloads it. */
+  switchSubscription(id: string): Promise<LoadResult | null> {
+    return call("Player.SwitchSubscription", id);
+  },
+  /** UpdateSubscription renames a subscription or changes its address. */
+  updateSubscription(id: string, name: string, url: string): Promise<Settings> {
+    return call("Player.UpdateSubscription", id, name, url);
   },
 } as const;

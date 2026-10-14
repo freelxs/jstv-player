@@ -52,6 +52,11 @@ func FindNode(explicit string) (string, error) {
 	cands := []string{"/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"}
 	if runtime.GOOS == "windows" {
 		cands = []string{`C:\Program Files\nodejs\node.exe`}
+		for _, env := range []string{"ProgramFiles", "NVM_SYMLINK", "LOCALAPPDATA"} {
+			if d := os.Getenv(env); d != "" {
+				cands = append(cands, filepath.Join(d, "nodejs", "node.exe"), filepath.Join(d, "node.exe"))
+			}
+		}
 	}
 	nvm, _ := filepath.Glob(filepath.Join(home, ".nvm/versions/node/*/bin/node"))
 	for i := len(nvm) - 1; i >= 0; i-- {
@@ -63,7 +68,7 @@ func FindNode(explicit string) (string, error) {
 			return c, nil
 		}
 	}
-	return "", errors.New("未找到 Node.js：请安装 Node.js 18+（如 brew install node），或在设置中填写 node 路径")
+	return "", errors.New("未找到 Node.js：请安装 Node.js 18+，或在设置中填写 node 路径")
 }
 
 func freePort() (int, error) {

@@ -2,53 +2,91 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JSTV Player</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<aside>
-  <div class="brand">JSTV Player</div>
-  <button id="btnSettings">⚙️ 设置</button>
-  <button id="btnReload">⟳ 重新加载源</button>
-  <div id="status" class="muted">未加载源</div>
-  <div id="sites"></div>
+<aside class="sidebar">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span>JSTV Player</span></div>
+
+  <div class="switcher">
+    <div class="label">订阅</div>
+    <button id="subBtn" class="sub-btn" aria-haspopup="menu" aria-expanded="false">
+      <span class="sub-dot"></span><span id="subName" class="sub-name">未添加订阅</span><span class="chev" aria-hidden="true"></span>
+    </button>
+    <div id="subMenu" class="menu" role="menu" hidden></div>
+  </div>
+
+  <div class="label row-between"><span>站点</span><span id="status" class="count"></span></div>
+  <nav id="sites" class="sites"></nav>
+
+  <div class="sidebar-foot">
+    <button id="btnReload" class="ghost icon-text" title="重新加载当前订阅"><i class="i i-reload"></i>重新加载</button>
+    <button id="btnSettings" class="ghost icon-text" title="设置"><i class="i i-gear"></i>设置</button>
+  </div>
 </aside>
+
 <main>
-  <header>
-    <button id="back" hidden>← 返回</button>
-    <input id="q" placeholder="搜索（全部可搜索站点）" />
-    <label class="muted"><input type="checkbox" id="onlySite"> 仅当前站点</label>
+  <header class="topbar">
+    <button id="back" class="icon-btn" title="返回" hidden><i class="i i-back"></i></button>
+    <label class="search">
+      <i class="i i-search"></i>
+      <input id="q" placeholder="搜索全部站点" autocomplete="off" spellcheck="false" />
+      <kbd>↵</kbd>
+    </label>
+    <label class="toggle" title="只在当前站点搜索"><input type="checkbox" id="onlySite"><span class="track"></span><span>仅当前站点</span></label>
   </header>
-  <nav id="classes"></nav>
-  <section id="view"></section>
+  <nav id="classes" class="chips"></nav>
+  <section id="view" class="view"></section>
 </main>
 
-<dialog id="settings">
-  <form method="dialog">
+<dialog id="settings" class="sheet">
+  <div class="sheet-head">
     <h3>设置</h3>
-    <label>源地址（index.js 或 index.js.md5）
-      <input id="sURL" placeholder="https://example.com/path/index.js.md5" /></label>
-    <label>Node.js 路径（留空自动查找）
-      <input id="sNode" placeholder="/opt/homebrew/bin/node" /></label>
-    <label>播放器
-      <select id="sPlayer">
-        <option value="builtin">内置（WKWebView，HLS/MP4）</option>
-        <option value="iina">IINA</option>
-        <option value="mpv">mpv</option>
-        <option value="system">系统默认（open）</option>
-      </select></label>
-    <label>播放桥模板（可选，留空则关闭；{vid}、{res} 会被替换）
-      <input id="sBridge" placeholder="https://example.com/media/{vid}/{res}.mp4" /></label>
-    <label class="row"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
-    <p class="muted small">源由你自行提供和负责。本应用不内置任何源。</p>
-    <div class="row end">
-      <button value="cancel">取消</button>
-      <button id="sSave" value="save" class="primary">保存并加载</button>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="subs">订阅</button>
+      <button class="tab" data-tab="play">播放</button>
+      <button class="tab" data-tab="logs">日志</button>
     </div>
-    <details><summary>源日志</summary><pre id="logs"></pre></details>
+    <button class="icon-btn" id="sClose" title="关闭"><i class="i i-x"></i></button>
+  </div>
+
+  <div class="pane" data-pane="subs">
+    <p class="hint">每个订阅是一个插件地址（<code>index.js</code> 或 <code>index.js.md5</code>）。可以添加多个，在左上角随时切换。</p>
+    <ul id="subList" class="sub-list"></ul>
+    <form id="subForm" class="sub-form">
+      <input id="subFormId" type="hidden">
+      <input id="subFormName" placeholder="名称（可选）" maxlength="40">
+      <input id="subFormURL" placeholder="https://example.com/path/index.js.md5" required>
+      <button class="primary" id="subFormBtn">添加</button>
+      <button type="button" class="ghost" id="subFormCancel" hidden>取消</button>
+    </form>
+    <p class="hint small">插件由你自行提供并负责，本应用不内置任何插件或地址。</p>
+  </div>
+
+  <form class="pane" data-pane="play" id="prefs" hidden>
+    <label class="field"><span>播放器</span>
+      <select id="sPlayer">
+        <option value="builtin">内置播放器（HLS / MP4）</option>
+        <option value="iina">IINA（macOS）</option>
+        <option value="mpv">mpv</option>
+        <option value="system">系统默认</option>
+      </select></label>
+    <label class="field"><span>Node.js 路径 <em>留空自动查找</em></span>
+      <input id="sNode" placeholder="/usr/local/bin/node" /></label>
+    <label class="field"><span>播放桥模板 <em>可选，留空关闭；{vid}、{res} 会被替换</em></span>
+      <input id="sBridge" placeholder="https://example.com/media/{vid}/{res}.mp4" /></label>
+    <label class="check"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
+    <div class="actions"><button class="primary" id="sSave">保存</button></div>
   </form>
+
+  <div class="pane" data-pane="logs" hidden>
+    <pre id="logs" class="logs"></pre>
+  </div>
 </dialog>
-<div id="toast" hidden></div>
+
+<div id="toast" class="toast" role="status" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

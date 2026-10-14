@@ -1,185 +1,351 @@
 // Plain JS frontend; calls Go through window.mygo.call("Player.Method", …).
 const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
-const st = { sites: [], site: null, home: null, tid: null, page: 1, stack: [] };
+const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, stack: [], loadSeq: 0 };
 
-function toast(msg, ms = 3500) {
-  const t = $('#toast'); t.textContent = msg; t.hidden = false;
-  clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), ms);
-}
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) k.startsWith('on') ? e.addEventListener(k.slice(2), v) : e.setAttribute(k, v);
-  for (const k of kids) e.append(k);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'class') e.className = v;
+    else if (k === 'style') e.style.cssText = v;
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k);
   return e;
+}
+const icon = (n) => el('i', { class: 'i i-' + n });
+
+// ---- toast ----
+function toast(msg, { ms = 3500, err = false, busy = false } = {}) {
+  const t = $('#toast');
+  t.replaceChildren(...(busy ? [el('span', { class: 'spin' })] : []), el('span', {}, msg));
+  t.className = 'toast' + (err ? ' err' : ''); t.hidden = false;
+  clearTimeout(toast.h); if (ms) toast.h = setTimeout(() => (t.hidden = true), ms);
+}
+const hideToast = () => { clearTimeout(toast.h); $('#toast').hidden = true; };
+
+// ---- view states ----
+function setView(...kids) { const v = $('#view'); v.replaceChildren(...kids); v.classList.remove('fade'); void v.offsetWidth; v.classList.add('fade'); }
+function stateBox({ ico = 'film', title, text, error = false, actions = [] }) {
+  return el('div', { class: 'state' + (error ? ' error' : '') },
+    el('div', { class: 'ico' }, icon(ico)), el('h4', {}, title), text ? el('p', {}, text) : null,
+    actions.length ? el('div', { class: 'btns' }, actions) : null);
+}
+const errorState = (e, retry) => stateBox({ ico: 'alert', error: true, title: '出错了', text: errMsg(e), actions: retry ? [el('button', { class: 'btn', onclick: retry }, icon('reload'), '重试')] : [] });
+function skeletonGrid(n = 18) {
+  const g = el('div', { class: 'grid' });
+  for (let i = 0; i < n; i++) g.append(el('div', { class: 'card' }, el('div', { class: 'poster skel' }), el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line short' })));
+  return g;
 }
 
 // Navigation: push a render function so "返回" restores the previous view.
 function show(render) { st.stack.push(render); render(); $('#back').hidden = st.stack.length < 2; }
 function back() { if (st.stack.length > 1) { st.stack.pop(); st.stack[st.stack.length - 1](); } $('#back').hidden = st.stack.length < 2; }
 
-async function loadSource() {
-  $('#status').textContent = '加载中…'; $('#sites').innerHTML = ''; $('#classes').innerHTML = ''; $('#view').innerHTML = '';
+// ---- subscriptions ----
+const activeSub = () => (st.settings?.subscriptions || []).find((s) => s.id === st.settings.active);
+function setDot(state) { $('.sub-dot').className = 'sub-dot ' + (state || ''); }
+function renderSwitcher() {
+  const a = activeSub();
+  $('#subName').textContent = a ? a.name : '未添加订阅';
+  $('#subBtn').title = a ? a.url : '';
+}
+function renderSubMenu() {
+  const m = $('#subMenu'); m.replaceChildren();
+  const subs = st.settings?.subscriptions || [];
+  if (!subs.length) m.append(el('div', { class: 'm-empty' }, '还没有订阅'));
+  for (const s of subs) {
+    m.append(el('button', { role: 'menuitemradio', 'aria-checked': String(s.id === st.settings.active), onclick: () => { closeMenu(); switchSub(s.id); } },
+      el('span', { class: 'm-main' }, el('span', { class: 'm-name' }, s.name), el('span', { class: 'm-url' }, s.url)),
+      s.id === st.settings.active ? icon('check') : null));
+  }
+  m.append(el('hr'), el('button', { onclick: () => { closeMenu(); openSettings('subs'); } }, icon('plus'), el('span', { class: 'm-main' }, '添加 / 管理订阅…')));
+}
+function openMenu() { renderSubMenu(); $('#subMenu').hidden = false; $('#subBtn').setAttribute('aria-expanded', 'true'); }
+function closeMenu() { $('#subMenu').hidden = true; $('#subBtn').setAttribute('aria-expanded', 'false'); }
+$('#subBtn').onclick = (e) => { e.stopPropagation(); $('#subMenu').hidden ? openMenu() : closeMenu(); };
+document.addEventListener('click', (e) => { if (!e.target.closest('.switcher')) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+async function switchSub(id) {
+  if (id === st.settings.active && st.sites.length) return;
+  await loadSource(() => call('SwitchSubscription', id));
+}
+
+// ---- loading a subscription ----
+function resetBrowse() {
+  st.sites = []; st.site = null; st.home = null; st.stack = [];
+  $('#sites').replaceChildren(); $('#classes').replaceChildren(); $('#back').hidden = true;
+}
+async function loadSource(fn = () => call('LoadSource')) {
+  const seq = ++st.loadSeq;
+  resetBrowse();
+  st.settings = await call('GetSettings'); renderSwitcher();
+  if (!activeSub()) { setDot(''); $('#status').textContent = ''; setView(noSubState()); return; }
+  setDot('busy'); $('#status').textContent = '加载中';
+  for (let i = 0; i < 5; i++) $('#sites').append(el('div', { class: 'site-skel skel' }));
+  setView(skeletonGrid());
   try {
-    const r = await call('LoadSource');
+    const r = await fn();
+    if (seq !== st.loadSeq) return; // a newer switch won
+    st.settings = await call('GetSettings'); renderSwitcher();
     st.sites = r.sites || [];
-    $('#status').textContent = `${st.sites.length} 个站点` + (r.mismatch ? ' · md5 不一致' : '');
+    setDot('ok'); $('#status').textContent = `${st.sites.length}`;
     if (r.mismatch) toast('提示：index.js 与发布的 md5 不一致（文件可能已更新）');
     renderSites();
     if (st.sites.length) selectSite(st.sites[0]);
-  } catch (e) { $('#status').textContent = '加载失败'; toast(errMsg(e), 8000); }
+    else setView(stateBox({ title: '这个订阅没有站点', text: '插件的 /config 没有返回任何站点。' }));
+  } catch (e) {
+    if (seq !== st.loadSeq) return;
+    $('#sites').replaceChildren(); setDot('err'); $('#status').textContent = '';
+    setView(stateBox({ ico: 'alert', error: true, title: `「${activeSub()?.name || ''}」加载失败`, text: errMsg(e),
+      actions: [el('button', { class: 'btn', onclick: () => loadSource() }, icon('reload'), '重试'), el('button', { class: 'btn', onclick: () => openSettings('subs') }, '管理订阅'), el('button', { class: 'btn', onclick: () => openSettings('logs') }, '查看日志')] }));
+  }
 }
+const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '订阅是一个插件地址（index.js 或 index.js.md5）。可以添加多个并随时切换。',
+  actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
+const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
 function renderSites() {
-  const box = $('#sites'); box.innerHTML = '';
+  const box = $('#sites'); box.replaceChildren();
   for (const s of st.sites) {
-    const b = el('button', { title: s.name, onclick: () => selectSite(s) }, s.name);
-    if (st.site && st.site.api === s.api) b.className = 'active';
-    box.append(b);
+    const name = s.name || s.key;
+    box.append(el('button', { class: 'site' + (st.site && st.site.api === s.api ? ' active' : ''), title: name, onclick: () => selectSite(s) },
+      el('span', { class: 'av', style: `--h:${hue(name)}` }, [...name.replace(/[^\p{L}\p{N}]/gu, '')][0]?.toUpperCase() || '·'),
+      el('span', { class: 'nm' }, name)));
   }
 }
 
 async function selectSite(s) {
-  st.site = s; st.stack = []; renderSites();
-  $('#classes').innerHTML = ''; $('#view').innerHTML = '<p class="muted">加载中…</p>';
+  st.site = s; st.stack = []; $('#back').hidden = true; renderSites();
+  $('#classes').replaceChildren(); setView(skeletonGrid());
+  const seq = st.loadSeq;
   try {
     st.home = await call('Home', s.api);
+    if (seq !== st.loadSeq || st.site !== s) return;
     const cls = st.home.class || [];
-    for (const c of cls) $('#classes').append(el('button', { onclick: () => openCategory(c.type_id, 1) }, c.type_name));
+    for (const c of cls) $('#classes').append(el('button', { class: 'chip', onclick: () => openCategory(c.type_id, 1) }, c.type_name));
     if (st.home.list && st.home.list.length) show(() => grid(st.home.list, s));
     else if (cls.length) {
-      // Some sites' first class (e.g. 首页 "/") is empty: use the first non-empty one.
+      // Some first classes are empty: use the first non-empty one.
       for (const c of cls.slice(0, 4)) {
         try { const r = await call('Category', s.api, String(c.type_id), 1, {}); if ((r.list || []).length) { openCategory(c.type_id, 1); return; } } catch (e) {}
       }
       openCategory(cls[0].type_id, 1);
-    }
-    else $('#view').innerHTML = '<p class="muted">该站点没有分类，可尝试搜索。</p>';
-  } catch (e) { $('#view').innerHTML = `<p>${esc(errMsg(e))}</p>`; }
+    } else setView(stateBox({ ico: 'search', title: '这个站点没有分类', text: '可以在上方直接搜索。' }));
+  } catch (e) { if (st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
 
 async function openCategory(tid, page) {
   st.tid = tid; st.page = page;
-  [...$('#classes').children].forEach((b, i) => b.classList.toggle('active', (st.home.class[i] || {}).type_id === tid));
-  $('#view').innerHTML = '<p class="muted">加载中…</p>';
+  [...$('#classes').children].forEach((b, i) => b.classList.toggle('active', String((st.home.class[i] || {}).type_id) === String(tid)));
+  setView(skeletonGrid());
+  const site = st.site;
   try {
-    const r = await call('Category', st.site.api, String(tid), page, {});
+    const r = await call('Category', site.api, String(tid), page, {});
+    if (st.site !== site) return;
     st.stack = [];
     show(() => {
-      grid(r.list || [], st.site);
+      grid(r.list || [], site);
       const pc = Number(r.pagecount || 0);
-      const p = el('div', { class: 'pager' });
-      if (page > 1) p.append(el('button', { onclick: () => openCategory(tid, page - 1) }, '上一页'));
-      p.append(el('span', { class: 'muted' }, `第 ${page}${pc ? ' / ' + pc : ''} 页`));
-      if (!pc || page < pc) p.append(el('button', { onclick: () => openCategory(tid, page + 1) }, '下一页'));
-      $('#view').append(p);
+      if (!(r.list || []).length && page === 1) return;
+      $('#view').append(el('div', { class: 'pager' },
+        el('button', { class: 'btn', disabled: page <= 1, onclick: () => openCategory(tid, page - 1) }, '上一页'),
+        el('span', { class: 'pg' }, `第 ${page}${pc ? ' / ' + pc : ''} 页`),
+        el('button', { class: 'btn', disabled: !!pc && page >= pc, onclick: () => openCategory(tid, page + 1) }, '下一页')));
     });
-  } catch (e) { $('#view').innerHTML = `<p>${esc(errMsg(e))}</p>`; }
+  } catch (e) { setView(errorState(e, () => openCategory(tid, page))); }
 }
 
 function cards(list, site) {
   const g = el('div', { class: 'grid' });
   for (const v of list) {
-    const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer' });
-    if (v.vod_pic) img.src = v.vod_pic;
-    g.append(el('div', { class: 'card', onclick: () => String(v.vod_id).startsWith('msearch:') ? ($('#onlySite').checked = false, $('#q').value = v.vod_name, search(v.vod_name)) : openDetail(site, v.vod_id) }, img,
-      el('div', { class: 't', title: v.vod_name || '' }, v.vod_name || ''), el('div', { class: 'muted small' }, v.vod_remarks || '')));
+    const poster = el('div', { class: 'poster' + (v.vod_pic ? '' : ' noimg') });
+    if (v.vod_pic) {
+      const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
+      img.onload = () => img.classList.add('loaded');
+      img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
+      img.src = v.vod_pic; poster.append(img);
+    }
+    if (v.vod_remarks) poster.append(el('span', { class: 'badge' }, v.vod_remarks));
+    poster.append(el('span', { class: 'play' }, icon('play')));
+    const open = () => String(v.vod_id).startsWith('msearch:') ? ($('#onlySite').checked = false, $('#q').value = v.vod_name, search(v.vod_name)) : openDetail(site, v.vod_id);
+    g.append(el('button', { class: 'card', title: v.vod_name || '', onclick: open }, poster,
+      el('div', { class: 't' }, v.vod_name || ''), el('div', { class: 's' }, [v.vod_year, v.type_name].filter(Boolean).join(' · ') || '\u00a0')));
   }
   return g;
 }
 function grid(list, site) {
-  const view = $('#view'); view.innerHTML = '';
-  view.append(list.length ? cards(list, site) : el('p', { class: 'muted' }, '没有内容'));
+  setView(list.length ? cards(list, site) : stateBox({ title: '这里还没有内容', text: '换个分类或翻页试试。' }));
 }
 
 async function search(wd) {
   if (!wd) return;
-  $('#view').innerHTML = '<p class="muted">搜索中…</p>';
+  if (!st.sites.length) return toast('请先加载一个订阅');
+  setView(skeletonGrid(12));
   if ($('#onlySite').checked && st.site) {
     try {
       const r = await call('Search', st.site.api, wd, 1);
-      show(() => grid(r.list || [], st.site));
-    } catch (e) { $('#view').innerHTML = `<p>${esc(errMsg(e))}</p>`; }
+      st.stack = [];
+      show(() => setView(el('div', { class: 'section-h' }, `“${wd}”`, el('span', { class: 'n' }, st.site.name)),
+        (r.list || []).length ? cards(r.list, st.site) : stateBox({ ico: 'search', title: '没有找到结果', text: '可以关闭“仅当前站点”搜索全部站点。' })));
+    } catch (e) { setView(errorState(e, () => search(wd))); }
     return;
   }
-  const results = [];
+  const results = []; let done = false;
   const render = () => {
-    const view = $('#view'); view.innerHTML = '';
-    if (!results.length) view.innerHTML = '<p class="muted">搜索中…</p>';
+    const kids = [];
     for (const r of results) {
-      view.append(el('div', { class: 'siteh' }, r.site.name + (r.error ? '（出错）' : ` · ${r.list.length}`)));
-      if (r.error) view.append(el('div', { class: 'muted small' }, r.error));
-      else view.append(cards(r.list, r.site));
+      kids.push(el('div', { class: 'section-h' }, r.site.name, r.error ? el('span', { class: 'e' }, '出错') : el('span', { class: 'n' }, `${r.list.length} 个结果`)));
+      kids.push(r.error ? el('p', { class: 'hint' }, r.error) : cards(r.list, r.site));
     }
+    if (!done) kids.push(results.length ? el('div', { class: 'section-h' }, el('span', { class: 'n' }, '其余站点搜索中…')) : skeletonGrid(12));
+    else if (!results.length) kids.push(stateBox({ ico: 'search', title: '没有找到结果', text: `所有站点都没有“${wd}”的结果。` }));
+    const v = $('#view'), top = v.scrollTop; v.replaceChildren(...kids); v.scrollTop = top;
   };
   st.stack = []; show(render);
-  const ch = window.mygo.channel((r) => { r.list = r.list || []; results.push(r); if (st.stack[st.stack.length - 1] === render) render(); });
-  try { await call('SearchAll', wd, ch); } catch (e) { toast(errMsg(e)); }
-  if (!results.length && st.stack[st.stack.length - 1] === render) $('#view').innerHTML = '<p class="muted">没有搜索结果</p>';
+  const isTop = () => st.stack[st.stack.length - 1] === render;
+  const ch = window.mygo.channel((r) => { r.list = r.list || []; results.push(r); if (isTop()) render(); });
+  try { await call('SearchAll', wd, ch); } catch (e) { toast(errMsg(e), { err: true }); }
+  done = true; if (isTop()) render();
 }
 
 async function openDetail(site, id) {
-  $('#view').innerHTML = '<p class="muted">加载详情…</p>';
+  setView(el('div', { class: 'hero' }, el('div', { class: 'cover skel' }), el('div', { class: 'info', style: 'flex:1' },
+    el('div', { class: 'skel skel-line', style: 'height:26px;width:40%' }), el('div', { class: 'skel skel-line short', style: 'width:30%' }),
+    el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line short' }))));
   let d;
-  try { d = await call('Detail', site.api, String(id)); } catch (e) { $('#view').innerHTML = `<p>${esc(errMsg(e))}</p>`; return; }
+  try { d = await call('Detail', site.api, String(id)); } catch (e) { setView(errorState(e, () => openDetail(site, id))); return; }
+  let lineIdx = 0;
   show(() => {
-    const v = d.vod, view = $('#view'); view.innerHTML = '';
-    const img = el('img', { referrerpolicy: 'no-referrer' }); if (v.vod_pic) img.src = v.vod_pic;
-    const info = el('div', {});
-    info.innerHTML = `<h2>${esc(v.vod_name)}</h2>
-      <div class="muted">${esc([v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).join(' · '))}</div>
-      <p class="small">${esc(v.vod_actor ? '主演：' + v.vod_actor : '')}</p>
-      <p>${esc(String(v.vod_content || '').replace(/<[^>]+>/g, ''))}</p>`;
-    view.append(el('div', { class: 'detail' }, img, info));
-    if (!d.lines || !d.lines.length) view.append(el('p', { class: 'muted' }, '没有播放列表'));
-    for (const line of d.lines || []) {
-      view.append(el('h4', {}, line.flag));
-      const eps = el('div', { class: 'eps' });
-      for (const ep of line.episodes) eps.append(el('button', { onclick: () => play(site, line.flag, ep, v.vod_name) }, ep.name));
-      view.append(eps);
-    }
+    const v = d.vod;
+    const cover = el('div', { class: 'cover' });
+    const bg = el('div', { class: 'bg' });
+    if (v.vod_pic) { cover.append(el('img', { src: v.vod_pic, referrerpolicy: 'no-referrer', alt: '' })); bg.style.backgroundImage = `url("${String(v.vod_pic).replace(/"/g, '%22')}")`; }
+    const meta = [v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).map((x) => el('span', {}, String(x)));
+    const desc = String(v.vod_content || '').replace(/<[^>]+>/g, '').trim();
+    const hero = el('div', { class: 'hero' }, bg, cover, el('div', { class: 'info' },
+      el('h2', {}, v.vod_name || ''), meta.length ? el('div', { class: 'meta' }, meta) : null,
+      v.vod_actor ? el('p', { class: 'cast' }, '主演：' + v.vod_actor) : null,
+      v.vod_director ? el('p', { class: 'cast' }, '导演：' + v.vod_director) : null,
+      desc ? el('p', { class: 'desc', title: desc }, desc) : null));
+    const lines = d.lines || [];
+    const body = el('div', { id: 'lines' });
+    const drawLine = () => {
+      const tabs = lines.length > 1 ? el('div', { class: 'line-tabs' }, lines.map((l, i) => el('button', { class: i === lineIdx ? 'active' : '', onclick: () => { lineIdx = i; drawLine(); } }, l.flag))) : el('div', { class: 'section-h' }, lines[0].flag);
+      const line = lines[lineIdx];
+      const eps = el('div', { class: 'eps' }, line.episodes.map((ep) => el('button', { class: 'ep', title: ep.name, onclick: (e) => play(site, line.flag, ep, v.vod_name, e.currentTarget) }, ep.name)));
+      body.replaceChildren(tabs, eps);
+    };
+    if (lines.length) drawLine(); else body.append(stateBox({ title: '没有播放列表', text: '插件没有返回任何剧集。' }));
+    setView(hero, body);
   });
 }
 
-async function play(site, flag, ep, title) {
-  toast('解析播放地址…');
+async function play(site, flag, ep, title, btn) {
+  $$('.ep.busy').forEach((b) => b.classList.remove('busy'));
+  btn?.classList.add('busy');
+  toast('解析播放地址…', { ms: 0, busy: true });
   try {
     const streams = await call('Play', site.api, flag, ep.id);
     const name = `${title} - ${ep.name}`;
-    if (streams.length === 1) { toast('打开播放器…'); return void (await call('Open', streams[0], name)); }
-    // Several qualities: let the user pick.
-    const box = el('div', { class: 'eps' });
-    for (const s of streams) box.append(el('button', { onclick: () => call('Open', s, name).catch((e) => toast(errMsg(e))) }, s.name || '播放'));
-    const view = $('#view'); view.prepend(box); view.prepend(el('h4', {}, '选择清晰度：' + ep.name));
-    view.scrollTop = 0;
-  } catch (e) { toast(errMsg(e), 6000); }
+    $('.quality')?.remove();
+    if (streams.length === 1) {
+      toast('正在打开播放器…', { busy: true });
+      await call('Open', streams[0], name);
+      hideToast();
+    } else {
+      hideToast();
+      // Several qualities: let the user pick.
+      const box = el('div', { class: 'quality' }, el('h4', {}, `选择清晰度 · ${ep.name}`),
+        el('div', { class: 'eps' }, streams.map((s) => el('button', { class: 'ep', onclick: () => call('Open', s, name).catch((e) => toast(errMsg(e), { err: true, ms: 6000 })) }, s.name || '播放'))));
+      $('#lines').prepend(box); box.scrollIntoView({ block: 'nearest' });
+    }
+    btn?.classList.add('played');
+  } catch (e) { toast(errMsg(e), { err: true, ms: 6000 }); }
+  btn?.classList.remove('busy');
 }
 
-async function openSettings() {
-  const s = await call('GetSettings');
-  $('#sURL').value = s.sourceUrl || ''; $('#sNode').value = s.nodePath || '';
-  $('#sPlayer').value = s.player || 'builtin'; $('#sStrict').checked = !!s.strictMd5;
-  $('#sBridge').value = s.bridgeTemplate || '';
-  $('#logs').textContent = (await call('Logs')).slice(-200).join('\n');
-  $('#settings').showModal();
+// ---- settings sheet ----
+function setTab(name) {
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.pane').forEach((p) => (p.hidden = p.dataset.pane !== name));
+  if (name === 'logs') call('Logs').then((l) => { const p = $('#logs'); p.textContent = l.slice(-300).join('\n') || '（暂无日志）'; p.scrollTop = p.scrollHeight; });
 }
+$$('.tab').forEach((t) => (t.onclick = () => setTab(t.dataset.tab)));
 
-$('#settings').addEventListener('close', async () => {
-  if ($('#settings').returnValue !== 'save') return;
+function renderSubList() {
+  const ul = $('#subList'); ul.replaceChildren();
+  for (const s of st.settings.subscriptions || []) {
+    const on = s.id === st.settings.active;
+    ul.append(el('li', { class: on ? 'on' : '' },
+      el('div', { class: 'main' }, el('div', { class: 'nm' }, s.name, on ? el('span', { class: 'tag' }, '当前') : null), el('div', { class: 'url' }, s.url)),
+      on ? null : el('button', { class: 'btn', onclick: () => { $('#settings').close(); switchSub(s.id); } }, '切换'),
+      el('button', { class: 'icon-btn', title: '编辑', onclick: () => editSub(s) }, icon('edit')),
+      el('button', { class: 'icon-btn danger', title: '删除', onclick: (e) => removeSub(s, e.currentTarget) }, icon('trash'))));
+  }
+}
+function editSub(s) {
+  $('#subFormId').value = s ? s.id : ''; $('#subFormName').value = s ? s.name : ''; $('#subFormURL').value = s ? s.url : '';
+  $('#subFormBtn').textContent = s ? '保存' : '添加'; $('#subFormCancel').hidden = !s;
+  if (s) $('#subFormURL').focus();
+}
+async function removeSub(s, btn) {
+  // Two-step confirm inside the row (native confirm() is not available in every webview).
+  if (!btn.classList.contains('confirm')) {
+    btn.classList.add('confirm'); btn.replaceChildren('确认删除'); btn.className = 'btn confirm';
+    setTimeout(() => { if (btn.isConnected) renderSubList(); }, 3000);
+    return;
+  }
+  const wasActive = s.id === st.settings.active;
   try {
-    await call('SaveSettings', { sourceUrl: $('#sURL').value, nodePath: $('#sNode').value, player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, bridgeTemplate: $('#sBridge').value });
-    loadSource();
-  } catch (e) { toast(errMsg(e)); }
+    st.settings = await call('RemoveSubscription', s.id); renderSubList(); renderSwitcher();
+    if (wasActive) loadSource();
+  } catch (e) { toast(errMsg(e), { err: true }); }
+}
+$('#subFormCancel').onclick = () => editSub(null);
+$('#subForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#subFormId').value, name = $('#subFormName').value, url = $('#subFormURL').value;
+  const first = !(st.settings.subscriptions || []).length;
+  try {
+    st.settings = id ? await call('UpdateSubscription', id, name, url) : await call('AddSubscription', name, url);
+    editSub(null); renderSubList(); renderSwitcher();
+    if (first || id === st.settings.active) { $('#settings').close(); loadSource(); }
+    else toast(id ? '已保存' : '已添加，可在左上角切换');
+  } catch (err) { toast(errMsg(err), { err: true }); }
 });
-$('#btnSettings').onclick = openSettings;
-$('#btnReload').onclick = loadSource;
+
+async function openSettings(tab = 'subs') {
+  st.settings = await call('GetSettings');
+  const s = st.settings;
+  $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
+  $('#sStrict').checked = !!s.strictMd5; $('#sBridge').value = s.bridgeTemplate || '';
+  editSub(null); renderSubList(); setTab(tab);
+  if (!$('#settings').open) $('#settings').showModal();
+}
+$('#prefs').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, bridgeTemplate: $('#sBridge').value.trim() });
+    st.settings = await call('GetSettings');
+    toast('设置已保存');
+  } catch (err) { toast(errMsg(err), { err: true }); }
+});
+$('#sClose').onclick = () => $('#settings').close();
+
+$('#btnSettings').onclick = () => openSettings('subs');
+$('#btnReload').onclick = () => loadSource();
 $('#back').onclick = back;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(e.target.value.trim()); });
+$('#onlySite').addEventListener('change', (e) => ($('#q').placeholder = e.target.checked ? '搜索当前站点' : '搜索全部站点'));
 
 (async () => {
-  const s = await call('GetSettings');
-  if (s.sourceUrl) loadSource(); else openSettings();
+  st.settings = await call('GetSettings'); renderSwitcher();
+  if (activeSub()) loadSource(); else { setView(noSubState()); openSettings('subs'); }
 })();
