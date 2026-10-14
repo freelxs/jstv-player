@@ -16,6 +16,14 @@ export interface Episode {
   id: string;
 }
 
+/** HistoryEntry is the last episode played of a show. */
+export interface HistoryEntry {
+  flag: string;
+  index: number;
+  name: string;
+  time: number;
+}
+
 /** Line is one play source (vod_play_from) with its episodes. */
 export interface Line {
   flag: string;
@@ -53,6 +61,8 @@ export interface Settings {
    * media: {vid} and {res} are substituted. Empty disables the bridge.
    */
   bridgeTemplate: string;
+  /** DisableContinuous turns off 连播 (playing the following episodes). */
+  disableContinuous: boolean;
 }
 
 /** Site is one entry of GET /config → video.sites. */
@@ -106,6 +116,10 @@ export const Player = {
   detail(api: string, id: string): Promise<DetailResult | null> {
     return call("Player.Detail", api, id);
   },
+  /** GetHistory returns the last episode played of a show, or nil. */
+  getHistory(api: string, vodID: string): Promise<HistoryEntry | null> {
+    return call("Player.GetHistory", api, vodID);
+  },
   /** GetSettings returns the saved settings. */
   getSettings(): Promise<Settings> {
     return call("Player.GetSettings");
@@ -132,6 +146,16 @@ export const Player = {
   /** Play resolves an episode to streams. */
   play(api: string, flag: string, id: string): Promise<Stream[]> {
     return call("Player.Play", api, flag, id);
+  },
+  /**
+   * PlayEpisodes plays episode start of a line. With 连播 on and a player
+   * that takes playlists, the rest of the line follows automatically and nil
+   * is returned. Otherwise (连播 off, system player, several qualities to
+   * choose from, or a web page) the streams of that episode are returned and
+   * the page continues with Open as before.
+   */
+  playEpisodes(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<Stream[]> {
+    return call("Player.PlayEpisodes", api, vodID, show, flag, eps, start);
   },
   /**
    * RemoveSubscription deletes a subscription and its downloaded files. When

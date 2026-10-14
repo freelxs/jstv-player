@@ -222,6 +222,10 @@ async function openDetail(site, id) {
   let d;
   try { d = await call('Detail', site.api, String(id)); } catch (e) { setView(errorState(e, () => openDetail(site, id))); return; }
   let lineIdx = 0;
+  const vodId = String(id);
+  let hist = null;
+  try { hist = await call('GetHistory', site.api, vodId); } catch (e) {}
+  if (hist) { const i = (d.lines || []).findIndex((l) => l.flag === hist.flag); if (i >= 0) lineIdx = i; }
   show(() => {
     const v = d.vod;
     const cover = el('div', { class: 'cover' });
@@ -233,13 +237,20 @@ async function openDetail(site, id) {
       el('h2', {}, v.vod_name || ''), meta.length ? el('div', { class: 'meta' }, meta) : null,
       v.vod_actor ? el('p', { class: 'cast' }, '主演：' + v.vod_actor) : null,
       v.vod_director ? el('p', { class: 'cast' }, '导演：' + v.vod_director) : null,
-      desc ? el('p', { class: 'desc', title: desc }, desc) : null));
+      desc ? el('p', { class: 'desc', title: desc }, desc) : null,
+      resumeButton()));
+    function resumeButton() {
+      const l = (d.lines || []).find((x) => hist && x.flag === hist.flag);
+      if (!l || !l.episodes[hist.index]) return null;
+      const next = hist.index;
+      return el('div', { class: 'resume' }, el('button', { class: 'primary', onclick: (e) => play(site, l, next, vodId, v.vod_name, null) }, icon('play'), `继续播放 ${l.episodes[next].name}`));
+    }
     const lines = d.lines || [];
     const body = el('div', { id: 'lines' });
     const drawLine = () => {
       const tabs = lines.length > 1 ? el('div', { class: 'line-tabs' }, lines.map((l, i) => el('button', { class: i === lineIdx ? 'active' : '', onclick: () => { lineIdx = i; drawLine(); } }, l.flag))) : el('div', { class: 'section-h' }, lines[0].flag);
       const line = lines[lineIdx];
-      const eps = el('div', { class: 'eps' }, line.episodes.map((ep) => el('button', { class: 'ep', title: ep.name, onclick: (e) => play(site, line.flag, ep, v.vod_name, e.currentTarget) }, ep.name)));
+      const eps = el('div', { class: 'eps' }, line.episodes.map((ep, i) => el('button', { class: 'ep' + (hist && hist.flag === line.flag && hist.index === i ? ' last' : ''), title: ep.name, onclick: (e) => play(site, line, i, vodId, v.vod_name, e.currentTarget) }, ep.name)));
       body.replaceChildren(tabs, eps);
     };
     if (lines.length) drawLine(); else body.append(stateBox({ title: '没有播放列表', text: '插件没有返回任何剧集。' }));
@@ -247,15 +258,22 @@ async function openDetail(site, id) {
   });
 }
 
-async function play(site, flag, ep, title, btn) {
+async function play(site, line, idx, vodId, title, btn) {
+  const flag = line.flag, ep = line.episodes[idx];
   $$('.ep.busy').forEach((b) => b.classList.remove('busy'));
   btn?.classList.add('busy');
   toast('解析播放地址…', { ms: 0, busy: true });
   try {
-    const streams = await call('Play', site.api, flag, ep.id);
+    // With 连播 the Go side opens the player with this and the following
+    // episodes and returns nothing; otherwise it returns this episode's streams.
+    const streams = (await call('PlayEpisodes', site.api, vodId, title, flag, line.episodes, idx)) || [];
     const name = `${title} - ${ep.name}`;
     $('.quality')?.remove();
-    if (streams.length === 1) {
+    $$('.ep.last').forEach((b) => b.classList.remove('last'));
+    btn?.classList.add('last');
+    if (!streams.length) {
+      toast(idx < line.episodes.length - 1 ? `正在连播：从 ${ep.name} 起共 ${line.episodes.length - idx} 集` : '正在打开播放器…');
+    } else if (streams.length === 1) {
       toast('正在打开播放器…', { busy: true });
       await call('Open', streams[0], name);
       hideToast();
@@ -328,14 +346,14 @@ async function openSettings(tab = 'subs') {
   const os = /Windows/i.test(navigator.userAgent) ? 'win' : /Mac/i.test(navigator.userAgent) ? 'mac' : 'linux';
   for (const o of $$('#sPlayer option[data-os]')) o.hidden = o.dataset.os !== os && o.value !== s.player;
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
-  $('#sStrict').checked = !!s.strictMd5; $('#sBridge').value = s.bridgeTemplate || '';
+  $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
 }
 $('#prefs').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, bridgeTemplate: $('#sBridge').value.trim() });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim() });
     st.settings = await call('GetSettings');
     toast('设置已保存');
   } catch (err) { toast(errMsg(err), { err: true }); }

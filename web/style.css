@@ -244,3 +244,7 @@ input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-
 .sub-list .btn.confirm{color:var(--danger);border-color:var(--danger);padding:4px 10px}
 [hidden]{display:none!important}
 .search input:not([type=checkbox]){height:auto;padding:0;border:0;background:none;box-shadow:none}
+.check+.check{margin-top:10px}
+.resume{margin-top:6px}
+.ep.last{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.ep.last::before{content:"上次 ";color:var(--acc);font-size:11px}

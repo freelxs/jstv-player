@@ -1,0 +1,304 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/freelxs/jstv-player/internal/catvod"
+)
+
+// Continuous playback (连播): a show's remaining episodes are handed to the
+// player as one local playlist. Every entry points at /ep/<id>/<n> on a
+// loopback server, which asks the plugin for that episode only when the
+// player reaches it (plugin URLs are often short-lived) and redirects to
+// the proxied stream, so headers and HLS rewriting work as for one episode.
+
+type playlist struct {
+	api, vodID, show, flag string
+	eps                    []catvod.Episode
+	start                  int
+	first                  *catvod.Stream // already resolved start episode
+}
+
+// HistoryEntry is the last episode played of a show.
+type HistoryEntry struct {
+	Flag  string `json:"flag"`
+	Index int    `json:"index"`
+	Name  string `json:"name"`
+	Time  int64  `json:"time"`
+}
+
+type episodeServer struct {
+	base string
+
+	mu    sync.Mutex
+	lists map[string]*playlist
+	order []string
+	seq   int
+}
+
+const maxPlaylists = 32
+
+func (s *episodeServer) add(pl *playlist) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lists == nil {
+		s.lists = map[string]*playlist{}
+	}
+	s.seq++
+	id := strconv.FormatInt(time.Now().UnixNano()%1e9, 36) + strconv.Itoa(s.seq)
+	s.lists[id] = pl
+	s.order = append(s.order, id)
+	if len(s.order) > maxPlaylists {
+		delete(s.lists, s.order[0])
+		s.order = s.order[1:]
+	}
+	return id
+}
+
+func (s *episodeServer) get(id string) *playlist {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lists[id]
+}
+
+func (s *episodeServer) epURL(id string, n int) string {
+	return fmt.Sprintf("%s/ep/%s/%d", s.base, id, n)
+}
+
+func (s *episodeServer) playlistURL(id string) string {
+	return s.base + "/playlist/" + id + ".m3u"
+}
+
+func entryTitle(show, ep string) string {
+	t := strings.TrimSpace(show + " - " + ep)
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(t)
+}
+
+// m3u renders the extended M3U playlist from the start episode on.
+func (s *episodeServer) m3u(id string, pl *playlist) string {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	for i := pl.start; i < len(pl.eps); i++ {
+		fmt.Fprintf(&b, "#EXTINF:-1,%s\n%s\n", entryTitle(pl.show, pl.eps[i].Name), s.epURL(id, i))
+	}
+	return b.String()
+}
+
+// parseEpPath splits "/ep/<id>/<n>" (an optional trailing name is ignored).
+func parseEpPath(p string) (string, int, bool) {
+	parts := strings.Split(strings.TrimPrefix(p, "/ep/"), "/")
+	if len(parts) < 2 || parts[0] == "" {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(parts[1])
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return parts[0], n, true
+}
+
+func (p *Player) startEpisodeServer() error {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	p.eps.base = "http://" + l.Addr().String()
+	go http.Serve(l, http.HandlerFunc(p.serveEpisodes))
+	return nil
+}
+
+func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/playlist/"):
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/playlist/"), ".m3u")
+		pl := p.eps.get(id)
+		if pl == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
+		w.Write([]byte(p.eps.m3u(id, pl)))
+	case strings.HasPrefix(r.URL.Path, "/ep/"):
+		id, n, ok := parseEpPath(r.URL.Path)
+		pl := p.eps.get(id)
+		if !ok || pl == nil || n >= len(pl.eps) {
+			http.NotFound(w, r)
+			return
+		}
+		u, err := p.resolveEpisode(pl, n)
+		if err != nil {
+			p.log(fmt.Sprintf("连播 第%d项: %v", n+1, err))
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, u, http.StatusFound)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// resolveEpisode asks the plugin for episode n and returns the URL the
+// player should fetch (through the header proxy).
+func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
+	var st *catvod.Stream
+	p.eps.mu.Lock()
+	if n == pl.start && pl.first != nil {
+		st, pl.first = pl.first, nil
+	}
+	p.eps.mu.Unlock()
+	if st == nil {
+		streams, err := p.Play(pl.api, pl.flag, pl.eps[n].ID)
+		if err != nil {
+			return "", err
+		}
+		st = firstPlayable(streams)
+		if st == nil {
+			return "", errors.New("这一集只有网页地址，无法连播")
+		}
+	}
+	p.recordHistory(pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name})
+	u := st.URL
+	if p.proxy != nil {
+		u = p.proxy.WrapAlways(u, st.Headers)
+	}
+	return u, nil
+}
+
+func firstPlayable(streams []catvod.Stream) *catvod.Stream {
+	for i := range streams {
+		if !streams[i].Parse && !catvod.IsWebPage(streams[i].URL) {
+			return &streams[i]
+		}
+	}
+	return nil
+}
+
+// PlayEpisodes plays episode start of a line. With 连播 on and a player
+// that takes playlists, the rest of the line follows automatically and nil
+// is returned. Otherwise (连播 off, system player, several qualities to
+// choose from, or a web page) the streams of that episode are returned and
+// the page continues with Open as before.
+func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int) ([]catvod.Stream, error) {
+	if start < 0 || start >= len(eps) {
+		return nil, errors.New("剧集不存在")
+	}
+	streams, err := p.Play(api, flag, eps[start].ID)
+	if err != nil {
+		return nil, err
+	}
+	p.recordHistory(api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
+	s := p.GetSettings()
+	first := firstPlayable(streams)
+	if s.DisableContinuous || s.Player == "system" || len(streams) != 1 || first == nil || p.eps.base == "" {
+		return streams, nil
+	}
+	// Same checks as Open, on the first episode, so errors show up here.
+	u := first.URL
+	if p.proxy != nil {
+		u = p.proxy.WrapAlways(u, first.Headers)
+	}
+	var pre map[string]string
+	if u == first.URL {
+		pre = first.Headers
+	}
+	isHTML, err := catvod.Preflight(nil, u, pre)
+	if err != nil {
+		p.log("preflight: " + err.Error())
+		return nil, err
+	}
+	if isHTML {
+		return streams, nil
+	}
+	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, eps: eps, start: start, first: first})
+	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
+	if s.Player == "builtin" || s.Player == "" {
+		var items []builtinItem
+		for i := start; i < len(eps); i++ {
+			items = append(items, builtinItem{Title: entryTitle(show, eps[i].Name), URL: p.eps.epURL(id, i)})
+		}
+		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlaylistPage(items))
+		return nil, nil
+	}
+	return nil, p.launch(s.Player, p.eps.playlistURL(id), "")
+}
+
+type builtinItem struct {
+	Title string `json:"t"`
+	URL   string `json:"u"`
+}
+
+// builtinPlaylistPage is the built-in player with auto-advance on "ended".
+func builtinPlaylistPage(items []builtinItem) string {
+	j, _ := json.Marshal(items)
+	js := strings.ReplaceAll(string(j), "</", `<\/`)
+	t := ""
+	if len(items) > 0 {
+		t = items[0].Title
+	}
+	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(t) + `</title>
+<style>html,body{margin:0;height:100%;background:#000;font:13px system-ui;color:#fff}video{width:100%;height:100%}
+#bar{position:fixed;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;padding:8px 12px;background:linear-gradient(#000a,#0000);opacity:0;transition:opacity .2s}
+body:hover #bar{opacity:1}#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button{background:#fff2;color:#fff;border:0;border-radius:6px;padding:4px 10px;cursor:pointer}#e{color:#f88}</style></head>
+<body><video controls autoplay playsinline></video><div id="bar"><span id="t"></span><span id="e"></span><button id="p">上一集</button><button id="n">下一集</button></div>
+<script>const L=` + js + `;let i=0;const v=document.querySelector('video');
+function go(k){if(k<0||k>=L.length)return;i=k;document.title=L[i].t;document.getElementById('t').textContent=L[i].t+'  ('+(i+1)+'/'+L.length+')';document.getElementById('e').textContent='';v.src=L[i].u;v.play().catch(()=>{})}
+v.addEventListener('ended',()=>go(i+1));v.addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 mpv 或 IINA'});
+document.getElementById('p').onclick=()=>go(i-1);document.getElementById('n').onclick=()=>go(i+1);go(0)</script></body></html>`
+}
+
+// ---- watch history ----
+
+func historyKey(api, vodID string) string { return api + "\x00" + vodID }
+
+func (p *Player) recordHistory(api, vodID string, e HistoryEntry) {
+	if vodID == "" {
+		return
+	}
+	e.Time = time.Now().Unix()
+	p.histMu.Lock()
+	defer p.histMu.Unlock()
+	h := p.loadHistoryLocked()
+	h[historyKey(api, vodID)] = e
+	if len(h) > 2000 {
+		var oldK string
+		var oldT int64 = 1 << 62
+		for k, v := range h {
+			if v.Time < oldT {
+				oldK, oldT = k, v.Time
+			}
+		}
+		delete(h, oldK)
+	}
+	b, _ := json.Marshal(h)
+	_ = os.WriteFile(filepath.Join(p.dir, "history.json"), b, 0o600)
+}
+
+func (p *Player) loadHistoryLocked() map[string]HistoryEntry {
+	h := map[string]HistoryEntry{}
+	if b, err := os.ReadFile(filepath.Join(p.dir, "history.json")); err == nil {
+		_ = json.Unmarshal(b, &h)
+	}
+	return h
+}
+
+// GetHistory returns the last episode played of a show, or nil.
+func (p *Player) GetHistory(api, vodID string) *HistoryEntry {
+	p.histMu.Lock()
+	defer p.histMu.Unlock()
+	if e, ok := p.loadHistoryLocked()[historyKey(api, vodID)]; ok {
+		return &e
+	}
+	return nil
+}

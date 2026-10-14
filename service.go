@@ -32,6 +32,8 @@ type Settings struct {
 	// BridgeTemplate is where the built-in play bridge (/play?vid=) finds
 	// media: {vid} and {res} are substituted. Empty disables the bridge.
 	BridgeTemplate string `json:"bridgeTemplate"`
+	// DisableContinuous turns off 连播 (playing the following episodes).
+	DisableContinuous bool `json:"disableContinuous"`
 }
 
 // LoadResult is what LoadSource reports to the page.
@@ -64,6 +66,8 @@ type Player struct {
 	bridge *catvod.Bridge
 
 	loadMu sync.Mutex // serializes LoadSource / switching
+	eps    episodeServer
+	histMu sync.Mutex
 
 	mu       sync.Mutex
 	settings Settings
@@ -78,6 +82,7 @@ func newPlayer(dir string) *Player {
 	if err := p.proxy.Start(); err != nil {
 		p.proxy = nil
 	}
+	_ = p.startEpisodeServer()
 	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		_ = json.Unmarshal(b, &p.settings)
 	}
@@ -461,6 +466,22 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		})
 		return nil
 	}
+	if player == "builtin" || player == "" {
+		p.openBuiltin(title, playerPage(u, title))
+		return nil
+	}
+	return p.launch(player, u, title)
+}
+
+func (p *Player) openBuiltin(title, page string) {
+	mygo.RunOnMain(func() {
+		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})
+		w.Page().LoadHTML(page, "")
+	})
+}
+
+// launch opens u (a stream or an M3U playlist) in an external player.
+func (p *Player) launch(player, u, title string) error {
 	switch player {
 	case "potplayer":
 		if runtime.GOOS != "windows" {
@@ -508,11 +529,7 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	case "system":
 		return mygo.Shell.OpenExternal(u)
 	}
-	mygo.RunOnMain(func() {
-		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})
-		w.Page().LoadHTML(playerPage(u, title), "")
-	})
-	return nil
+	return fmt.Errorf("未知播放器: %s", player)
 }
 
 // iinaArgs: options before the URL, and --no-stdin. Without it iina-cli
@@ -524,7 +541,11 @@ func iinaArgs(u string) []string {
 
 func mpvArgs(u, title string) []string {
 	// extension_picky=0: accept HLS segments disguised as .jpg/.png.
-	args := []string{"--force-window=immediate", "--title=" + title, "--demuxer-lavf-o=extension_picky=0"}
+	// No --title for playlists: mpv then shows each entry's #EXTINF title.
+	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0"}
+	if title != "" {
+		args = append(args, "--title="+title)
+	}
 	if runtime.GOOS == "darwin" {
 		args = append(args, "--macos-app-activation-policy=regular")
 	}
