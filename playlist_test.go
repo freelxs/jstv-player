@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
@@ -121,5 +122,65 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 	}
 	if resp, _ := noRedirect.Get(p.eps.epURL(id, 99)); resp.StatusCode != http.StatusNotFound {
 		t.Fatal(resp.StatusCode)
+	}
+
+	// Serving an entry prefetches the next one; asking for it then uses
+	// the prefetched answer (and consumes it).
+	pl := p.eps.get(id)
+	pl.eps = append(pl.eps, catvod.Episode{Name: "x3", ID: "e3"})
+	if _, err := p.resolveEpisode(pl, 1); err != nil {
+		t.Fatal(err)
+	}
+	var next *resolved
+	for i := 0; i < 50 && next == nil; i++ {
+		time.Sleep(50 * time.Millisecond)
+		pl.mu.Lock()
+		if r := pl.pending[2]; r != nil {
+			select {
+			case <-r.done:
+				next = r
+			default:
+			}
+		}
+		pl.mu.Unlock()
+	}
+	if next == nil || next.err != nil || next.st == nil {
+		t.Fatalf("episode 3 not prefetched: %+v", next)
+	}
+	u, err := p.resolveEpisode(pl, 2)
+	if err != nil || !strings.Contains(u, "e3") {
+		t.Fatal(u, err)
+	}
+	pl.mu.Lock()
+	if r := pl.pending[2]; r == next {
+		t.Fatal("prefetched answer not consumed")
+	}
+	pl.mu.Unlock()
+	if resp, _ := http.Get(p.eps.epURL(id, 0) + "?prefetch=1"); resp.StatusCode != http.StatusNoContent {
+		t.Fatal("prefetch endpoint", resp.StatusCode)
+	}
+}
+
+func TestPlayersPrefetchAndStayQuiet(t *testing.T) {
+	m := strings.Join(mpvArgs("http://127.0.0.1:1/playlist/x.m3u", ""), " ")
+	for _, want := range []string{"--prefetch-playlist=yes", "--osd-playing-msg=", "--term-playing-msg="} {
+		if !strings.Contains(m, want) {
+			t.Errorf("mpv args missing %s: %s", want, m)
+		}
+	}
+	if a := iinaArgs("http://127.0.0.1:1/playlist/x.m3u"); !strings.Contains(strings.Join(a, " "), "--mpv-prefetch-playlist=yes") || a[len(a)-1] != "http://127.0.0.1:1/playlist/x.m3u" {
+		t.Error(a)
+	}
+}
+
+func TestStaleResolvedIsRefetched(t *testing.T) {
+	c := make(chan struct{})
+	close(c)
+	st := &catvod.Stream{URL: "http://example.com/old.m3u8"}
+	pl := &playlist{eps: []catvod.Episode{{ID: "a"}}, pending: map[int]*resolved{0: {done: c, st: st, at: time.Now().Add(-2 * resolvedTTL)}}}
+	p := &Player{inited: map[string]bool{}}
+	// Stale: must not return the old URL; with no plugin loaded it errors.
+	if got, err := p.episodeStream(pl, 0, true); err == nil || got == st {
+		t.Fatal("stale answer reused")
 	}
 }

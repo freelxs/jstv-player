@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -28,7 +30,22 @@ type playlist struct {
 	eps                    []catvod.Episode
 	start                  int
 	first                  *catvod.Stream // already resolved start episode
+
+	mu      sync.Mutex
+	pending map[int]*resolved // resolved or being resolved, by index
 }
+
+// resolved is one episode's plugin answer; done closes when it is known.
+type resolved struct {
+	done chan struct{}
+	st   *catvod.Stream
+	err  error
+	at   time.Time
+}
+
+// resolvedTTL is how long a prefetched answer is trusted; plugin URLs are
+// often signed and expire, so an old one is resolved again.
+const resolvedTTL = 10 * time.Minute
 
 // HistoryEntry is the last episode played of a show.
 type HistoryEntry struct {
@@ -136,6 +153,12 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if r.URL.Query().Get("prefetch") == "1" {
+			// The built-in player asks for this shortly before it needs it.
+			go p.prefetchEpisode(pl, n)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		u, err := p.resolveEpisode(pl, n)
 		if err != nil {
 			p.log(fmt.Sprintf("连播 第%d项: %v", n+1, err))
@@ -149,31 +172,136 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// resolveEpisode asks the plugin for episode n and returns the URL the
-// player should fetch (through the header proxy).
+// resolveEpisode returns the URL the player should fetch for episode n
+// (through the header proxy), using a prefetched answer when there is a
+// fresh one, and starts resolving episode n+1 in the background so the
+// switch to it does not wait on the plugin.
 func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
-	var st *catvod.Stream
-	p.eps.mu.Lock()
-	if n == pl.start && pl.first != nil {
-		st, pl.first = pl.first, nil
-	}
-	p.eps.mu.Unlock()
-	if st == nil {
-		streams, err := p.Play(pl.api, pl.flag, pl.eps[n].ID)
-		if err != nil {
-			return "", err
-		}
-		st = firstPlayable(streams)
-		if st == nil {
-			return "", errors.New("这一集只有网页地址，无法连播")
-		}
+	st, err := p.episodeStream(pl, n, true)
+	if err != nil {
+		return "", err
 	}
 	p.recordHistory(pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name})
-	u := st.URL
-	if p.proxy != nil {
-		u = p.proxy.WrapAlways(u, st.Headers)
+	if n+1 < len(pl.eps) {
+		go p.prefetchEpisode(pl, n+1)
 	}
-	return u, nil
+	return p.wrapStream(st), nil
+}
+
+func (p *Player) wrapStream(st *catvod.Stream) string {
+	if p.proxy != nil {
+		return p.proxy.WrapAlways(st.URL, st.Headers)
+	}
+	return st.URL
+}
+
+// episodeStream resolves episode n once at a time: concurrent callers (the
+// player and a prefetch) share one plugin call. consume drops the answer
+// after use so a later replay resolves a fresh URL.
+func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Stream, error) {
+	pl.mu.Lock()
+	if pl.pending == nil {
+		pl.pending = map[int]*resolved{}
+		if pl.first != nil {
+			c := make(chan struct{})
+			close(c)
+			pl.pending[pl.start] = &resolved{done: c, st: pl.first, at: time.Now()}
+			pl.first = nil
+		}
+	}
+	r := pl.pending[n]
+	if r != nil {
+		select {
+		case <-r.done:
+			if r.err != nil || time.Since(r.at) > resolvedTTL {
+				r = nil // failed or stale: resolve again
+			}
+		default: // in flight: wait for it
+		}
+	}
+	owner := r == nil
+	if owner {
+		r = &resolved{done: make(chan struct{})}
+		pl.pending[n] = r
+	}
+	pl.mu.Unlock()
+	if owner {
+		streams, err := p.Play(pl.api, pl.flag, pl.eps[n].ID)
+		if err == nil {
+			if r.st = firstPlayable(streams); r.st == nil {
+				err = errors.New("这一集只有网页地址，无法连播")
+			}
+		}
+		r.err, r.at = err, time.Now()
+		close(r.done)
+	}
+	<-r.done
+	if consume {
+		pl.mu.Lock()
+		if pl.pending[n] == r {
+			delete(pl.pending, n)
+		}
+		pl.mu.Unlock()
+	}
+	return r.st, r.err
+}
+
+// prefetchEpisode resolves episode n ahead of time and warms the start of
+// its stream through the proxy (a playlist and its first segment, or the
+// first bytes of a file), so the player's request for it is served at once.
+func (p *Player) prefetchEpisode(pl *playlist, n int) {
+	if n < 0 || n >= len(pl.eps) {
+		return
+	}
+	st, err := p.episodeStream(pl, n, false)
+	if err != nil {
+		p.log(fmt.Sprintf("预取第 %d 项失败: %v", n+1, err))
+		return
+	}
+	warmStream(p.wrapStream(st))
+}
+
+const warmBytes = 2 << 20
+
+var warmClient = &http.Client{Timeout: 20 * time.Second}
+
+func warmStream(u string) {
+	resp, err := warmClient.Get(u)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, warmBytes))
+	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U")) {
+		return
+	}
+	// HLS: the proxy rewrote entries to absolute proxied URLs; warm the
+	// first one (a variant playlist or a segment), one level deep.
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+			if r2, err := warmClient.Get(line); err == nil {
+				b2, _ := io.ReadAll(io.LimitReader(r2.Body, warmBytes))
+				r2.Body.Close()
+				if bytes.HasPrefix(bytes.TrimSpace(b2), []byte("#EXTM3U")) {
+					for _, l2 := range strings.Split(string(b2), "\n") {
+						l2 = strings.TrimSpace(l2)
+						if strings.HasPrefix(l2, "http") {
+							if r3, err := warmClient.Get(l2); err == nil {
+								io.Copy(io.Discard, io.LimitReader(r3.Body, warmBytes))
+								r3.Body.Close()
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+		break
+	}
 }
 
 func firstPlayable(streams []catvod.Stream) *catvod.Stream {
@@ -254,6 +382,7 @@ body:hover #bar{opacity:1}#t{flex:1;overflow:hidden;text-overflow:ellipsis;white
 <body><video controls autoplay playsinline></video><div id="bar"><span id="t"></span><span id="e"></span><button id="p">上一集</button><button id="n">下一集</button></div>
 <script>const L=` + js + `;let i=0;const v=document.querySelector('video');
 function go(k){if(k<0||k>=L.length)return;i=k;document.title=L[i].t;document.getElementById('t').textContent=L[i].t+'  ('+(i+1)+'/'+L.length+')';document.getElementById('e').textContent='';v.src=L[i].u;v.play().catch(()=>{})}
+let pf=-1;v.addEventListener('timeupdate',()=>{if(i+1<L.length&&pf!==i+1&&v.duration&&v.duration-v.currentTime<60){pf=i+1;fetch(L[i+1].u+'?prefetch=1').catch(()=>{})}});
 v.addEventListener('ended',()=>go(i+1));v.addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 mpv 或 IINA'});
 document.getElementById('p').onclick=()=>go(i-1);document.getElementById('n').onclick=()=>go(i+1);go(0)</script></body></html>`
 }

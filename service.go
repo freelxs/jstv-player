@@ -509,6 +509,7 @@ func (p *Player) launch(player, u, title string) error {
 			if name == "" {
 				return errors.New("未找到 IINA（/Applications/IINA.app）")
 			}
+			quietIINA()
 			args = iinaArgs(u)
 		} else {
 			name = findExe(mpvCandidates()...)
@@ -536,13 +537,28 @@ func (p *Player) launch(player, u, title string) error {
 // probes stdin, which is not a terminal when launched from an app, adds
 // --stdin, and IINA shows "Cannot open file or stream!".
 func iinaArgs(u string) []string {
-	return []string{"--no-stdin", "--mpv-demuxer-lavf-o=extension_picky=0", u}
+	// prefetch-playlist: open the next playlist entry before this one
+	// ends, so 连播 switches without a pause.
+	return []string{"--no-stdin", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", u}
+}
+
+// quietIINA turns off IINA's "file started" OSD message. For network
+// streams IINA shows the full URL there (a loopback address here) every
+// time an episode starts; iina-cli has no flag for it, only this IINA
+// preference. It is the same switch as IINA → Settings → UI → OSD.
+func quietIINA() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	_ = exec.Command("defaults", "write", "com.colliderli.iina", "disableOSDFileStartMsg", "-bool", "true").Run()
 }
 
 func mpvArgs(u, title string) []string {
 	// extension_picky=0: accept HLS segments disguised as .jpg/.png.
 	// No --title for playlists: mpv then shows each entry's #EXTINF title.
-	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0"}
+	// prefetch-playlist: open the next 连播 entry before this one ends.
+	// osd-playing-msg / term-playing-msg empty: never print the entry URL.
+	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0", "--prefetch-playlist=yes", "--osd-playing-msg=", "--term-playing-msg="}
 	if title != "" {
 		args = append(args, "--title="+title)
 	}
