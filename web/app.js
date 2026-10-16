@@ -88,8 +88,9 @@ async function loadSource(fn = () => call('LoadSource')) {
   const request = browseRequests.begin();
   resetBrowse();
   try {
-    st.settings = await call('GetSettings');
+    const initialSettings = await call('GetSettings');
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
+    st.settings = initialSettings;
     renderSwitcher();
     if (!activeSub()) { setDot(''); $('#status').textContent = ''; setView(noSubState()); return; }
     setDot('busy'); $('#status').textContent = '加载中';
@@ -97,8 +98,9 @@ async function loadSource(fn = () => call('LoadSource')) {
     setView(skeletonGrid());
     const r = await fn();
     if (!browseRequests.current(request) || seq !== st.loadSeq) return; // a newer navigation or switch won
-    st.settings = await call('GetSettings');
+    const reloadedSettings = await call('GetSettings');
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
+    st.settings = reloadedSettings;
     renderSwitcher();
     st.sites = r.sites || [];
     setDot('ok'); $('#status').textContent = `${st.sites.length}`;
@@ -133,9 +135,10 @@ async function selectSite(s) {
   $('#classes').replaceChildren(); setView(skeletonGrid());
   const seq = st.loadSeq;
   try {
-    st.home = await call('Home', s.api);
+    const home = await call('Home', s.api);
     if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
-    const cls = st.home.class || [];
+    st.home = home;
+    const cls = home.class || [];
     for (const c of cls) $('#classes').append(el('button', { class: 'chip', onclick: () => openCategory(c.type_id, 1) }, c.type_name));
     if (st.home.list && st.home.list.length) show(() => setView(youtubeLoginHint(s), cards(st.home.list, s)));
     else if (cls.length) {

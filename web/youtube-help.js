@@ -6,9 +6,7 @@
     const configSite = sites.find((s) => s !== site && /配置|设置|管理/.test(`${s.name || ''} ${s.key || ''}`)) || null;
     return {
       configSite,
-      message: configSite
-        ? `请打开插件提供的「${configSite.name || configSite.key}」站点，按页面提示扫码；本应用不会读取或显示登录凭据。`
-        : '请按插件页面提示前往其后台管理界面扫码；本应用没有独立的 YouTube 登录接口，也不会读取或显示登录凭据。',
+      message: '请按当前插件页面指引完成登录。本应用不提供独立的 Google 登录表单。',
     };
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = { youtubeLoginHelp };

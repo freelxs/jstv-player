@@ -538,10 +538,10 @@ func (p *Player) launch(player, u, title string) error {
 func iinaArgs(u string) []string {
 	// prefetch-playlist: open the next playlist entry before this one
 	// ends, so 连播 switches without a pause.
-	// NSArgumentDomain is process-local; this suppresses IINA's file-start
-	// OSD without persisting the preference. The mpv option also suppresses
-	// mpv's own playback-start filename message for this invocation.
-	return []string{"--no-stdin", "-default", "disableOSDFileStartMsg=YES", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", "--mpv-osd-playing-msg=", u}
+	// IINA's CLI forwards single-dash key/value pairs to NSArgumentDomain.
+	// Keep the override scoped to this launch and avoid an empty mpv value:
+	// IINA's CLI parser drops empty values after '='.
+	return []string{"--no-stdin", "-disableOSDFileStartMsg", "YES", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", u}
 }
 
 func mpvArgs(u, title string) []string {
