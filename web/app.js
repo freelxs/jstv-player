@@ -3,6 +3,7 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
 const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, stack: [], loadSeq: 0 };
+const browseRequests = BrowseRequestToken();
 
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
 
@@ -30,7 +31,7 @@ function toast(msg, { ms = 3500, err = false, busy = false } = {}) {
 const hideToast = () => { clearTimeout(toast.h); $('#toast').hidden = true; };
 
 // ---- view states ----
-function setView(...kids) { const v = $('#view'); v.replaceChildren(...kids); v.classList.remove('fade'); void v.offsetWidth; v.classList.add('fade'); }
+function setView(...kids) { const v = $('#view'); v.replaceChildren(...kids.filter((k) => k != null && k !== false)); v.classList.remove('fade'); void v.offsetWidth; v.classList.add('fade'); }
 function stateBox({ ico = 'film', title, text, error = false, actions = [] }) {
   return el('div', { class: 'state' + (error ? ' error' : '') },
     el('div', { class: 'ico' }, icon(ico)), el('h4', {}, title), text ? el('p', {}, text) : null,
@@ -45,7 +46,7 @@ function skeletonGrid(n = 18) {
 
 // Navigation: push a render function so "返回" restores the previous view.
 function show(render) { st.stack.push(render); render(); $('#back').hidden = st.stack.length < 2; }
-function back() { if (st.stack.length > 1) { st.stack.pop(); st.stack[st.stack.length - 1](); } $('#back').hidden = st.stack.length < 2; }
+function back() { browseRequests.invalidate(); if (st.stack.length > 1) { st.stack.pop(); st.stack[st.stack.length - 1](); } $('#back').hidden = st.stack.length < 2; }
 
 // ---- subscriptions ----
 const activeSub = () => (st.settings?.subscriptions || []).find((s) => s.id === st.settings.active);
@@ -84,16 +85,21 @@ function resetBrowse() {
 }
 async function loadSource(fn = () => call('LoadSource')) {
   const seq = ++st.loadSeq;
+  const request = browseRequests.begin();
   resetBrowse();
-  st.settings = await call('GetSettings'); renderSwitcher();
-  if (!activeSub()) { setDot(''); $('#status').textContent = ''; setView(noSubState()); return; }
-  setDot('busy'); $('#status').textContent = '加载中';
-  for (let i = 0; i < 5; i++) $('#sites').append(el('div', { class: 'site-skel skel' }));
-  setView(skeletonGrid());
   try {
+    st.settings = await call('GetSettings');
+    if (!browseRequests.current(request) || seq !== st.loadSeq) return;
+    renderSwitcher();
+    if (!activeSub()) { setDot(''); $('#status').textContent = ''; setView(noSubState()); return; }
+    setDot('busy'); $('#status').textContent = '加载中';
+    for (let i = 0; i < 5; i++) $('#sites').append(el('div', { class: 'site-skel skel' }));
+    setView(skeletonGrid());
     const r = await fn();
-    if (seq !== st.loadSeq) return; // a newer switch won
-    st.settings = await call('GetSettings'); renderSwitcher();
+    if (!browseRequests.current(request) || seq !== st.loadSeq) return; // a newer navigation or switch won
+    st.settings = await call('GetSettings');
+    if (!browseRequests.current(request) || seq !== st.loadSeq) return;
+    renderSwitcher();
     st.sites = r.sites || [];
     setDot('ok'); $('#status').textContent = `${st.sites.length}`;
     if (r.mismatch) toast('提示：index.js 与发布的 md5 不一致（文件可能已更新）');
@@ -101,7 +107,7 @@ async function loadSource(fn = () => call('LoadSource')) {
     if (st.sites.length) selectSite(st.sites[0]);
     else setView(stateBox({ title: '这个订阅没有站点', text: '插件的 /config 没有返回任何站点。' }));
   } catch (e) {
-    if (seq !== st.loadSeq) return;
+    if (!browseRequests.current(request) || seq !== st.loadSeq) return;
     $('#sites').replaceChildren(); setDot('err'); $('#status').textContent = '';
     setView(stateBox({ ico: 'alert', error: true, title: `「${activeSub()?.name || ''}」加载失败`, text: errMsg(e),
       actions: [el('button', { class: 'btn', onclick: () => loadSource() }, icon('reload'), '重试'), el('button', { class: 'btn', onclick: () => openSettings('subs') }, '管理订阅'), el('button', { class: 'btn', onclick: () => openSettings('logs') }, '查看日志')] }));
@@ -122,36 +128,45 @@ function renderSites() {
 }
 
 async function selectSite(s) {
+  const request = browseRequests.begin();
   st.site = s; st.stack = []; $('#back').hidden = true; renderSites();
   $('#classes').replaceChildren(); setView(skeletonGrid());
   const seq = st.loadSeq;
   try {
     st.home = await call('Home', s.api);
-    if (seq !== st.loadSeq || st.site !== s) return;
+    if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
     const cls = st.home.class || [];
     for (const c of cls) $('#classes').append(el('button', { class: 'chip', onclick: () => openCategory(c.type_id, 1) }, c.type_name));
-    if (st.home.list && st.home.list.length) show(() => grid(st.home.list, s));
+    if (st.home.list && st.home.list.length) show(() => setView(youtubeLoginHint(s), cards(st.home.list, s)));
     else if (cls.length) {
       // Some first classes are empty: use the first non-empty one.
       for (const c of cls.slice(0, 4)) {
-        try { const r = await call('Category', s.api, String(c.type_id), 1, {}); if ((r.list || []).length) { openCategory(c.type_id, 1); return; } } catch (e) {}
+        if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
+        try {
+          const r = await call('Category', s.api, String(c.type_id), 1, {});
+          if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
+          if ((r.list || []).length) { openCategory(c.type_id, 1); return; }
+        } catch (e) {
+          if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
+        }
       }
       openCategory(cls[0].type_id, 1);
-    } else setView(stateBox({ ico: 'search', title: '这个站点没有分类', text: '可以在上方直接搜索。' }));
-  } catch (e) { if (st.site === s) setView(errorState(e, () => selectSite(s))); }
+    } else setView(youtubeLoginHint(s), stateBox({ ico: 'search', title: '这个站点没有分类', text: '可以在上方直接搜索。' }));
+  } catch (e) { if (browseRequests.current(request) && seq === st.loadSeq && st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
 
 async function openCategory(tid, page) {
+  const request = browseRequests.begin();
   st.tid = tid; st.page = page;
   [...$('#classes').children].forEach((b, i) => b.classList.toggle('active', String((st.home.class[i] || {}).type_id) === String(tid)));
   setView(skeletonGrid());
   const site = st.site;
   try {
     const r = await call('Category', site.api, String(tid), page, {});
-    if (st.site !== site) return;
+    if (!browseRequests.current(request) || st.site !== site) return;
     st.stack = [];
     show(() => {
-      grid(r.list || [], site);
+      setView(youtubeLoginHint(site), (r.list || []).length ? cards(r.list, site) : stateBox({ title: '这里还没有内容', text: '换个分类或翻页试试。' }));
       const pc = Number(r.pagecount || 0);
       if (!(r.list || []).length && page === 1) return;
       $('#view').append(el('div', { class: 'pager' },
@@ -159,7 +174,7 @@ async function openCategory(tid, page) {
         el('span', { class: 'pg' }, `第 ${page}${pc ? ' / ' + pc : ''} 页`),
         el('button', { class: 'btn', disabled: !!pc && page >= pc, onclick: () => openCategory(tid, page + 1) }, '下一页')));
     });
-  } catch (e) { setView(errorState(e, () => openCategory(tid, page))); }
+  } catch (e) { if (browseRequests.current(request) && st.site === site) setView(errorState(e, () => openCategory(tid, page))); }
 }
 
 function cards(list, site) {
@@ -180,21 +195,19 @@ function cards(list, site) {
   }
   return g;
 }
-function grid(list, site) {
-  setView(list.length ? cards(list, site) : stateBox({ title: '这里还没有内容', text: '换个分类或翻页试试。' }));
-}
-
 async function search(wd) {
   if (!wd) return;
   if (!st.sites.length) return toast('请先加载一个订阅');
+  const request = browseRequests.begin();
   setView(skeletonGrid(12));
   if ($('#onlySite').checked && st.site) {
     try {
       const r = await call('Search', st.site.api, wd, 1);
+      if (!browseRequests.current(request)) return;
       st.stack = [];
       show(() => setView(el('div', { class: 'section-h' }, `“${wd}”`, el('span', { class: 'n' }, st.site.name)),
         (r.list || []).length ? cards(r.list, st.site) : stateBox({ ico: 'search', title: '没有找到结果', text: '可以关闭“仅当前站点”搜索全部站点。' })));
-    } catch (e) { setView(errorState(e, () => search(wd))); }
+    } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => search(wd))); }
     return;
   }
   const results = []; let done = false;
@@ -210,21 +223,33 @@ async function search(wd) {
   };
   st.stack = []; show(render);
   const isTop = () => st.stack[st.stack.length - 1] === render;
-  const ch = window.mygo.channel((r) => { r.list = r.list || []; results.push(r); if (isTop()) render(); });
-  try { await call('SearchAll', wd, ch); } catch (e) { toast(errMsg(e), { err: true }); }
+  const ch = window.mygo.channel((r) => { if (!browseRequests.current(request)) return; r.list = r.list || []; results.push(r); if (isTop()) render(); });
+  try { await call('SearchAll', wd, ch); } catch (e) { if (browseRequests.current(request)) toast(errMsg(e), { err: true }); }
+  if (!browseRequests.current(request)) return;
   done = true; if (isTop()) render();
 }
 
+function youtubeLoginHint(site) {
+  const help = youtubeLoginHelp(site, st.sites);
+  if (!help) return null;
+  return el('aside', { class: 'auth-hint' },
+    el('strong', {}, 'YouTube 登录由当前插件管理'),
+    el('span', {}, help.message),
+    help.configSite ? el('button', { class: 'btn', onclick: () => selectSite(help.configSite) }, '打开 ' + (help.configSite.name || help.configSite.key)) : null);
+}
+
 async function openDetail(site, id) {
+  const request = browseRequests.begin();
   setView(el('div', { class: 'hero' }, el('div', { class: 'cover skel' }), el('div', { class: 'info', style: 'flex:1' },
     el('div', { class: 'skel skel-line', style: 'height:26px;width:40%' }), el('div', { class: 'skel skel-line short', style: 'width:30%' }),
     el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line short' }))));
   let d;
-  try { d = await call('Detail', site.api, String(id)); } catch (e) { setView(errorState(e, () => openDetail(site, id))); return; }
+  try { d = await call('Detail', site.api, String(id)); if (!browseRequests.current(request)) return; } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => openDetail(site, id))); return; }
   let lineIdx = 0;
   const vodId = String(id);
   let hist = null;
   try { hist = await call('GetHistory', site.api, vodId); } catch (e) {}
+  if (!browseRequests.current(request)) return;
   if (hist) { const i = (d.lines || []).findIndex((l) => l.flag === hist.flag); if (i >= 0) lineIdx = i; }
   show(() => {
     const v = d.vod;

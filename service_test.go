@@ -7,7 +7,7 @@ import (
 
 func TestIINAArgs(t *testing.T) {
 	a := iinaArgs("http://example.com/a.m3u8")
-	if a[0] != "--no-stdin" || !slices.Contains(a, "--mpv-demuxer-lavf-o=extension_picky=0") || a[len(a)-1] != "http://example.com/a.m3u8" {
+	if a[0] != "--no-stdin" || !slices.Contains(a, "-default") || !slices.Contains(a, "disableOSDFileStartMsg=YES") || !slices.Contains(a, "--mpv-demuxer-lavf-o=extension_picky=0") || !slices.Contains(a, "--mpv-osd-playing-msg=") || a[len(a)-1] != "http://example.com/a.m3u8" {
 		t.Fatal(a)
 	}
 }

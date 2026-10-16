@@ -509,7 +509,6 @@ func (p *Player) launch(player, u, title string) error {
 			if name == "" {
 				return errors.New("未找到 IINA（/Applications/IINA.app）")
 			}
-			quietIINA()
 			args = iinaArgs(u)
 		} else {
 			name = findExe(mpvCandidates()...)
@@ -539,18 +538,10 @@ func (p *Player) launch(player, u, title string) error {
 func iinaArgs(u string) []string {
 	// prefetch-playlist: open the next playlist entry before this one
 	// ends, so 连播 switches without a pause.
-	return []string{"--no-stdin", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", u}
-}
-
-// quietIINA turns off IINA's "file started" OSD message. For network
-// streams IINA shows the full URL there (a loopback address here) every
-// time an episode starts; iina-cli has no flag for it, only this IINA
-// preference. It is the same switch as IINA → Settings → UI → OSD.
-func quietIINA() {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	_ = exec.Command("defaults", "write", "com.colliderli.iina", "disableOSDFileStartMsg", "-bool", "true").Run()
+	// NSArgumentDomain is process-local; this suppresses IINA's file-start
+	// OSD without persisting the preference. The mpv option also suppresses
+	// mpv's own playback-start filename message for this invocation.
+	return []string{"--no-stdin", "-default", "disableOSDFileStartMsg=YES", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", "--mpv-osd-playing-msg=", u}
 }
 
 func mpvArgs(u, title string) []string {
