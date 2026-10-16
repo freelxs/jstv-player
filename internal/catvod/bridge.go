@@ -163,33 +163,108 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// LocalizeURL handles every loopback URL a source returns in one place:
-// URLs on the running source server pass unchanged; URLs on the default
-// bridge port go to the user-configured bridge when there is one; other loopback URLs whose path is a
-// spider route (/spider/…, a stale or default source port such as 9988) are
-// re-pointed at the current source server.
+// LocalizeURL maps URLs returned by a source back to the source process that
+// is actually running. Source servers bind to loopback, but some plugins
+// advertise their website using a LAN interface address. Stale ports are
+// only accepted for routes owned by this plugin protocol.
 func LocalizeURL(u, sourceBase, bridgeAddr string) string {
-	if !IsLoopback(u) {
+	pu, err := url.Parse(u)
+	if err != nil {
+		return u
+	}
+	sb, err := url.Parse(sourceBase)
+	if err != nil || sb.Scheme != "http" || sb.Host == "" {
+		return u
+	}
+	if pu.Scheme == "" && pu.Host == "" {
+		resolved := sb.ResolveReference(pu)
+		if !sourceOwnedRoute(resolved.Path) {
+			return u
+		}
+		return resolved.String()
+	}
+	if pu.Scheme == "" && pu.Host != "" {
+		pu.Scheme = sb.Scheme
+	}
+	if pu.Scheme != "http" || pu.Host == "" {
 		return u
 	}
 	if SameHost(u, sourceBase) {
 		return u
 	}
-	pu, err := url.Parse(u)
-	if err != nil {
-		return u
-	}
 	if bridgeAddr != "" && pu.Port() == fmt.Sprint(DefaultBridgePort) && pu.Path == "/play" {
-		pu.Host = bridgeAddr
-		return pu.String()
-	}
-	if strings.HasPrefix(pu.Path, "/spider/") || pu.Path == "/m3u8-clean" || strings.HasPrefix(pu.Path, "/proxy") {
-		if sb, err := url.Parse(sourceBase); err == nil && sb.Host != "" {
-			pu.Host = sb.Host
+		if IsLoopback(u) {
+			pu.Host = bridgeAddr
 			return pu.String()
 		}
 	}
+	localHost := IsLoopback(u) || isInterfaceIP(pu.Hostname())
+	if !localHost {
+		return u
+	}
+	// A URL on the current source port is attributable to the running plugin.
+	// For an older port, only rewrite the source's narrow, known route space.
+	if pu.Port() == sb.Port() || sourceOwnedRoute(pu.Path) {
+		pu.Host = sb.Host
+		pu.Scheme = sb.Scheme
+		return pu.String()
+	}
 	return u
+}
+
+func sourceOwnedRoute(path string) bool {
+	return path == "/website" || strings.HasPrefix(path, "/website/") ||
+		strings.HasPrefix(path, "/spider/") || path == "/m3u8-clean" ||
+		path == "/proxy" || strings.HasPrefix(path, "/proxy/")
+}
+
+func isInterfaceIP(host string) bool {
+	ip := net.ParseIP(strings.Split(host, "%")[0])
+	if ip == nil {
+		return false
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var local net.IP
+		switch a := addr.(type) {
+		case *net.IPNet:
+			local = a.IP
+		case *net.IPAddr:
+			local = a.IP
+		}
+		if local != nil && ip.Equal(local) {
+			return true
+		}
+	}
+	return false
+}
+
+// ConfigPageURL converts the plugin's configuration API root into its HTML
+// UI only when it is being used as a navigation target. /website/ itself is
+// an application/json API and must remain unchanged for normal requests.
+func ConfigPageURL(u, sourceBase string) (string, bool) {
+	pu, err := url.Parse(u)
+	if err != nil || pu.Scheme != "http" || pu.User != nil || !SameHost(u, sourceBase) || (pu.Path != "/website" && pu.Path != "/website/") {
+		return u, false
+	}
+	pu.Path = "/website/index.html"
+	pu.RawPath = ""
+	return pu.String(), true
+}
+
+// LocalizePlayStreams localizes plugin play results and recognizes its
+// configuration endpoint as a browser page navigation.
+func LocalizePlayStreams(streams []Stream, sourceBase, bridgeAddr string) {
+	for i := range streams {
+		streams[i].URL = LocalizeURL(streams[i].URL, sourceBase, bridgeAddr)
+		if pageURL, ok := ConfigPageURL(streams[i].URL, sourceBase); ok {
+			streams[i].URL = pageURL
+			streams[i].Parse = true
+		}
+	}
 }
 
 // Preflight fetches the first byte of a stream the way a player would and

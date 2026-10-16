@@ -102,7 +102,9 @@ func (c *Client) Init(api string) error {
 // Home returns {class:[{type_id,type_name}], filters:{type_id:[…]}, list?}.
 func (c *Client) Home(api string) (M, error) {
 	var out M
-	return out, c.do("POST", join(api, "home"), M{"filter": true}, &out)
+	err := c.do("POST", join(api, "home"), M{"filter": true}, &out)
+	LocalizeVODURLs(out, c.Base, "")
+	return out, err
 }
 
 // Category returns {page,pagecount,total,list:[vod]}.
@@ -111,13 +113,17 @@ func (c *Client) Category(api, tid string, page int, filters map[string]string) 
 		filters = map[string]string{}
 	}
 	var out M
-	return out, c.do("POST", join(api, "category"), M{"id": tid, "page": page, "filter": true, "filters": filters}, &out)
+	err := c.do("POST", join(api, "category"), M{"id": tid, "page": page, "filter": true, "filters": filters}, &out)
+	LocalizeVODURLs(out, c.Base, "")
+	return out, err
 }
 
 // Detail returns {list:[vod]} with vod_play_from / vod_play_url.
 func (c *Client) Detail(api, id string) (M, error) {
 	var out M
-	return out, c.do("POST", join(api, "detail"), M{"id": id}, &out)
+	err := c.do("POST", join(api, "detail"), M{"id": id}, &out)
+	LocalizeVODURLs(out, c.Base, "")
+	return out, err
 }
 
 // Play returns {parse, url, header?, jx?}.
@@ -129,7 +135,27 @@ func (c *Client) Play(api, flag, id string) (M, error) {
 // Search returns {page,pagecount,list:[vod]}.
 func (c *Client) Search(api, wd string, page int) (M, error) {
 	var out M
-	return out, c.do("POST", join(api, "search"), M{"wd": wd, "page": page, "quick": false}, &out)
+	err := c.do("POST", join(api, "search"), M{"wd": wd, "page": page, "quick": false}, &out)
+	LocalizeVODURLs(out, c.Base, "")
+	return out, err
+}
+
+// LocalizeVODURLs touches only the documented URL-valued poster field in
+// CatPaw VOD records. Arbitrary text fields and plugin JSON are left intact.
+func LocalizeVODURLs(result M, sourceBase, bridgeAddr string) {
+	items, ok := result["list"].([]any)
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		vod, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if pic, ok := vod["vod_pic"].(string); ok && pic != "" {
+			vod["vod_pic"] = LocalizeURL(pic, sourceBase, bridgeAddr)
+		}
+	}
 }
 
 // Episode is one entry of a play line.

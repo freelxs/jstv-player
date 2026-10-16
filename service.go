@@ -418,9 +418,7 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 	if bridgeAddr != "" {
 		allowed = append(allowed, bridgeAddr)
 	}
-	for i := range s {
-		s[i].URL = catvod.LocalizeURL(s[i].URL, c.Base, bridgeAddr)
-	}
+	catvod.LocalizePlayStreams(s, c.Base, bridgeAddr)
 	if err := catvod.CheckLocalStreams(s, c.Base, allowed...); err != nil {
 		p.log("play: " + err.Error())
 		return nil, err
