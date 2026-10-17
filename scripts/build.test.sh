@@ -11,6 +11,17 @@ assert_absent() { [[ ! -e "$1" ]] || fail "expected absent: $1"; }
 assert_contains() { grep -Fq -- "$2" "$1" || { cat "$1" >&2; fail "expected '$2' in $1"; }; }
 
 grep -Fq 'GOPROXY: https://proxy.golang.org,direct' "$SOURCE_ROOT/.github/workflows/build.yml" || fail "macOS CI build must use a network-enabled Go proxy"
+WORKFLOW="$SOURCE_ROOT/.github/workflows/build.yml"
+for action in 'actions/checkout@v7' 'actions/setup-go@v7' 'actions/setup-node@v7' 'actions/upload-artifact@v7' 'actions/download-artifact@v8'; do
+  grep -Fq -- "uses: $action" "$WORKFLOW" || fail "workflow must use verified Node 24 action $action"
+done
+grep -Fq 'node-version: 24' "$WORKFLOW" || fail "frontend tests must use Node 24"
+grep -Fq 'release_tag:' "$WORKFLOW" || fail "workflow dispatch must expose optional release_tag"
+grep -Fq 'RELEASE_TAG: ${{ inputs.release_tag' "$WORKFLOW" || fail "release tag must enter shell through an environment variable"
+grep -Fq '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$WORKFLOW" || fail "release tag must be restricted to numeric v-prefixed versions"
+grep -Fq 'git ls-remote --exit-code --tags origin' "$WORKFLOW" || fail "release tag must already exist on origin"
+grep -Fq 'needs.resolve-release.outputs.release_tag' "$WORKFLOW" || fail "release jobs must use the validated tag"
+grep -Fq 'gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"' "$WORKFLOW" || fail "release creation must verify the existing tag and specify repository explicitly"
 
 new_fixture() {
   local name="$1" root="$FIXTURE/$1"

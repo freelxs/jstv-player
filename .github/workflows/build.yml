@@ -6,25 +6,71 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to publish after successful builds; leave empty for build-only
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  resolve-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate existing release tag
+        id: validate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo 'release_tag=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Release tag must look like vMAJOR.MINOR.PATCH.' >&2; exit 1; }
+          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
+          [[ "$RELEASE_TAG" == "v$VERSION" ]] || { echo "Release tag $RELEASE_TAG does not match workflow source version $VERSION." >&2; exit 1; }
+          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" >/dev/null || { echo "Tag $RELEASE_TAG does not exist on origin." >&2; exit 1; }
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          TAG_VERSION="$(git show "refs/tags/$RELEASE_TAG:mygo.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
+          [[ "$RELEASE_TAG" == "v$TAG_VERSION" ]] || { echo "Tag source version $TAG_VERSION does not match $RELEASE_TAG." >&2; exit 1; }
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: resolve-release
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.release_tag != '' && needs.resolve-release.outputs.release_tag || github.sha }}
+      - name: Verify checked-out release source
+        if: needs.resolve-release.outputs.release_tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$(git describe --tags --exact-match HEAD)" == "$RELEASE_TAG" ]]
+          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
+          [[ "$RELEASE_TAG" == "v$VERSION" ]]
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
       - run: go vet ./...
       - run: go test ./...
       - name: Frontend tests
@@ -38,7 +84,7 @@ jobs:
         run: go test -race ./...
 
   build:
-    needs: test
+    needs: [test, resolve-release]
     strategy:
       fail-fast: false
       matrix:
@@ -51,8 +97,10 @@ jobs:
             platform: linux/amd64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.release_tag != '' && needs.resolve-release.outputs.release_tag || github.sha }}
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install NSIS
@@ -139,25 +187,26 @@ jobs:
           cd dist/linux-amd64
           cp *.deb "../../out/jstv-player_${V}_amd64.deb"
           cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: jstv-player-${{ runner.os }}
           path: out/*
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: needs.resolve-release.outputs.release_tag != ''
+    needs: [build, resolve-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" release-assets/* --generate-notes
+          TAG: ${{ needs.resolve-release.outputs.release_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
