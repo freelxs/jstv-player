@@ -28,6 +28,9 @@ type Host struct {
 	Config     string // optional JSON merged into the start() config
 	ConfigFile string // optional index.config.js
 	LogFunc    func(line string)
+	// ListenLAN binds the plugin's HTTP server to all interfaces (0.0.0.0)
+	// instead of loopback, so its config page is reachable from other devices.
+	ListenLAN bool
 
 	mu   sync.Mutex
 	cmd  *exec.Cmd
@@ -80,6 +83,15 @@ func freePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
+// listenHost is the address the plugin's HTTP server binds: loopback by
+// default, all interfaces when the user enables LAN access.
+func listenHost(lan bool) string {
+	if lan {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
+
 // Start launches the bundle and waits until GET /config answers.
 func (h *Host) Start(timeout time.Duration) error {
 	h.Stop()
@@ -100,6 +112,7 @@ func (h *Host) Start(timeout time.Duration) error {
 	cmd.Dir = h.Dir
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("DEV_HTTP_PORT=%d", port),
+		"JSTV_LISTEN="+listenHost(h.ListenLAN),
 		"NODE_PATH="+h.Dir,
 		"NODE_ENV=production",
 		"JSTV_CONFIG="+h.Config,

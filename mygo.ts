@@ -63,6 +63,12 @@ export interface Settings {
   bridgeTemplate: string;
   /** DisableContinuous turns off 连播 (playing the following episodes). */
   disableContinuous: boolean;
+  /**
+   * AllowLAN binds the plugin's HTTP server to all interfaces so its
+   * configuration page is reachable from other devices. Off by default:
+   * the server listens on loopback only.
+   */
+  allowLan: boolean;
 }
 
 /** Site is one entry of GET /config → video.sites. */

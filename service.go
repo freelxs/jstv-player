@@ -34,6 +34,10 @@ type Settings struct {
 	BridgeTemplate string `json:"bridgeTemplate"`
 	// DisableContinuous turns off 连播 (playing the following episodes).
 	DisableContinuous bool `json:"disableContinuous"`
+	// AllowLAN binds the plugin's HTTP server to all interfaces so its
+	// configuration page is reachable from other devices. Off by default:
+	// the server listens on loopback only.
+	AllowLAN bool `json:"allowLan"`
 }
 
 // LoadResult is what LoadSource reports to the page.
@@ -133,6 +137,7 @@ func (p *Player) SaveSettings(s Settings) error {
 		s.Player = defaultPlayer()
 	}
 	p.mu.Lock()
+	oldLAN := p.settings.AllowLAN
 	s.Subscriptions, s.Active, s.SourceURL = p.settings.Subscriptions, p.settings.Active, ""
 	p.mu.Unlock()
 	if err := p.writeSettings(s); err != nil {
@@ -142,6 +147,14 @@ func (p *Player) SaveSettings(s Settings) error {
 	p.settings = s
 	p.mu.Unlock()
 	p.startBridge(s.BridgeTemplate)
+	// The plugin server binds its listen address at start; rebind on toggle.
+	if oldLAN != s.AllowLAN && s.Active != "" {
+		go func() {
+			if _, err := p.LoadSource(); err != nil {
+				p.log("重启源以应用局域网设置: " + err.Error())
+			}
+		}()
+	}
 	return nil
 }
 
@@ -263,7 +276,7 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 		}
 	}
 	p.StopSource()
-	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log}
+	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN}
 	if err := h.Start(90 * time.Second); err != nil {
 		return nil, err
 	}
@@ -298,7 +311,7 @@ func (p *Player) client(api string) (*catvod.Client, error) {
 	if h == nil || h.Base() == "" {
 		return nil, errors.New("源未加载")
 	}
-	c := &catvod.Client{Base: h.Base()}
+	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN}
 	if need && api != "" {
 		if err := c.Init(api); err != nil {
 			p.log("init " + api + ": " + err.Error())
@@ -418,7 +431,7 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 	if bridgeAddr != "" {
 		allowed = append(allowed, bridgeAddr)
 	}
-	catvod.LocalizePlayStreams(s, c.Base, bridgeAddr)
+	catvod.LocalizePlayStreams(s, c.Base, bridgeAddr, c.LAN)
 	if err := catvod.CheckLocalStreams(s, c.Base, allowed...); err != nil {
 		p.log("play: " + err.Error())
 		return nil, err

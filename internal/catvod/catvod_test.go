@@ -374,13 +374,13 @@ func TestLocalizeDoesNotRewriteNonLocalPrivateIP(t *testing.T) {
 
 func TestConfigPageURLIsNavigationOnly(t *testing.T) {
 	for _, in := range []string{"http://127.0.0.1:60444/website/", "http://127.0.0.1:60444/website?mode=edit#qr"} {
-		got, ok := ConfigPageURL(in, "http://127.0.0.1:60444")
+		got, ok := ConfigPageURL(in, "http://127.0.0.1:60444", false)
 		if !ok || !strings.Contains(got, "/website/index.html") {
 			t.Fatalf("ConfigPageURL(%q) = %q, %v", in, got, ok)
 		}
 	}
 	for _, in := range []string{"http://127.0.0.1:60444/website/api", "http://127.0.0.1:60443/website/", "https://127.0.0.1:60444/website/"} {
-		if got, ok := ConfigPageURL(in, "http://127.0.0.1:60444"); ok || got != in {
+		if got, ok := ConfigPageURL(in, "http://127.0.0.1:60444", false); ok || got != in {
 			t.Fatalf("unexpected navigation rewrite: %q -> %q", in, got)
 		}
 	}
@@ -428,8 +428,8 @@ func TestLocalizeWebsiteFixtureHTTP(t *testing.T) {
 		t.Fatalf("LAN URL localized to %q", localized)
 	}
 	staleLAN := "http://" + net.JoinHostPort(lanIP, "59100") + "/website/index.html"
-	if got := LocalizeURL(staleLAN, srv.URL, ""); got != srv.URL+"/website/index.html" {
-		t.Fatalf("owned stale LAN route localized to %q", got)
+	if got := LocalizeURL(staleLAN, srv.URL, ""); got != staleLAN {
+		t.Fatalf("different LAN service port was rewritten to %q", got)
 	}
 	api, err := http.Get(localized)
 	if err != nil {
@@ -449,7 +449,7 @@ func TestLocalizeWebsiteFixtureHTTP(t *testing.T) {
 		t.Fatalf("JSON configuration API was misclassified as HTML: html=%v err=%v", isHTML, err)
 	}
 
-	pageURL, ok := ConfigPageURL(localized, srv.URL)
+	pageURL, ok := ConfigPageURL(localized, srv.URL, false)
 	if !ok {
 		t.Fatal("configuration navigation target not recognized")
 	}
@@ -493,7 +493,7 @@ func TestLocalizeWebsiteFixtureHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	streams := NormalizePlay(play)
-	LocalizePlayStreams(streams, srv.URL, "")
+	LocalizePlayStreams(streams, srv.URL, "", false)
 	if len(streams) != 1 || !streams[0].Parse || streams[0].URL != srv.URL+"/website/index.html?mode=edit#qr" {
 		t.Fatalf("play config navigation not localized: %+v", streams)
 	}

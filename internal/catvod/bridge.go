@@ -186,7 +186,7 @@ func LocalizeURL(u, sourceBase, bridgeAddr string) string {
 	if pu.Scheme == "" && pu.Host != "" {
 		pu.Scheme = sb.Scheme
 	}
-	if pu.Scheme != "http" || pu.Host == "" {
+	if pu.Scheme != "http" || pu.Host == "" || pu.User != nil {
 		return u
 	}
 	if SameHost(u, sourceBase) {
@@ -204,7 +204,7 @@ func LocalizeURL(u, sourceBase, bridgeAddr string) string {
 	}
 	// A URL on the current source port is attributable to the running plugin.
 	// For an older port, only rewrite the source's narrow, known route space.
-	if pu.Port() == sb.Port() || sourceOwnedRoute(pu.Path) {
+	if pu.Port() == sb.Port() || (IsLoopback(u) && sourceOwnedRoute(pu.Path)) {
 		pu.Host = sb.Host
 		pu.Scheme = sb.Scheme
 		return pu.String()
@@ -242,14 +242,57 @@ func isInterfaceIP(host string) bool {
 	return false
 }
 
+// lanIPv4 returns the machine's first non-loopback IPv4 address, or "" when
+// there is none. It is the address other devices use when LAN access is on.
+func lanIPv4() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch a := addr.(type) {
+		case *net.IPNet:
+			ip = a.IP
+		case *net.IPAddr:
+			ip = a.IP
+		}
+		if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
 // ConfigPageURL converts the plugin's configuration API root into its HTML
 // UI only when it is being used as a navigation target. /website/ itself is
 // an application/json API and must remain unchanged for normal requests.
-func ConfigPageURL(u, sourceBase string) (string, bool) {
+// When lan is set, the machine's LAN address is kept so other devices can
+// open the page; otherwise the loopback address is used.
+func ConfigPageURL(u, sourceBase string, lan bool) (string, bool) {
 	pu, err := url.Parse(u)
-	if err != nil || pu.Scheme != "http" || pu.User != nil || !SameHost(u, sourceBase) || (pu.Path != "/website" && pu.Path != "/website/") {
+	if err != nil || pu.Scheme != "http" || pu.User != nil || (pu.Path != "/website" && pu.Path != "/website/") {
 		return u, false
 	}
+	// Only this machine's own addresses qualify.
+	if !IsLoopback(u) && !isInterfaceIP(pu.Hostname()) {
+		return u, false
+	}
+	sb, err := url.Parse(sourceBase)
+	if err != nil || sb.Scheme != "http" || sb.Host == "" {
+		return u, false
+	}
+	if pu.Port() != sb.Port() {
+		return u, false
+	}
+	host := sb.Hostname()
+	if lan {
+		if ip := lanIPv4(); ip != "" {
+			host = ip
+		}
+	}
+	pu.Scheme = sb.Scheme
+	pu.Host = net.JoinHostPort(host, sb.Port())
 	pu.Path = "/website/index.html"
 	pu.RawPath = ""
 	return pu.String(), true
@@ -257,10 +300,10 @@ func ConfigPageURL(u, sourceBase string) (string, bool) {
 
 // LocalizePlayStreams localizes plugin play results and recognizes its
 // configuration endpoint as a browser page navigation.
-func LocalizePlayStreams(streams []Stream, sourceBase, bridgeAddr string) {
+func LocalizePlayStreams(streams []Stream, sourceBase, bridgeAddr string, lan bool) {
 	for i := range streams {
 		streams[i].URL = LocalizeURL(streams[i].URL, sourceBase, bridgeAddr)
-		if pageURL, ok := ConfigPageURL(streams[i].URL, sourceBase); ok {
+		if pageURL, ok := ConfigPageURL(streams[i].URL, sourceBase, lan); ok {
 			streams[i].URL = pageURL
 			streams[i].Parse = true
 		}

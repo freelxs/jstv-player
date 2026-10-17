@@ -11,11 +11,12 @@ const port = Number(process.env.DEV_HTTP_PORT || 0);
 // The host app ("Dart" side in CatPaw) supplies the HTTP server factory.
 globalThis.catServerFactory = (handle) => {
   const server = http.createServer((req, res) => handle(req, res));
-  // Bundles listen on 0.0.0.0; keep them on loopback and on our port.
+  // Loopback by default; bind all interfaces when the user enables LAN access.
+  const host = process.env.JSTV_LISTEN || '127.0.0.1';
   const listen = server.listen.bind(server);
   server.listen = (...args) => {
     const cb = args.find((a) => typeof a === 'function');
-    return listen({ port, host: '127.0.0.1' }, cb);
+    return listen({ port, host }, cb);
   };
   server.on('listening', () => {
     console.log('JSTV_READY ' + server.address().port);

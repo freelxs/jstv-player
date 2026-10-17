@@ -36,6 +36,10 @@ type Config struct {
 type Client struct {
 	Base string
 	HTTP *http.Client
+	// LAN reports whether the plugin's server is reachable from other devices
+	// (user enabled LAN access); the configuration page URL is then kept on
+	// the machine's LAN address instead of loopback.
+	LAN bool
 }
 
 func (c *Client) http() *http.Client {

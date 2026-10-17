@@ -375,13 +375,14 @@ async function openSettings(tab = 'subs') {
   for (const o of $$('#sPlayer option[data-os]')) o.hidden = o.dataset.os !== os && o.value !== s.player;
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
   $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
+  $('#sAllowLan').checked = !!s.allowLan;
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
 }
 $('#prefs').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim() });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
   } catch (err) { toast(errMsg(err), { err: true }); }
