@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.3
+
+- Treat nil and empty stream headers as the same playback grant identity after
+  the frontend JSON round trip, while retaining exact checks for nonempty
+  headers.
+- Restrict automatic episode selection to the HTTP(S) URL forms accepted by
+  proxy grant registration, and report when an episode has no supported
+  continuous-play address.
+- These fixes address confirmed code paths; they do not establish the cause
+  or resolution of any individual playback incident.
+
 ## 0.3.2
 
 - The macOS release helper builds into a unique, isolated output directory and
