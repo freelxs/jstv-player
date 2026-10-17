@@ -2,7 +2,7 @@
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
-const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, stack: [], loadSeq: 0 };
+const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0 };
 const browseRequests = BrowseRequestToken();
 
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
@@ -81,7 +81,8 @@ async function switchSub(id) {
 // ---- loading a subscription ----
 function resetBrowse() {
   st.sites = []; st.site = null; st.home = null; st.stack = [];
-  $('#sites').replaceChildren(); $('#classes').replaceChildren(); $('#back').hidden = true;
+  st.tid = null; st.page = 1; st.filters = {};
+  $('#sites').replaceChildren(); $('#classes').replaceChildren(); $('#filters').replaceChildren(); $('#filters').hidden = true; $('#back').hidden = true;
 }
 async function loadSource(fn = () => call('LoadSource')) {
   const seq = ++st.loadSeq;
@@ -155,15 +156,15 @@ function renderSites() {
 
 async function selectSite(s) {
   const request = browseRequests.begin();
-  st.site = s; st.stack = []; $('#back').hidden = true; renderSites();
-  $('#classes').replaceChildren(); setView(skeletonGrid());
+  st.site = s; st.stack = []; st.tid = null; st.page = 1; st.filters = {}; $('#back').hidden = true; renderSites();
+  $('#classes').replaceChildren(); $('#filters').replaceChildren(); $('#filters').hidden = true; setView(skeletonGrid());
   const seq = st.loadSeq;
   try {
     const home = await call('Home', s.api);
     if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
     st.home = home;
     const cls = home.class || [];
-    for (const c of cls) $('#classes').append(el('button', { class: 'chip', onclick: () => openCategory(c.type_id, 1) }, c.type_name));
+    for (const c of cls) $('#classes').append(el('button', { class: 'chip', onclick: () => openCategory(c.type_id, 1, {}) }, c.type_name));
     if (st.home.list && st.home.list.length) show(() => setView(youtubeLoginHint(s), cards(st.home.list, s)));
     else if (cls.length) {
       // Some first classes are empty: use the first non-empty one.
@@ -182,14 +183,52 @@ async function selectSite(s) {
   } catch (e) { if (browseRequests.current(request) && seq === st.loadSeq && st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
 
-async function openCategory(tid, page) {
+function filtersForCategory(home, tid) {
+  const raw = home && home.filters && typeof home.filters === 'object' && !Array.isArray(home.filters) ? home.filters[String(tid)] : null;
+  if (!Array.isArray(raw) || raw.length > 20) return [];
+  const parsed = [];
+  for (const f of raw) {
+    if (!f || typeof f !== 'object' || Array.isArray(f) || typeof f.key !== 'string' || !f.key.trim() || f.key.length > 80 ||
+        typeof f.label !== 'string' || !f.label.trim() || f.label.length > 80 || !Array.isArray(f.options) || !f.options.length || f.options.length > 50) return [];
+    const options = [];
+    for (const o of f.options) {
+      if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.value !== 'string' || o.value.length > 120 ||
+          typeof o.label !== 'string' || !o.label.trim() || o.label.length > 80) return [];
+      options.push({ value: o.value, label: o.label });
+    }
+    if (new Set(options.map((o) => o.value)).size !== options.length || parsed.some((x) => x.key === f.key)) return [];
+    parsed.push({ key: f.key, label: f.label, options });
+  }
+  return parsed;
+}
+function renderFilters(tid) {
+  const box = $('#filters'); box.replaceChildren();
+  const defs = filtersForCategory(st.home, tid);
+  if (!defs.length) { box.hidden = true; return; }
+  box.hidden = false;
+  for (const f of defs) {
+    const select = el('select', { 'aria-label': f.label, onchange: (e) => {
+      const next = { ...st.filters };
+      if (e.target.value) next[f.key] = e.target.value; else delete next[f.key];
+      openCategory(tid, 1, next);
+    } });
+    select.append(el('option', { value: '' }, `全部${f.label}`));
+    for (const o of f.options) select.append(el('option', { value: o.value }, o.label));
+    select.value = st.filters[f.key] || '';
+    box.append(el('label', { class: 'filter-field' }, el('span', {}, f.label), select));
+  }
+}
+async function openCategory(tid, page, selected = null) {
   const request = browseRequests.begin();
+  if (String(st.tid) !== String(tid)) st.filters = {};
+  else if (selected) st.filters = { ...selected };
   st.tid = tid; st.page = page;
+  renderFilters(tid);
   [...$('#classes').children].forEach((b, i) => b.classList.toggle('active', String((st.home.class[i] || {}).type_id) === String(tid)));
   setView(skeletonGrid());
   const site = st.site;
   try {
-    const r = await call('Category', site.api, String(tid), page, {});
+    const r = await call('Category', site.api, String(tid), page, { ...st.filters });
     if (!browseRequests.current(request) || st.site !== site) return;
     st.stack = [];
     show(() => {

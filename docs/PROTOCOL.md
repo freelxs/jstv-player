@@ -47,6 +47,16 @@
 | `{api}/search` | `{"wd":"关键词","page":1,"quick":false}` | `{"page","pagecount","list":[vod]}` |
 | `{api}/proxy/...` 等 | GET | 插件自带的转发，play 返回的 url 可能指向这里 |
 
+### Home filters 的应用 UI 子集
+
+`home.filters` 可按分类 ID 提供筛选定义。应用 UI 只渲染以下明确格式（每个分类最多 20 项，每项最多 50 个选项；字段和值均须为字符串）：
+
+```json
+{"filters":{"1":[{"key":"area","label":"地区","options":[{"value":"hk","label":"香港"}]}]}}
+```
+
+每个筛选项在 UI 中是独立的单选下拉框；用户选择后向 `category` 发送 `filters:{"area":"hk"}`，翻页保留选择，切换分类/站点/订阅清空。缺失、重复 key、数组/字段类型错误或超出上限时，该分类不显示筛选控件并以空对象请求。此 UI 子集不是对任意 CatPaw 单选/多选 metadata 变体的支持声明；category 接口层仍接受字符串 map。
+
 `vod` 字段：`vod_id, vod_name, vod_pic, vod_remarks, vod_year, vod_area, vod_actor, vod_director, vod_content, type_name, vod_play_from, vod_play_url`。
 
 - `vod_play_from`：线路名，用 `$$$` 分隔。

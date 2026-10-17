@@ -52,7 +52,7 @@ function makeApp(callImpl = async () => ({})) {
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const startup = src.lastIndexOf('\n(async () => {');
   assert.ok(startup > 0, 'find application startup block');
-  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail };`;
+  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, filtersForCategory };`;
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
@@ -88,6 +88,45 @@ test('openCategory ignores stale success and stale failure, including same-site 
     newResult.resolve({ list: [{ vod_name: 'CURRENT' }] }); await p2;
     assert.ok(app.el('#view').textContent.includes('CURRENT'));
   }
+});
+
+test('filter metadata is strict, safe on malformed input, and scoped to the selected category', () => {
+  const app = makeApp().app;
+  const supported = { filters: { '1': [{ key: 'area', label: '地区', options: [{ value: 'hk', label: '香港' }] }], '2': [] } };
+  assert.equal(app.filtersForCategory(supported, '1').length, 1);
+  assert.equal(app.filtersForCategory(supported, '2').length, 0);
+  for (const bad of [null, [], { '1': {} }, { '1': [{ key: 'x', label: 'X', options: [{ value: 1, label: 'bad' }] }] }]) {
+    assert.equal(app.filtersForCategory({ filters: bad }, '1').length, 0);
+  }
+});
+
+test('filters are sent on category selection, reset page on change, persist across paging, and clear on category/site change', async () => {
+  const calls = [];
+  const app = makeApp(async (method, ...args) => {
+    calls.push([method, ...args]);
+    if (method === 'Home' && args[0] === 'second') return { class: [{ type_id: '3', type_name: '其他' }] };
+    if (method === 'Home') return { class: [{ type_id: '1', type_name: '电影' }, { type_id: '2', type_name: '剧集' }], filters: {
+      '1': [{ key: 'area', label: '地区', options: [{ value: 'hk', label: '香港' }, { value: 'us', label: '美国' }] }],
+    } };
+    if (method === 'Category') return { list: [{ vod_id: 'x', vod_name: 'mock' }], pagecount: 3 };
+    return {};
+  });
+  const s = site('first'); app.app.st.sites = [s];
+  await app.app.selectSite(s);
+  await app.app.openCategory('1', 3);
+  const select = app.el('#filters').children[0].children[1];
+  select.listeners.change({ target: { value: 'hk' } });
+  await settle();
+  assert.deepEqual({ ...app.app.st.filters }, { area: 'hk' });
+  assert.equal(calls.at(-1)[3], 1);
+  assert.deepEqual({ ...calls.at(-1)[4] }, { area: 'hk' });
+  await app.app.openCategory('1', 2);
+  assert.deepEqual({ ...calls.at(-1)[4] }, { area: 'hk' });
+  await app.app.openCategory('2', 1);
+  assert.deepEqual({ ...app.app.st.filters }, {});
+  await app.app.selectSite(site('second'));
+  assert.deepEqual({ ...app.app.st.filters }, {});
+  assert.equal(app.el('#filters').hidden, true);
 });
 
 test('loadSource does not assign stale first or second GetSettings results', async () => {

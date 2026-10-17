@@ -99,9 +99,16 @@ func TestHostWithMockSpider(t *testing.T) {
 	if err != nil || len(home["class"].([]any)) != 1 {
 		t.Fatal(home, err)
 	}
-	cat, err := c.Category(api, "1", 2, nil)
+	filters, ok := home["filters"].(map[string]any)
+	if !ok || len(filters["1"].([]any)) != 1 {
+		t.Fatalf("mock filters metadata missing or malformed: %#v", home["filters"])
+	}
+	cat, err := c.Category(api, "1", 2, map[string]string{"area": "hk"})
 	if err != nil || cat["list"].([]any)[0].(M)["vod_id"] != "v1-2" {
 		t.Fatal(cat, err)
+	}
+	if got := cat["filters"].(map[string]any)["area"]; got != "hk" {
+		t.Fatalf("category filter map did not pass through: %#v", cat["filters"])
 	}
 	d, err := c.Detail(api, "v1")
 	if err != nil {

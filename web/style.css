@@ -110,6 +110,9 @@ kbd{font:11px var(--font);padding:1px 6px;border-radius:5px;border:1px solid var
 .toggle input:checked+.track::after{transform:translateX(12px)}
 
 .chips{display:flex;gap:6px;padding:4px 24px 12px;overflow-x:auto;scrollbar-width:none}
+.filters{display:flex;gap:10px;flex-wrap:wrap;padding:0 24px 10px}
+.filter-field{display:flex;align-items:center;gap:6px;color:var(--text-2);font-size:12px}
+.filter-field select{max-width:min(220px,55vw);height:32px}
 .chips::-webkit-scrollbar{display:none}
 .chips:empty{display:none}
 .chip{padding:5px 14px;border-radius:999px;white-space:nowrap;color:var(--text-2);background:var(--panel);border:1px solid var(--line);transition:all .15s}
@@ -229,6 +232,7 @@ input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-
 .check{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2)}
 .actions{display:flex;justify-content:flex-end;margin-top:16px}
 .logs{margin:0;min-height:240px;max-height:52vh;overflow:auto;padding:12px;border-radius:var(--r-sm);background:var(--bg);border:1px solid var(--line);font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:var(--text-2)}
+.log-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
 
 /* toast */
 .toast{position:fixed;z-index:50;bottom:22px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:min(560px,80vw);padding:10px 16px;border-radius:12px;background:rgba(28,28,34,.92);color:#fff;font-size:13px;box-shadow:var(--shadow-3);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);animation:rise .22s var(--ease)}
@@ -243,6 +247,7 @@ input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-
 @keyframes pulse{50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 @media (max-width:980px){.sidebar{width:200px}.grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:18px 14px}.hero .cover{width:150px}}
+@media (max-width:620px){.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.filter-field{align-items:stretch;flex-direction:column}.filter-field select{max-width:none;width:100%}}
 .sub-list .btn.confirm{color:var(--danger);border-color:var(--danger);padding:4px 10px}
 [hidden]{display:none!important}
 .search input:not([type=checkbox]){height:auto;padding:0;border:0;background:none;box-shadow:none}
