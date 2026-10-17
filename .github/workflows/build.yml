@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -54,32 +57,93 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }
-      - name: Build
-        run: go tool mygo build -platform ${{ matrix.platform }}
-      - name: Package
+      - name: Build macOS slim and bundled Node packages
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          bash scripts/build.sh darwin
+          bash scripts/build.sh darwin --with-node
+      - name: Build Windows slim and bundled Node packages
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          $nodeVersion = '24.21.0'
+          $nodeArchive = "node-v$nodeVersion-win-x64.zip"
+          $nodeBase = "https://nodejs.org/dist/v$nodeVersion"
+          $sumPath = Join-Path $env:RUNNER_TEMP 'SHASUMS256.txt'
+          $archivePath = Join-Path $env:RUNNER_TEMP $nodeArchive
+          Invoke-WebRequest "$nodeBase/SHASUMS256.txt" -OutFile $sumPath
+          Invoke-WebRequest "$nodeBase/$nodeArchive" -OutFile $archivePath
+          $expected = ((Get-Content $sumPath | Where-Object { $_ -match "\s+$([regex]::Escape($nodeArchive))$" } | Select-Object -First 1) -split '\s+')[0]
+          $actual = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (-not $expected -or $actual -ne $expected.ToLowerInvariant()) { throw 'Official Node archive SHA-256 verification failed' }
+          $extract = Join-Path $env:RUNNER_TEMP 'node-extract'
+          Expand-Archive $archivePath $extract -Force
+          $nodeSource = Join-Path $extract "node-v$nodeVersion-win-x64"
+          $resourceRoot = Join-Path $PWD 'resources/windows-amd64'
+          $out = Join-Path $PWD 'out'
+          New-Item $out -ItemType Directory -Force | Out-Null
+          try {
+            go tool mygo build -platform windows/amd64
+            $dist = Join-Path $PWD 'dist/windows-amd64'
+            $slim = Join-Path $out "JSTV-Player-$version-windows-amd64.zip"
+            Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png') -DestinationPath $slim -Force
+            $setup = Get-ChildItem $dist -Filter '*etup*.exe' | Select-Object -First 1
+            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-setup.exe") }
+            $check = Join-Path $env:RUNNER_TEMP 'slim-check'
+            Expand-Archive $slim $check -Force
+            if (Test-Path (Join-Path $check 'node')) { throw 'Slim Windows package unexpectedly contains Node' }
+            if (Test-Path $resourceRoot) { throw 'Refusing to overwrite pre-existing Windows resources' }
+            New-Item (Join-Path $resourceRoot 'node/bin') -ItemType Directory -Force | Out-Null
+            Copy-Item (Join-Path $nodeSource 'node.exe') (Join-Path $resourceRoot 'node/bin/node.exe')
+            Copy-Item (Join-Path $nodeSource 'LICENSE') (Join-Path $resourceRoot 'node/LICENSE')
+            go tool mygo build -platform windows/amd64
+            $dist = Join-Path $PWD 'dist/windows-amd64'
+            $fat = Join-Path $out "JSTV-Player-$version-windows-amd64-with-node.zip"
+            Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png'), (Join-Path $dist 'node') -DestinationPath $fat -Force
+            $fatCheck = Join-Path $env:RUNNER_TEMP 'fat-check'
+            Expand-Archive $fat $fatCheck -Force
+            if (-not (Test-Path (Join-Path $fatCheck 'node/bin/node.exe')) -or -not (Test-Path (Join-Path $fatCheck 'node/LICENSE'))) { throw 'Bundled Node files missing from Windows package' }
+            if ((Get-Item (Join-Path $fatCheck 'node/bin/node.exe')).Length -lt 1000000) { throw 'Bundled Node executable is unexpectedly small' }
+            $setup = Get-ChildItem $dist -Filter '*etup*.exe' | Select-Object -First 1
+            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-with-node-setup.exe") }
+          }
+          finally {
+            if (Test-Path $resourceRoot) { Remove-Item $resourceRoot -Recurse -Force }
+          }
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
           V=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          go tool mygo build -platform linux/amd64
           mkdir -p out
-          case "${{ matrix.platform }}" in
-            darwin/*)
-              cd dist/darwin-universal
-              ditto -c -k --sequesterRsrc --keepParent "JSTV Player.app" "../../out/JSTV-Player-$V-macos-universal.zip"
-              cp *.dmg "../../out/JSTV-Player-$V-macos-universal.dmg" ;;
-            windows/*)
-              cd dist/windows-amd64
-              ls -la
-              7z a "../../out/JSTV-Player-$V-windows-amd64.zip" "JSTV Player.exe" icon.png
-              for f in *etup*.exe; do [ -e "$f" ] && cp "$f" "../../out/JSTV-Player-$V-windows-amd64-setup.exe"; done ;;
-            linux/*)
-              cd dist/linux-amd64
-              cp *.deb "../../out/jstv-player_${V}_amd64.deb"
-              cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz" ;;
-          esac
-          ls -la ../../out
+          cd dist/linux-amd64
+          cp *.deb "../../out/jstv-player_${V}_amd64.deb"
+          cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: jstv-player-${{ runner.os }}
           path: out/*
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" release-assets/* --generate-notes
