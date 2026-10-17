@@ -15,3 +15,10 @@ test('release metadata and changelog use the same application version', () => {
   assert.match(changelog, new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'));
   assert.match(html, new RegExp(`id="appVersion"[^>]*>JSTV Player ${version.replaceAll('.', '\\.')}<`));
 });
+
+test('macOS app category metadata is entertainment', () => {
+  const metadata = JSON.parse(fs.readFileSync(path.join(root, 'mygo.json'), 'utf8'));
+
+  assert.equal(metadata.identifier, 'com.freelxs.jstvplayer');
+  assert.equal(metadata.macos.infoPlist.LSApplicationCategoryType, 'public.app-category.entertainment');
+});

@@ -45,11 +45,15 @@
 | Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
 | 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
 
-都没有代码签名。macOS 首次打开请右键 → 打开，或执行：
+当前仓库未配置 Developer ID 代码签名或公证；本地构建的 app 可能带 ad-hoc 签名，但它不认证发布者。macOS 首次打开请右键 → 打开，或执行：
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/JSTV Player.app"
 ```
+
+macOS DMG 提供将 App 拖入 Applications 的常规方式，但拖放没有安装后脚本钩子；Launchpad/搜索结果可能异步更新。若需要在复制时精确刷新 LaunchServices，可在确认将要复制的源路径和目标路径后，手动运行仓库中的 `scripts/install-macos.sh "/path/to/JSTV Player.app"`。脚本只操作 `/Applications/JSTV Player.app`，检查现有与新 bundle ID，覆盖前把旧 app 存为脚本显示的校验过 ZIP 回滚档，并只对目标 app 调用 `lsregister -f`；它不重建全局索引、不关闭 Dock，也不清理其他副本。脚本只校验 bundle 元数据，不认证发布者；仓库未配置 Developer ID 签名或公证。此脚本不会由构建或 DMG 自动运行。不要对未知开发构建使用该脚本。
+
+macOS 构建会在 `dist/darwin-universal/JSTV Player.app` 留下解包 app，同时生成 ZIP/DMG。若这个构建目录与 `/Applications/JSTV Player.app` 都被系统识别，应用列表可能显示两个同名项目；本机报告的第二个项目已确认为该 `dist` 路径。可以选择保留 `out/` 中的 ZIP/DMG，并在不再需要时由用户决定清理或外置解包 app。仅对该开发副本执行 LaunchServices 注销可使用系统 `lsregister -u` 指向该精确路径，但 app 文件仍保留，系统可能再次发现它；本项目不会自动注销、删除或移动该产物。把 app 放进隐藏目录或 Spotlight 隐私列表是否能稳定阻止 Launchpad 收录尚未验证，不作保证。
 
 Windows 可能弹出 SmartScreen 提示，选“更多信息 → 仍要运行”。
 

@@ -1,10 +1,11 @@
 {
   "name": "JSTV Player",
   "identifier": "com.freelxs.jstvplayer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "frontendDist": "web",
   "macos": {
     "infoPlist": {
+      "LSApplicationCategoryType": "public.app-category.entertainment",
       "NSAppTransportSecurity": {
         "NSAllowsArbitraryLoads": true,
         "NSAllowsArbitraryLoadsForMedia": true,

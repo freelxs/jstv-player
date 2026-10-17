@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1
+
+- Set the macOS Launch Services application category to Entertainment in the
+  generated bundle's `Info.plist`.
+- Keep the stable bundle identifier `com.freelxs.jstvplayer`; this metadata
+  change does not create a new application identity.
+- Added an opt-in macOS installation helper that verifies the source bundle,
+  asks before replacing `/Applications/JSTV Player.app`, preserves the prior
+  app as a verified ZIP rollback archive, and registers only the installed
+  target path.
+- Does not force a Spotlight/Launchpad database rebuild. DMG drag-and-drop has
+  no post-install hook, and visibility may refresh asynchronously.
+- The duplicate icon source is confirmed as the installed
+  `/Applications/JSTV Player.app` plus the extracted development bundle at
+  `dist/darwin-universal/JSTV Player.app`.
+  This release does not remove or unregister either copy.
+- No GUI/app-list refresh or real playback verification is claimed. The repo
+  does not configure Developer ID signing or notarization; the isolated app
+  built for this check carries an ad-hoc signature, which does not authenticate
+  its publisher.
+
 ## 0.3.0
 
 This release adds security and playback behavior changes. Application/package
@@ -56,4 +77,6 @@ field. The Go module/toolchain requirements in `go.mod` are unchanged.
   Clearing logs does not clear trust pins, playback history, or plugin config.
 - GUI/manual playback was not verified for this release. Mock requests and
   automated tests do not establish successful playback against real media.
-- Distributed packages remain unsigned and are not notarized.
+- The repo does not configure Developer ID signing or notarization. Locally
+  built app bundles may carry an ad-hoc signature, which does not authenticate
+  their publisher.
