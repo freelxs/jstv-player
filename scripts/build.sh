@@ -54,6 +54,34 @@ mkdir -p "$OUT"
 LSREGISTER="${JSTV_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 NODE_VERSION="24.21.0"
 NODE_CACHE="$CACHE_ROOT/node-v$NODE_VERSION"
+OWNED_RESOURCE_DIRS=()
+OWNED_STAGE_DIRS=()
+
+cleanup_owned_staging() {
+  local path
+  for path in "${OWNED_STAGE_DIRS[@]-}"; do
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      "$OUT"/.node-stage.*) [[ ! -L "$path" ]] && rm -rf -- "$path" || true ;;
+      *) echo "Refusing to clean unexpected staging path: $path" >&2 ;;
+    esac
+  done
+  for path in "${OWNED_RESOURCE_DIRS[@]-}"; do
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      "$ROOT/resources/darwin"|"$ROOT/resources/windows-amd64") [[ ! -L "$path" ]] && rm -rf -- "$path" || true ;;
+      *) echo "Refusing to clean unexpected resource path: $path" >&2 ;;
+    esac
+  done
+  return 0
+}
+trap cleanup_owned_staging EXIT
+
+ensure_resource_root() {
+  [[ ! -L "$ROOT/resources" ]] || { echo "Refusing to stage Node through a resources symlink" >&2; return 1; }
+  mkdir -p "$ROOT/resources"
+  [[ ! -L "$ROOT/resources" ]] || { echo "Refusing to stage Node through a resources symlink" >&2; return 1; }
+}
 
 download_node_archive() {
   local name="$1" url="https://nodejs.org/dist/v$NODE_VERSION/$1" sums="$NODE_CACHE/SHASUMS256.txt" archive="$NODE_CACHE/$1" expected actual
@@ -75,33 +103,46 @@ download_node_archive() {
 
 stage_node_macos() {
   local stage="$ROOT/resources/darwin" arm x64 tmp
-  [[ ! -e "$stage" ]] || { echo "Refusing to overwrite existing resources/darwin" >&2; return 1; }
+  [[ ! -e "$stage" && ! -L "$stage" ]] || { echo "Refusing to overwrite existing resources/darwin" >&2; return 1; }
   tmp="$(mktemp -d "$OUT/.node-stage.XXXXXX")"
+  OWNED_STAGE_DIRS+=("$tmp")
   arm="$(download_node_archive "node-v$NODE_VERSION-darwin-arm64.tar.gz")"
   x64="$(download_node_archive "node-v$NODE_VERSION-darwin-x64.tar.gz")"
-  if ! { mkdir -p "$tmp/arm" "$tmp/x64" "$stage/node/arm64/bin" "$stage/node/amd64/bin" \
+  if ! { mkdir -p "$tmp/arm" "$tmp/x64" \
     && tar -xzf "$arm" -C "$tmp/arm" --strip-components=2 "node-v$NODE_VERSION-darwin-arm64/bin/node" \
     && tar -xzf "$arm" -C "$tmp/arm" --strip-components=1 "node-v$NODE_VERSION-darwin-arm64/LICENSE" \
     && tar -xzf "$x64" -C "$tmp/x64" --strip-components=2 "node-v$NODE_VERSION-darwin-x64/bin/node" \
-    && tar -xzf "$x64" -C "$tmp/x64" --strip-components=1 "node-v$NODE_VERSION-darwin-x64/LICENSE" \
+    && tar -xzf "$x64" -C "$tmp/x64" --strip-components=1 "node-v$NODE_VERSION-darwin-x64/LICENSE"; }; then
+    return 1
+  fi
+  ensure_resource_root
+  if ! mkdir "$stage"; then
+    echo "Refusing to create resources/darwin: path appeared during staging" >&2
+    return 1
+  fi
+  OWNED_RESOURCE_DIRS+=("$stage")
+  if ! { mkdir -p "$stage/node/arm64/bin" "$stage/node/amd64/bin" \
     && cp "$tmp/arm/node" "$stage/node/arm64/bin/node" \
     && cp "$tmp/x64/node" "$stage/node/amd64/bin/node" \
     && cp "$tmp/arm/LICENSE" "$stage/node/LICENSE" \
     && chmod 755 "$stage/node/arm64/bin/node" "$stage/node/amd64/bin/node"; }; then
-    rm -rf "$tmp" "$stage"
     return 1
   fi
-  rm -rf "$tmp"
 }
 
 stage_node_windows() {
   local stage="$ROOT/resources/windows-amd64" archive
-  [[ ! -e "$stage" ]] || { echo "Refusing to overwrite existing resources/windows-amd64" >&2; return 1; }
+  [[ ! -e "$stage" && ! -L "$stage" ]] || { echo "Refusing to overwrite existing resources/windows-amd64" >&2; return 1; }
   archive="$(download_node_archive "node-v$NODE_VERSION-win-x64.zip")"
-  mkdir -p "$stage/node/bin"
-  if ! { unzip -p "$archive" "node-v$NODE_VERSION-win-x64/node.exe" > "$stage/node/bin/node.exe" \
+  ensure_resource_root
+  if ! mkdir "$stage"; then
+    echo "Refusing to create resources/windows-amd64: path appeared during staging" >&2
+    return 1
+  fi
+  OWNED_RESOURCE_DIRS+=("$stage")
+  if ! { mkdir -p "$stage/node/bin" \
+    && unzip -p "$archive" "node-v$NODE_VERSION-win-x64/node.exe" > "$stage/node/bin/node.exe" \
     && unzip -p "$archive" "node-v$NODE_VERSION-win-x64/LICENSE" > "$stage/node/LICENSE"; }; then
-    rm -rf "$stage"
     return 1
   fi
 }
@@ -147,7 +188,6 @@ build_darwin() {
   build_root="$(mktemp -d "$OUT/.jstv-build.XXXXXX")"
   if [[ "$WITH_NODE" -eq 1 ]]; then
     stage_node_macos
-    trap 'rm -rf "$ROOT/resources/darwin"' RETURN
   fi
   platform_dir="$build_root/dist/darwin-universal"
   app_dir="$platform_dir/JSTV Player.app"
@@ -213,14 +253,19 @@ build_darwin() {
     echo "隔离构建目录: $keep_path"
     return 0
   fi
+  local unregister_output=""
   if [[ -x "$LSREGISTER" ]]; then
-    if ! "$LSREGISTER" -u "$app_dir"; then
-      echo "归档已发布，但精确注销失败；app 保留在: $app_dir" >&2
-      return 1
+    if unregister_output="$("$LSREGISTER" -u "$app_dir" 2>&1)"; then
+      :
+    elif [[ "$unregister_output" == *"-10814"* ]]; then
+      echo "本轮 app 未注册到 Launch Services（-10814）；继续清理隔离目录。"
+    else
+      echo "警告：归档已发布，但 Launch Services 注销失败；app 保留在: $app_dir${unregister_output:+ ($unregister_output)}" >&2
+      return 0
     fi
   else
-    echo "归档已发布，但 lsregister 不可用；app 保留在: $app_dir" >&2
-    return 1
+    echo "警告：归档已发布，但 lsregister 不可用；app 保留在: $app_dir" >&2
+    return 0
   fi
   # Guard cleanup to this invocation's freshly-created path under out/.
   [[ "$build_root" == "$OUT"/.jstv-build.* && -d "$app_dir" && ! -L "$app_dir" ]] || {
@@ -236,7 +281,6 @@ build_windows() {
   echo "==> 构建 windows/amd64"
   if [[ "$WITH_NODE" -eq 1 ]]; then
     stage_node_windows
-    trap 'rm -rf "$ROOT/resources/windows-amd64"' RETURN
   fi
   "$GO_BIN" tool mygo build -platform windows/amd64
   platform_dir="$ROOT/dist/windows-amd64"

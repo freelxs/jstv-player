@@ -32,8 +32,13 @@ done
 if [[ "$platform" == darwin/universal ]]; then
   [[ -n "$out" ]] || exit 12
   mkdir -p "$out/darwin-universal/JSTV Player.app/Contents"
+  if [[ -d "$TEST_ROOT/resources/darwin" ]]; then
+    mkdir -p "$out/darwin-universal/JSTV Player.app/Contents/Resources"
+    cp -R "$TEST_ROOT/resources/darwin/." "$out/darwin-universal/JSTV Player.app/Contents/Resources/"
+  fi
   : > "$out/darwin-universal/JSTV Player.app/Contents/Info.plist"
   printf 'fixture dmg\n' > "$out/darwin-universal/JSTV Player.dmg"
+  [[ "${FAIL_GO_DARWIN:-0}" != 1 ]] || exit 41
 elif [[ "$platform" == windows/amd64 ]]; then
   mkdir -p "$TEST_ROOT/dist/windows-amd64"
   printf exe > "$TEST_ROOT/dist/windows-amd64/JSTV Player.exe"
@@ -47,6 +52,11 @@ MOCK
 [[ "${FAIL_DITTO:-0}" != 1 ]] || exit 31
 for last; do :; done
 printf zip-fixture > "$last"
+if [[ -d "$5/Contents/Resources/node" ]]; then
+  printf ' node=present' >> "$last"
+else
+  printf ' node=absent' >> "$last"
+fi
 MOCK
   cat > "$root/mock-bin/unzip" <<'MOCK'
 #!/usr/bin/env bash
@@ -66,10 +76,41 @@ MOCK
   cat > "$root/mock-bin/lsregister" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$TEST_LOG"
+case "${LSREGISTER_MODE:-success}" in
+  not-registered) echo "failed to scan $2: -10814" >&2; exit 1 ;;
+  other-error) echo "fixture Launch Services failure" >&2; exit 1 ;;
+esac
 [[ "${FAIL_LSREGISTER:-0}" != 1 ]]
+MOCK
+cat > "$root/mock-bin/lipo" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+cat > "$root/mock-bin/otool" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
+MOCK
+cat > "$root/mock-bin/codesign" <<'MOCK'
+#!/usr/bin/env bash
+exit 0
 MOCK
   chmod +x "$root/mock-bin"/* "$root/scripts/build.sh"
   printf '%s\n' "$root"
+}
+
+prepare_node_cache() {
+  local root="$1" version=24.21.0 cache="$1/cache-root/node-v24.21.0" tree
+  tree="$root/node-fixture"
+  mkdir -p "$cache" \
+    "$tree/node-v$version-darwin-arm64/bin" \
+    "$tree/node-v$version-darwin-x64/bin"
+  printf fixture-arm64 > "$tree/node-v$version-darwin-arm64/bin/node"
+  printf fixture-x64 > "$tree/node-v$version-darwin-x64/bin/node"
+  printf fixture-license > "$tree/node-v$version-darwin-arm64/LICENSE"
+  printf fixture-license > "$tree/node-v$version-darwin-x64/LICENSE"
+  tar -czf "$cache/node-v$version-darwin-arm64.tar.gz" -C "$tree" "node-v$version-darwin-arm64"
+  tar -czf "$cache/node-v$version-darwin-x64.tar.gz" -C "$tree" "node-v$version-darwin-x64"
+  (cd "$cache" && shasum -a 256 node-v$version-darwin-arm64.tar.gz node-v$version-darwin-x64.tar.gz > SHASUMS256.txt)
 }
 
 run_script() {
@@ -118,10 +159,39 @@ assert_file "$ROOT/out/JSTV-Player-0.3.2-windows-amd64.zip"
 assert_contains "$ROOT/tool.log" "GO tool mygo build -platform windows/amd64 | GO_BIN=$ROOT/mock-bin/go | JSTV_CACHE_ROOT=$ROOT/cache-root | GOCACHE=$ROOT/custom-gocache"
 assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/custom-gomodcache | GOPATH=$ROOT/custom-gopath | GOTOOLCHAIN=local | GOPROXY=off"
 
-ROOT="$(new_fixture all)"
-run_script "$ROOT" all --keep-app
+# A failed fat build must clean only the Node staging directory, so a later
+# slim build cannot pick it up through MyGo's normal resources directory.
+ROOT="$(new_fixture node-cleanup)"
+prepare_node_cache "$ROOT"
+if FAIL_GO_DARWIN=1 run_script "$ROOT" darwin --with-node; then fail "injected fat build failure unexpectedly succeeded"; fi
+assert_absent "$ROOT/resources/darwin"
+[[ -z "$(find "$ROOT/out" -maxdepth 1 -type d -name '.node-stage.*' -print -quit)" ]] || fail "Node extraction scratch survived failed build"
+run_script "$ROOT" darwin
+grep -Fq 'node=absent' "$ROOT/out/JSTV-Player-0.3.2-macos-universal.zip" || fail "slim ZIP fixture contains bundled Node"
+
+# Existing resources are never claimed or removed by cleanup.
+ROOT="$(new_fixture existing-resource)"
+prepare_node_cache "$ROOT"
+mkdir -p "$ROOT/resources/darwin"
+printf user-resource > "$ROOT/resources/darwin/keep.txt"
+if run_script "$ROOT" darwin --with-node; then fail "existing platform resources were accepted"; fi
+assert_contains "$ROOT/resources/darwin/keep.txt" user-resource
+
+# Launch Services can report -10814 for an app that was never registered.
+# It must not prevent the all target from building Windows.
+ROOT="$(new_fixture all-not-registered)"
+LSREGISTER_MODE=not-registered run_script "$ROOT" all > "$ROOT/build.log" 2>&1 || fail "expected not-registered result stopped all build"
 assert_file "$ROOT/out/JSTV-Player-0.3.2-macos-universal.zip"
 assert_file "$ROOT/out/JSTV-Player-0.3.2-windows-amd64.zip"
 [[ "$(grep -c '^GO ' "$ROOT/tool.log")" -eq 2 ]] || fail "all must invoke both platform builds"
+assert_contains "$ROOT/build.log" "-10814"
+
+# Unexpected unregister failures warn and retain the app, while still allowing
+# the Windows half of the all target to finish.
+ROOT="$(new_fixture all-unregister-error)"
+LSREGISTER_MODE=other-error run_script "$ROOT" all > "$ROOT/build.log" 2>&1 || fail "other unregister error stopped all build"
+assert_file "$ROOT/out/JSTV-Player-0.3.2-windows-amd64.zip"
+assert_contains "$ROOT/build.log" "app 保留在"
+[[ -n "$(find "$ROOT/out" -path '*/JSTV Player.app/Contents/Info.plist' -print -quit)" ]] || fail "unexpected unregister error did not retain app"
 
 echo "PASS: build script fixture tests"
