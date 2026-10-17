@@ -95,7 +95,12 @@ esac
 MOCK
 cat > "$root/mock-bin/lipo" <<'MOCK'
 #!/usr/bin/env bash
-exit 0
+set -euo pipefail
+[[ $# -eq 3 && -f "$1" && "$2" == -verify_arch ]] || exit 1
+case "$1:$3" in
+  */node/arm64/bin/node:arm64|*/node/amd64/bin/node:x86_64) exit 0 ;;
+  *) exit 1 ;;
+esac
 MOCK
 cat > "$root/mock-bin/otool" <<'MOCK'
 #!/usr/bin/env bash

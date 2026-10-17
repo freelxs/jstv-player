@@ -222,8 +222,8 @@ build_darwin() {
     local arm_node="$app_dir/Contents/Resources/node/arm64/bin/node"
     local x64_node="$app_dir/Contents/Resources/node/amd64/bin/node"
     [[ -x "$arm_node" && -x "$x64_node" ]] || { echo "macOS build lacks an architecture-specific Node runtime" >&2; return 1; }
-    lipo -verify_arch arm64 "$arm_node"
-    lipo -verify_arch x86_64 "$x64_node"
+    lipo "$arm_node" -verify_arch arm64
+    lipo "$x64_node" -verify_arch x86_64
     otool -L "$arm_node"
     otool -L "$x64_node"
     codesign --verify --deep --strict "$app_dir"
