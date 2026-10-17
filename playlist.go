@@ -229,7 +229,7 @@ func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Strea
 		streams, err := p.Play(pl.api, pl.flag, pl.eps[n].ID)
 		if err == nil {
 			if r.st = firstPlayable(streams); r.st == nil {
-				err = errors.New("这一集只有网页地址，无法连播")
+				err = errors.New("这一集没有可用于连播的 HTTP(S) 播放地址")
 			}
 		}
 		r.err, r.at = err, time.Now()
@@ -311,7 +311,9 @@ func warmStream(u string) {
 
 func firstPlayable(streams []catvod.Stream) *catvod.Stream {
 	for i := range streams {
-		if !streams[i].Parse && !catvod.IsWebPage(streams[i].URL) {
+		// Player.Play grants only these URL forms to the proxy. Keep automatic
+		// episode selection within that same authorization boundary.
+		if !streams[i].Parse && !catvod.IsWebPage(streams[i].URL) && catvod.IsHTTPMediaURL(streams[i].URL) {
 			return &streams[i]
 		}
 	}
@@ -334,8 +336,16 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	p.recordHistory(api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
 	s := p.GetSettings()
 	first := firstPlayable(streams)
-	if s.DisableContinuous || s.Player == "system" || len(streams) != 1 || first == nil || p.eps.base == "" {
+	if s.DisableContinuous || s.Player == "system" || len(streams) != 1 || p.eps.base == "" {
 		return streams, nil
+	}
+	if first == nil {
+		for _, st := range streams {
+			if st.Parse || catvod.IsWebPage(st.URL) {
+				return streams, nil
+			}
+		}
+		return nil, errors.New("没有可用于连播的 HTTP(S) 播放地址")
 	}
 	// Same checks as Open, on the first episode, so errors show up here.
 	u := first.URL

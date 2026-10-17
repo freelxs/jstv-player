@@ -580,7 +580,7 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 	}
 	if p.proxy != nil {
 		for _, st := range s {
-			if !st.Parse && (strings.HasPrefix(st.URL, "http://") || strings.HasPrefix(st.URL, "https://")) {
+			if !st.Parse && catvod.IsHTTPMediaURL(st.URL) {
 				if err := p.proxy.Grant(st.URL, st.Headers, p.GetSettings().AllowLANMedia); err != nil {
 					return nil, err
 				}

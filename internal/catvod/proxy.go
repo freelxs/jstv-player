@@ -138,6 +138,11 @@ func cloneHeaders(h map[string]string) map[string]string {
 }
 
 func grantKey(u string, h map[string]string) string {
+	// Stream.Headers is omitted from JSON when empty, so the frontend round
+	// trip turns an empty map into nil. Those have identical request semantics.
+	if len(h) == 0 {
+		h = nil
+	}
 	b, _ := json.Marshal(struct {
 		URL     string
 		Headers map[string]string

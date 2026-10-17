@@ -193,3 +193,20 @@ func TestStaleResolvedIsRefetched(t *testing.T) {
 		t.Fatal("stale answer reused")
 	}
 }
+
+func TestFirstPlayableSkipsURLsThatCannotReceiveProxyGrants(t *testing.T) {
+	streams := []catvod.Stream{
+		{URL: "ftp://media.example/video"},
+		{URL: "/relative/video"},
+		{URL: " HTTPS://media.example/video"},
+		{URL: "HTTPS://media.example/video"},
+		{URL: "https://media.example/video"},
+	}
+	got := firstPlayable(streams)
+	if got == nil || got.URL != "https://media.example/video" {
+		t.Fatalf("selected %#v", got)
+	}
+	if got := firstPlayable(streams[:4]); got != nil {
+		t.Fatalf("unsupported candidate selected: %#v", got)
+	}
+}

@@ -246,6 +246,13 @@ type Stream struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// IsHTTPMediaURL reports the URL forms currently accepted for proxy grants.
+// Scheme matching is intentionally case-sensitive to match Player.Play's
+// existing grant registration behavior.
+func IsHTTPMediaURL(u string) bool {
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
+
 // NormalizePlay turns a /play answer into streams. url is a string or a
 // list of alternating [name, url, name, url…].
 func NormalizePlay(r M) []Stream {

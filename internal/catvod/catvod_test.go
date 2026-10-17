@@ -2,6 +2,7 @@ package catvod
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -46,6 +47,19 @@ func TestNormalizePlay(t *testing.T) {
 	s = NormalizePlay(M{"parse": float64(0), "url": []any{"a", "u1", "b", "u2"}, "header": map[string]any{"Referer": "r"}})
 	if len(s) != 2 || s[1].URL != "u2" || s[0].Headers["Referer"] != "r" {
 		t.Fatal(s)
+	}
+}
+
+func TestIsHTTPMediaURLMatchesGrantEligibility(t *testing.T) {
+	for _, u := range []string{"http://media.example/v", "https://media.example/v"} {
+		if !IsHTTPMediaURL(u) {
+			t.Errorf("%q rejected", u)
+		}
+	}
+	for _, u := range []string{"ftp://media.example/v", "/relative/v", " HTTPS://media.example/v", "HTTPS://media.example/v", ""} {
+		if IsHTTPMediaURL(u) {
+			t.Errorf("%q accepted", u)
+		}
 	}
 }
 
@@ -545,6 +559,40 @@ func TestProxyGrantRequiredAndInvalidated(t *testing.T) {
 	p.Reset()
 	if _, err := p.WrapGranted(up.URL+"/media.mp4", nil); err == nil {
 		t.Fatal("grant survived session reset")
+	}
+}
+
+func TestProxyGrantTreatsNilAndEmptyHeadersAsSameIdentity(t *testing.T) {
+	u := "https://example.com/media.mp4"
+	p := &HeaderProxy{base: "http://127.0.0.1:1234"}
+	if err := p.Grant(u, map[string]string{}, false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(Stream{URL: u, Headers: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip Stream
+	if err := json.Unmarshal(b, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.Headers != nil {
+		t.Fatal("empty headers should be omitted by JSON")
+	}
+	if _, err := p.WrapGranted(roundTrip.URL, roundTrip.Headers); err != nil {
+		t.Fatalf("empty to nil: %v", err)
+	}
+	if err := p.Grant(u, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WrapGranted(u, map[string]string{}); err != nil {
+		t.Fatalf("nil to empty: %v", err)
+	}
+	if err := p.Grant(u, map[string]string{"Referer": "one"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WrapGranted(u, map[string]string{"Referer": "two"}); err == nil {
+		t.Fatal("different headers accepted")
 	}
 }
 
