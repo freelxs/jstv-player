@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.2
+
+- The macOS release helper builds into a unique, isolated output directory and
+  validates the ZIP and DMG before publishing either artifact.
+- After successful validation and publication, it unregisters and removes only
+  the app bundle created by that invocation. Existing `dist/` apps and prior
+  artifacts are left untouched. `--keep-app` preserves the isolated build
+  directory and reports its exact path.
+- Failed builds or archive validation retain the isolated app for recovery and
+  do not replace prior release archives. No installation, global Launch
+  Services refresh, or Spotlight reset is performed.
+- The script source was the original untracked `scripts/build.sh` (SHA-256
+  `c28226eb8dbb11b93f70cdc55d999d135aa2615366377c65caf16dcfc2218d13`); its
+  Windows target, `all` selector, Go/cache overrides, and fallback behavior
+  are retained. The original file in the Downloads worktree was not modified.
+- `LSApplicationCategoryType` remains entertainment metadata; this change does
+  not claim it controls App-list categorization or guarantees refresh timing.
+- Added a read-only macOS diagnostic for the installed and project `dist/`
+  bundle paths; it does not alter Launch Services or system indexes.
+
 ## 0.3.1
 
 - Set the macOS Launch Services application category to Entertainment in the

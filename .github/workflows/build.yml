@@ -25,6 +25,9 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: node --test web/*.test.cjs
+      - name: Build script fixture tests
+        if: runner.os != 'Windows'
+        run: bash scripts/build.test.sh
       - name: Race tests
         if: runner.os == 'Linux'
         run: go test -race ./...
