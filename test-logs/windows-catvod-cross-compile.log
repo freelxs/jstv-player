@@ -1,0 +1,12 @@
+started_utc=2026-10-17T06:24:23Z
+cwd=/Users/sandy/.lorca/worktrees/jstv-player-7553ca/jstv-82de
+go_path=/opt/homebrew/bin/go
+go_version=go version go1.27.2 darwin/arm64
+GOOS=windows
+GOARCH=amd64
+GOMODCACHE=/private/tmp/jstv-player-gopath/pkg/mod
+GOCACHE=/private/tmp/jstv-player-gocache
+GOPROXY=off
+GOTOOLCHAIN=local
+command=GOOS=windows GOARCH=amd64 GOMODCACHE=/private/tmp/jstv-player-gopath/pkg/mod GOCACHE=/private/tmp/jstv-player-gocache GOPROXY=off GOTOOLCHAIN=local /opt/homebrew/bin/go test -c -o /private/tmp/jstv-player-windows-catvod.test.exe ./internal/catvod
+exit_code=0

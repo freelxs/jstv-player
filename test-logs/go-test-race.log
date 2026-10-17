@@ -1,2 +1,12 @@
+started_utc=2026-10-17T06:24:06Z
+cwd=/Users/sandy/.lorca/worktrees/jstv-player-7553ca/jstv-82de
+go_path=/opt/homebrew/bin/go
+go_version=go version go1.27.2 darwin/arm64
+GOMODCACHE=/private/tmp/jstv-player-gopath/pkg/mod
+GOCACHE=/private/tmp/jstv-player-gocache
+GOPROXY=off
+GOTOOLCHAIN=local
+command=GOMODCACHE=/private/tmp/jstv-player-gopath/pkg/mod GOCACHE=/private/tmp/jstv-player-gocache GOPROXY=off GOTOOLCHAIN=local /opt/homebrew/bin/go test -race -count=1 ./...
 ok  	github.com/freelxs/jstv-player	1.949s
-ok  	github.com/freelxs/jstv-player/internal/catvod	1.686s
+ok  	github.com/freelxs/jstv-player/internal/catvod	1.683s
+exit_code=0

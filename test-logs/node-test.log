@@ -1,14 +1,19 @@
-✔ selectSite ignores stale Home success and stale Home failure (4.0755ms)
-✔ openCategory ignores stale success and stale failure, including same-site paging (0.96325ms)
-✔ loadSource does not assign stale first or second GetSettings results (1.9575ms)
-✔ first use and hash changes require explicit approval before source load continues (0.524958ms)
-✔ rejecting first-use trust does not approve or retry the source (0.389792ms)
-✔ search and detail ignore stale successes and failures (1.424625ms)
-✔ a newer browse request makes earlier responses stale (0.310292ms)
-✔ navigation invalidates work still in flight (0.052167ms)
-✔ YouTube login points to an existing plugin configuration site (0.298208ms)
-✔ YouTube guidance does not invent an app login route (0.064416ms)
-✔ non-YouTube sites receive no provider-specific login guidance (0.045291ms)
+started_utc=2026-10-17T06:24:11Z
+cwd=/Users/sandy/.lorca/worktrees/jstv-player-7553ca/jstv-82de
+node_path=/opt/homebrew/bin/node
+node_version=v26.11.1
+command=/opt/homebrew/bin/node --test web/*.test.cjs
+✔ selectSite ignores stale Home success and stale Home failure (2.990542ms)
+✔ openCategory ignores stale success and stale failure, including same-site paging (1.239333ms)
+✔ loadSource does not assign stale first or second GetSettings results (2.096167ms)
+✔ first use and hash changes require explicit approval before source load continues (0.5535ms)
+✔ rejecting first-use trust does not approve or retry the source (0.441458ms)
+✔ search and detail ignore stale successes and failures (1.605833ms)
+✔ a newer browse request makes earlier responses stale (0.260417ms)
+✔ navigation invalidates work still in flight (0.044667ms)
+✔ YouTube login points to an existing plugin configuration site (0.326792ms)
+✔ YouTube guidance does not invent an app login route (0.072791ms)
+✔ non-YouTube sites receive no provider-specific login guidance (0.04675ms)
 ℹ tests 11
 ℹ suites 0
 ℹ pass 11
@@ -16,4 +21,5 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3594.174375
+ℹ duration_ms 3586.197208
+exit_code=0
