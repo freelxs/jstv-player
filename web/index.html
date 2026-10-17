@@ -84,11 +84,14 @@
     <label class="check"><input type="checkbox" id="sAllowLan"> 允许局域网访问：将插件 API 绑定到所有网络接口，局域网设备可调用插件并访问其上游代理。仅在可信网络开启；启动失败会停止旧服务。</label>
     <label class="check"><input type="checkbox" id="sAllowLanMedia"> 允许播放插件返回的局域网媒体地址（默认关闭）</label>
     <label class="check"><input type="checkbox" id="sInheritNodeEnv"> 高级兼容模式：将完整环境变量传给 Node，以兼容代理、自定义证书等环境（可能包含代理凭据或其他秘密）</label>
+    <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；最多 4 MiB，保留 7 天）</label>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
   </form>
 
   <div class="pane" data-pane="logs" hidden>
+    <p class="hint">仅写入已脱敏日志。单文件最多 1 MiB，共 4 个文件（最多 4 MiB），超过 7 天的文件会在下次写入时清理。未知插件自定义秘密无法保证自动识别。清除只影响日志，不影响信任 pin、播放记录或插件配置。</p>
+    <div class="log-actions"><span id="logPersistenceState" class="hint small"></span><button class="btn" id="clearLogs">清除日志</button></div>
     <pre id="logs" class="logs"></pre>
   </div>
 </dialog>

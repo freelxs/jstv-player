@@ -384,8 +384,19 @@ async function play(site, line, idx, vodId, title, btn) {
 function setTab(name) {
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('.pane').forEach((p) => (p.hidden = p.dataset.pane !== name));
-  if (name === 'logs') call('Logs').then((l) => { const p = $('#logs'); p.textContent = l.slice(-300).join('\n') || '（暂无日志）'; p.scrollTop = p.scrollHeight; });
+  if (name === 'logs') refreshLogs();
 }
+async function refreshLogs() {
+  try {
+    const l = await call('Logs'); const p = $('#logs');
+    p.textContent = l.slice(-300).join('\n') || '（暂无日志）'; p.scrollTop = p.scrollHeight;
+    $('#logPersistenceState').textContent = st.settings?.persistLogs ? '持久化已开启' : '持久化已关闭';
+  } catch (e) { toast(errMsg(e), { err: true }); }
+}
+$('#clearLogs').onclick = async () => {
+  try { await call('ClearLogs'); await refreshLogs(); toast('日志已清除'); }
+  catch (e) { toast(errMsg(e), { err: true }); }
+};
 $$('.tab').forEach((t) => (t.onclick = () => setTab(t.dataset.tab)));
 
 function renderSubList() {
@@ -441,6 +452,7 @@ async function openSettings(tab = 'subs') {
   $('#sAllowLan').checked = !!s.allowLan;
   $('#sAllowLanMedia').checked = !!s.allowLanMedia;
   $('#sInheritNodeEnv').checked = !!s.inheritNodeEnv;
+  $('#sPersistLogs').checked = !!s.persistLogs;
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
 }
@@ -449,7 +461,7 @@ $('#prefs').addEventListener('submit', async (e) => {
   try {
     const oldAllowLAN = !!st.settings?.allowLan;
     const nextAllowLAN = $('#sAllowLan').checked;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
     if (oldAllowLAN !== nextAllowLAN && st.settings.active) {

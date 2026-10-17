@@ -10,6 +10,7 @@ var (
 	logURLRE      = regexp.MustCompile(`(?i)https?://[^\s"'<>]+`)
 	logAuthRE     = regexp.MustCompile(`(?i)(authorization|cookie|set-cookie|proxy-authorization)(\s*[:=]\s*)([^,}\]]+)`)
 	secretQueryRE = regexp.MustCompile(`(?i)(token|access_token|refresh_token|key|api_key|apikey|sig|signature|password|passwd|auth|secret)=([^&#\s]+)`)
+	logLineBreaks = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
 )
 
 // sanitizeLogLine removes common credential forms before they enter the
@@ -43,12 +44,13 @@ func sanitizeLogLine(s string) string {
 	if len(s) > 8192 {
 		s = s[:8192] + "…[截断]"
 	}
-	return strings.Map(func(r rune) rune {
+	s = strings.Map(func(r rune) rune {
 		if r == 0 {
 			return -1
 		}
 		return r
 	}, s)
+	return logLineBreaks.Replace(s)
 }
 
 func isSecretName(k string) bool {

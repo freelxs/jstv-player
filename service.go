@@ -40,6 +40,7 @@ type Settings struct {
 	AllowLAN       bool `json:"allowLan"`
 	AllowLANMedia  bool `json:"allowLanMedia"`
 	InheritNodeEnv bool `json:"inheritNodeEnv"`
+	PersistLogs    bool `json:"persistLogs"`
 }
 
 // LoadResult is what LoadSource reports to the page.
@@ -78,6 +79,7 @@ type Player struct {
 	initMu sync.Mutex // serializes per-site init and permits retry after failure
 	eps    episodeServer
 	histMu sync.Mutex
+	logMu  sync.Mutex
 
 	mu           sync.Mutex
 	settings     Settings
@@ -111,19 +113,48 @@ func newPlayer(dir string) *Player {
 
 func (p *Player) log(s string) {
 	s = sanitizeLogLine(s)
+	line := time.Now().Format("2006-01-02 15:04:05 ") + s
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.logs = append(p.logs, time.Now().Format("15:04:05 ")+s)
+	p.logs = append(p.logs, line)
 	if len(p.logs) > 500 {
 		p.logs = p.logs[len(p.logs)-500:]
+	}
+	persist := p.settings.PersistLogs
+	p.mu.Unlock()
+	if persist {
+		_ = p.appendPersistentLog(line)
 	}
 }
 
 // Logs returns the recent output of the source process.
 func (p *Player) Logs() []string {
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]string(nil), p.logs...)
+	persist := p.settings.PersistLogs
+	memory := append([]string(nil), p.logs...)
+	p.mu.Unlock()
+	if persist {
+		if lines, err := p.readPersistentLogs(); err == nil && len(lines) > 0 {
+			return lines
+		}
+	}
+	return memory
+}
+
+// ClearLogs removes only in-memory and application-owned persistent log files.
+func (p *Player) ClearLogs() error {
+	p.logMu.Lock()
+	defer p.logMu.Unlock()
+	if err := p.clearPersistentLogs(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.logs = nil
+	p.mu.Unlock()
+	return nil
 }
 
 // GetSettings returns the saved settings.
@@ -144,16 +175,19 @@ func (p *Player) SaveSettings(s Settings) error {
 	if s.Player == "" {
 		s.Player = defaultPlayer()
 	}
+	p.logMu.Lock()
 	p.mu.Lock()
 	oldLAN := p.settings.AllowLAN
 	s.Subscriptions, s.Active, s.SourceURL = p.settings.Subscriptions, p.settings.Active, ""
 	p.mu.Unlock()
 	if err := p.writeSettings(s); err != nil {
+		p.logMu.Unlock()
 		return err
 	}
 	p.mu.Lock()
 	p.settings = s
 	p.mu.Unlock()
+	p.logMu.Unlock()
 	p.startBridge(s.BridgeTemplate)
 	// The plugin server binds its listen address at start; rebind on toggle.
 	if oldLAN != s.AllowLAN && s.Active != "" {

@@ -1,0 +1,23 @@
+COMMAND: node --test web/*.test.cjs
+NODE_PATH: /opt/homebrew/bin/node
+NODE_VERSION: v26.11.1
+✔ selectSite ignores stale Home success and stale Home failure (3.278583ms)
+✔ openCategory ignores stale success and stale failure, including same-site paging (1.022792ms)
+✔ loadSource does not assign stale first or second GetSettings results (1.799625ms)
+✔ first use and hash changes require explicit approval before source load continues (0.471917ms)
+✔ rejecting first-use trust does not approve or retry the source (0.351ms)
+✔ search and detail ignore stale successes and failures (1.451208ms)
+✔ a newer browse request makes earlier responses stale (0.243583ms)
+✔ navigation invalidates work still in flight (0.041917ms)
+✔ YouTube login points to an existing plugin configuration site (0.300542ms)
+✔ YouTube guidance does not invent an app login route (0.06825ms)
+✔ non-YouTube sites receive no provider-specific login guidance (0.044375ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3591.76275
+EXIT_CODE: 0

@@ -25,6 +25,13 @@ func TestSanitizeLogLineBoundsUnknownPluginOutput(t *testing.T) {
 	}
 }
 
+func TestSanitizeLogLineRemovesInjectedLineBreaks(t *testing.T) {
+	out := sanitizeLogLine("first\r\nsecond\nthird")
+	if strings.ContainsAny(out, "\r\n") {
+		t.Fatalf("log entry must stay on one line: %q", out)
+	}
+}
+
 func TestNodePermissionFlagsOnlyReportsAdvertisedFlags(t *testing.T) {
 	got := nodePermissionFlags("--experimental-permission  --permission")
 	if len(got) != 2 || got[0] != "--permission" || got[1] != "--experimental-permission" {
