@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci-node-release-750c]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -85,9 +85,11 @@ jobs:
           $nodeSource = Join-Path $extract "node-v$nodeVersion-win-x64"
           $resourceRoot = Join-Path $PWD 'resources/windows-amd64'
           $out = Join-Path $PWD 'out'
+          $ownsResourceRoot = $false
           New-Item $out -ItemType Directory -Force | Out-Null
           try {
             go tool mygo build -platform windows/amd64
+            if ($LASTEXITCODE -ne 0) { throw "Slim Windows build failed with exit code $LASTEXITCODE" }
             $dist = Join-Path $PWD 'dist/windows-amd64'
             $slim = Join-Path $out "JSTV-Player-$version-windows-amd64.zip"
             Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png') -DestinationPath $slim -Force
@@ -97,10 +99,18 @@ jobs:
             Expand-Archive $slim $check -Force
             if (Test-Path (Join-Path $check 'node')) { throw 'Slim Windows package unexpectedly contains Node' }
             if (Test-Path $resourceRoot) { throw 'Refusing to overwrite pre-existing Windows resources' }
+            New-Item $resourceRoot -ItemType Directory -ErrorAction Stop | Out-Null
+            $ownsResourceRoot = $true
             New-Item (Join-Path $resourceRoot 'node/bin') -ItemType Directory -Force | Out-Null
             Copy-Item (Join-Path $nodeSource 'node.exe') (Join-Path $resourceRoot 'node/bin/node.exe')
             Copy-Item (Join-Path $nodeSource 'LICENSE') (Join-Path $resourceRoot 'node/LICENSE')
+            $nodeExe = Join-Path $resourceRoot 'node/bin/node.exe'
+            $nodeOutput = (& $nodeExe --version | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "Bundled Node failed to run with exit code $LASTEXITCODE" }
+            if ($nodeOutput -ne "v$nodeVersion") { throw "Bundled Node returned '$nodeOutput', expected 'v$nodeVersion'" }
+            Remove-Item (Join-Path $PWD 'dist/windows-amd64') -Recurse -Force
             go tool mygo build -platform windows/amd64
+            if ($LASTEXITCODE -ne 0) { throw "Bundled Node Windows build failed with exit code $LASTEXITCODE" }
             $dist = Join-Path $PWD 'dist/windows-amd64'
             $fat = Join-Path $out "JSTV-Player-$version-windows-amd64-with-node.zip"
             Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png'), (Join-Path $dist 'node') -DestinationPath $fat -Force
@@ -112,7 +122,7 @@ jobs:
             if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-with-node-setup.exe") }
           }
           finally {
-            if (Test-Path $resourceRoot) { Remove-Item $resourceRoot -Recurse -Force }
+            if ($ownsResourceRoot -and (Test-Path $resourceRoot)) { Remove-Item $resourceRoot -Recurse -Force }
           }
       - name: Build Linux packages
         if: runner.os == 'Linux'
