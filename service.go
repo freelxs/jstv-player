@@ -37,17 +37,22 @@ type Settings struct {
 	// AllowLAN binds the plugin's HTTP server to all interfaces so its
 	// configuration page is reachable from other devices. Off by default:
 	// the server listens on loopback only.
-	AllowLAN bool `json:"allowLan"`
+	AllowLAN       bool `json:"allowLan"`
+	AllowLANMedia  bool `json:"allowLanMedia"`
+	InheritNodeEnv bool `json:"inheritNodeEnv"`
 }
 
 // LoadResult is what LoadSource reports to the page.
 type LoadResult struct {
-	Sites       []catvod.Site `json:"sites"`
-	MD5         string        `json:"md5"`
-	ExpectedMD5 string        `json:"expectedMd5"`
-	Mismatch    bool          `json:"mismatch"`
-	Node        string        `json:"node"`
-	Sub         Subscription  `json:"subscription"`
+	Sites         []catvod.Site `json:"sites"`
+	MD5           string        `json:"md5"`
+	ExpectedMD5   string        `json:"expectedMd5"`
+	Mismatch      bool          `json:"mismatch"`
+	Node          string        `json:"node"`
+	Sub           Subscription  `json:"subscription"`
+	TrustRequired bool          `json:"trustRequired,omitempty"`
+	TrustSHA256   string        `json:"trustSHA256,omitempty"`
+	TrustURL      string        `json:"trustURL,omitempty"`
 }
 
 // DetailResult is a vod with its play lines parsed.
@@ -70,19 +75,21 @@ type Player struct {
 	bridge *catvod.Bridge
 
 	loadMu sync.Mutex // serializes LoadSource / switching
+	initMu sync.Mutex // serializes per-site init and permits retry after failure
 	eps    episodeServer
 	histMu sync.Mutex
 
-	mu       sync.Mutex
-	settings Settings
-	host     *catvod.Host
-	sites    []catvod.Site
-	inited   map[string]bool
-	logs     []string
+	mu           sync.Mutex
+	settings     Settings
+	host         *catvod.Host
+	sites        []catvod.Site
+	inited       map[string]bool
+	logs         []string
+	pendingTrust map[string]sourcePin
 }
 
 func newPlayer(dir string) *Player {
-	p := &Player{dir: dir, inited: map[string]bool{}, proxy: &catvod.HeaderProxy{}}
+	p := &Player{dir: dir, inited: map[string]bool{}, pendingTrust: map[string]sourcePin{}, proxy: &catvod.HeaderProxy{}}
 	if err := p.proxy.Start(); err != nil {
 		p.proxy = nil
 	}
@@ -103,6 +110,7 @@ func newPlayer(dir string) *Player {
 }
 
 func (p *Player) log(s string) {
+	s = sanitizeLogLine(s)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.logs = append(p.logs, time.Now().Format("15:04:05 ")+s)
@@ -149,11 +157,12 @@ func (p *Player) SaveSettings(s Settings) error {
 	p.startBridge(s.BridgeTemplate)
 	// The plugin server binds its listen address at start; rebind on toggle.
 	if oldLAN != s.AllowLAN && s.Active != "" {
-		go func() {
-			if _, err := p.LoadSource(); err != nil {
-				p.log("重启源以应用局域网设置: " + err.Error())
-			}
-		}()
+		// Stop synchronously before the UI attempts a reload. In particular,
+		// serialize with LoadSource so an in-flight start cannot publish a stale
+		// all-interface listener after this stop has observed no host yet.
+		p.loadMu.Lock()
+		p.StopSource()
+		p.loadMu.Unlock()
 	}
 	return nil
 }
@@ -265,18 +274,26 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 		return nil, err
 	}
 	p.log("加载订阅「" + sub.Name + "」: " + sub.URL)
-	src, err := catvod.Fetch(nil, sub.URL, dir)
+	src, err := catvod.FetchWithOptions(nil, sub.URL, dir, s.StrictMD5)
 	if err != nil {
 		return nil, err
 	}
+	pinned, pinErr := readPin(dir)
+	if pinErr != nil && !errors.Is(pinErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("读取插件 SHA-256 信任记录失败：%w", pinErr)
+	}
+	if pinErr != nil || pinned.URL != src.ScriptURL || !strings.EqualFold(pinned.SHA256, src.SHA256) {
+		p.StopSource()
+		p.mu.Lock()
+		p.pendingTrust[sub.ID] = sourcePin{URL: src.ScriptURL, SHA256: src.SHA256}
+		p.mu.Unlock()
+		return &LoadResult{Sub: sub, TrustRequired: true, TrustSHA256: src.SHA256, TrustURL: displaySourceURL(src.ScriptURL), MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node}, nil
+	}
 	if src.MD5Mismatch() {
 		p.log(fmt.Sprintf("md5 不一致: 文件 %s, 发布 %s", src.MD5, src.Expected))
-		if s.StrictMD5 {
-			return nil, fmt.Errorf("md5 校验失败（文件 %s ≠ 发布 %s）", src.MD5, src.Expected)
-		}
 	}
 	p.StopSource()
-	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN}
+	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN, InheritEnv: s.InheritNodeEnv}
 	if err := h.Start(90 * time.Second); err != nil {
 		return nil, err
 	}
@@ -291,6 +308,31 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node, Sub: sub}, nil
 }
 
+// ApproveSource records the exact currently active URL and hash presented by
+// the UI. It never starts the bundle; the caller must explicitly reload.
+func (p *Player) ApproveSource() error {
+	s := p.GetSettings()
+	sub, ok := s.active()
+	if !ok {
+		return errors.New("没有活动订阅")
+	}
+	p.mu.Lock()
+	pending, ok := p.pendingTrust[sub.ID]
+	delete(p.pendingTrust, sub.ID)
+	p.mu.Unlock()
+	if !ok {
+		return errors.New("没有待确认的插件版本")
+	}
+	scriptURL, _ := catvod.ScriptURLs(sub.URL)
+	if scriptURL != pending.URL {
+		return errors.New("订阅地址已更改，请重新加载并确认新的版本")
+	}
+	if err := writePin(filepath.Join(p.dir, "subs", sub.ID), pending); err != nil {
+		return err
+	}
+	return nil
+}
+
 // StopSource stops the running source process.
 func (p *Player) StopSource() {
 	p.mu.Lock()
@@ -300,24 +342,80 @@ func (p *Player) StopSource() {
 	if h != nil {
 		h.Stop()
 	}
+	if p.proxy != nil {
+		p.proxy.Reset()
+	}
+}
+
+// ProbeNodePermissions reports which permission-related flags are advertised
+// by the selected Node binary. It does not enable them or claim sandboxing.
+func (p *Player) ProbeNodePermissions() (string, error) {
+	node, err := catvod.FindNode(p.GetSettings().NodePath)
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.Command(node, "--help").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("读取 Node 能力失败：%w", err)
+	}
+	flags := nodePermissionFlags(string(out))
+	if len(flags) == 0 {
+		return "当前 Node 未在 --help 中列出权限模型标志；未启用任何限制。", nil
+	}
+	return "当前 Node 声明支持：" + strings.Join(flags, ", ") + "。这里只检测标志，不代表隔离有效；未启用权限限制。", nil
+}
+
+func nodePermissionFlags(help string) []string {
+	var flags []string
+	for _, flag := range []string{"--permission", "--experimental-permission"} {
+		if strings.Contains(help, flag) {
+			flags = append(flags, flag)
+		}
+	}
+	return flags
 }
 
 func (p *Player) client(api string) (*catvod.Client, error) {
 	p.mu.Lock()
 	h := p.host
-	need := !p.inited[api]
-	p.inited[api] = true
 	p.mu.Unlock()
 	if h == nil || h.Base() == "" {
 		return nil, errors.New("源未加载")
 	}
 	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN}
-	if need && api != "" {
-		if err := c.Init(api); err != nil {
-			p.log("init " + api + ": " + err.Error())
+	if api != "" {
+		if err := p.initSite(api, c, h); err != nil {
+			return nil, err
 		}
 	}
 	return c, nil
+}
+
+func (p *Player) initSite(api string, c *catvod.Client, expectedHost *catvod.Host) error {
+	p.initMu.Lock()
+	defer p.initMu.Unlock()
+	p.mu.Lock()
+	if p.host != expectedHost {
+		p.mu.Unlock()
+		return errors.New("订阅已切换，取消旧源初始化")
+	}
+	ready := p.inited[api]
+	p.mu.Unlock()
+	if ready {
+		return nil
+	}
+	if err := c.Init(api); err != nil {
+		p.log("init " + api + ": " + err.Error())
+		return err
+	}
+	p.mu.Lock()
+	if p.host != expectedHost {
+		p.mu.Unlock()
+		return errors.New("订阅已切换，忽略旧源初始化结果")
+	}
+	p.inited[api] = true
+	p.mu.Unlock()
+	return nil
 }
 
 // Home returns the site's categories and filters.
@@ -432,9 +530,25 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 		allowed = append(allowed, bridgeAddr)
 	}
 	catvod.LocalizePlayStreams(s, c.Base, bridgeAddr, c.LAN)
-	if err := catvod.CheckLocalStreams(s, c.Base, allowed...); err != nil {
+	if err := catvod.CheckPluginPlayStreams(s, c.Base, allowed...); err != nil {
 		p.log("play: " + err.Error())
 		return nil, err
+	}
+	if !p.GetSettings().AllowLANMedia {
+		for _, st := range s {
+			if !st.Parse && catvod.IsLANAddressURL(st.URL) {
+				return nil, errors.New("播放地址指向局域网设备；请在设置中明确允许访问局域网媒体后重试")
+			}
+		}
+	}
+	if p.proxy != nil {
+		for _, st := range s {
+			if !st.Parse && (strings.HasPrefix(st.URL, "http://") || strings.HasPrefix(st.URL, "https://")) {
+				if err := p.proxy.Grant(st.URL, st.Headers, p.GetSettings().AllowLANMedia); err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
 	return s, nil
 }
@@ -456,8 +570,15 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	// players such as IINA accept disguised .jpg/.png segments). Loopback
 	// URLs were already re-pointed at the current source by LocalizeURL.
 	u := st.URL
-	if p.proxy != nil && player != "system" {
-		u = p.proxy.WrapAlways(u, st.Headers)
+	if player != "system" {
+		if p.proxy == nil {
+			return errors.New("本地播放代理未启动")
+		}
+		var err error
+		u, err = p.proxy.WrapGranted(u, st.Headers)
+		if err != nil {
+			return err
+		}
 	}
 	p.log(fmt.Sprintf("播放(%s): %s → %s headers=%v", player, st.URL, u, st.Headers))
 	var pre map[string]string

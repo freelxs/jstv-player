@@ -88,6 +88,15 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if res.TrustRequired {
+		if err := p.ApproveSource(); err != nil {
+			t.Fatal(err)
+		}
+		res, err = p.LoadSource()
+		if err != nil || res.TrustRequired {
+			t.Fatalf("load after approval: result=%+v err=%v", res, err)
+		}
+	}
 	api := res.Sites[0].API
 	d, err := p.Detail(api, "v1")
 	if err != nil {

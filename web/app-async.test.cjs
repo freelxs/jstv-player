@@ -112,6 +112,42 @@ test('loadSource does not assign stale first or second GetSettings results', asy
   assert.equal(app2.st.settings.active, 'sub');
 });
 
+test('first use and hash changes require explicit approval before source load continues', async () => {
+  let sourceCalls = 0, approvals = 0;
+  const settings = { active: 'sub', subscriptions: [{ id: 'sub', name: 'mock', url: 'https://source.invalid/index.js' }] };
+  const app = makeApp((method) => {
+    if (method === 'GetSettings') return Promise.resolve(settings);
+    if (method === 'LoadSource') return Promise.resolve(++sourceCalls === 1
+      ? { trustRequired: true, trustSHA256: 'abc123', trustURL: 'https://source.invalid/index.js' }
+      : { sites: [] });
+    if (method === 'ApproveSource') { approvals++; return Promise.resolve(); }
+    return Promise.resolve({});
+  });
+  await app.app.loadSource();
+  assert.equal(app.el('#sourceTrust').open, true);
+  assert.match(app.el('#trustMessage').textContent, /abc123/);
+  assert.equal(sourceCalls, 1, 'trust-required load must not continue into sites');
+  await app.el('#trustApprove').onclick();
+  assert.equal(approvals, 1);
+  assert.equal(sourceCalls, 2, 'approval must trigger a fresh download and load');
+  assert.equal(app.el('#sourceTrust').open, false);
+});
+
+test('rejecting first-use trust does not approve or retry the source', async () => {
+  let approvals = 0, loads = 0;
+  const app = makeApp((method) => {
+    if (method === 'GetSettings') return Promise.resolve({ active: 'sub', subscriptions: [{ id: 'sub', name: 'mock' }] });
+    if (method === 'LoadSource') { loads++; return Promise.resolve({ trustRequired: true, trustSHA256: 'deadbeef' }); }
+    if (method === 'ApproveSource') approvals++;
+    return Promise.resolve({});
+  });
+  await app.app.loadSource();
+  app.el('#trustReject').onclick();
+  assert.equal(approvals, 0);
+  assert.equal(loads, 1);
+  assert.match(app.el('#toast').textContent, /未批准/);
+});
+
 test('search and detail ignore stale successes and failures', async () => {
   for (const fail of [false, true]) {
     const searchResult = deferred();

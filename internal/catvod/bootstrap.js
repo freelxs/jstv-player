@@ -4,6 +4,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const readline = require('readline');
 
 const entry = process.argv[2];
 const port = Number(process.env.DEV_HTTP_PORT || 0);
@@ -67,6 +68,23 @@ async function load() {
 
 process.on('unhandledRejection', (e) => console.error('unhandledRejection', e));
 process.on('uncaughtException', (e) => console.error('uncaughtException', e));
-// Exit when the parent app goes away.
-process.stdin.on('end', () => process.exit(0));
-process.stdin.resume();
+// Cross-platform line IPC: ask plugins to stop before exiting. EOF is kept as
+// the backwards-compatible parent shutdown signal.
+let shutdownPromise;
+async function shutdown() {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    try {
+      const mod = await load();
+      const stop = mod.stop || (mod.default && mod.default.stop);
+      if (typeof stop === 'function') await stop();
+    } catch (e) { console.error('plugin stop failed', e); }
+    process.exit(0);
+  })();
+  return shutdownPromise;
+}
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', (line) => {
+  try { if (JSON.parse(line).type === 'shutdown') shutdown(); } catch (_) {}
+});
+input.on('close', () => shutdown());

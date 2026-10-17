@@ -70,9 +70,13 @@ Node.js: 插件 index.js
 
 播放：
 
+- `play` 返回的 HTTP(S) 媒体必须先经应用校验并登记为服务器端播放授权，再由 Go 本地代理发给播放器。播放器代理 URL 仅包含随机 opaque stream ID；目标 URL 和请求头保存在服务端，客户端不能通过 query 自选 `u` / `h`。
+- HLS 播放列表会改写绝对/相对子资源、variant 与 key URL，使子资源获得同一播放授权范围内的 opaque ID；代理保留 Range，并跟随 HTTP 重定向。重定向和清单子资源若指向 loopback/LAN 地址，仅同源插件 loopback 或用户在设置中明确允许的 LAN 媒体可继续访问。授权 ID 最长两小时有效，订阅重载/停止时撤销。外部播放器不需要读取原始播放 URL 或头。
 - 所有播放地址（「系统默认」除外）都经 Go 本地代理：注入插件给的请求头，改写 HLS 播放列表（绝对地址、分片统一为 `.ts` 扩展名），再交给内置播放器、mpv 或 IINA（仅 macOS）。
 - 指向 `127.0.0.1` 的地址统一改到当前插件服务的端口（`/spider/...`、`/proxy...`）。
 - 播放前先请求首字节：HTTP 错误直接提示「该线路不可用」；`Content-Type: text/html` 或 `.html/.htm/.php` 地址在新窗口打开。
+
+下载时继续使用发布方提供的 MD5 作为兼容性检查。本机 SHA-256 TOFU 首次确认与更新审批见 [SECURITY.md](SECURITY.md)；两者都不是发布者签名认证。
 
 ## 5. 可选播放桥
 

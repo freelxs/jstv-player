@@ -206,6 +206,8 @@ dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px);-webkit-ba
 .pane{padding:18px 20px 20px;overflow:auto}
 .hint{margin:0 0 14px;color:var(--text-2);font-size:12.5px}
 .hint.small{margin:14px 0 0;color:var(--text-3);font-size:11.5px}
+.trust-sheet>p{padding:0 20px;white-space:pre-line;overflow-wrap:anywhere}
+.trust-sheet>.actions{padding:0 20px 18px;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 code{font:11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:1px 5px;border-radius:4px;background:var(--hover)}
 .sub-list{list-style:none;margin:0 0 14px;padding:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .sub-list:empty{display:none}

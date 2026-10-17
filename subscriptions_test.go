@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
@@ -133,11 +135,21 @@ func TestSwitchReloadsPlugin(t *testing.T) {
 	a, b := s.Subscriptions[0].ID, s.Subscriptions[1].ID
 
 	r1, err := p.SwitchSubscription(a)
+	if err == nil && r1.TrustRequired {
+		if err = p.ApproveSource(); err == nil {
+			r1, err = p.LoadSource()
+		}
+	}
 	if err != nil || r1.Sub.ID != a || len(r1.Sites) == 0 {
 		t.Fatal(r1, err)
 	}
 	base1 := p.host.Base()
 	r2, err := p.SwitchSubscription(b)
+	if err == nil && r2.TrustRequired {
+		if err = p.ApproveSource(); err == nil {
+			r2, err = p.LoadSource()
+		}
+	}
 	if err != nil || r2.Sub.ID != b {
 		t.Fatal(r2, err)
 	}
@@ -160,5 +172,148 @@ func TestSwitchReloadsPlugin(t *testing.T) {
 	}
 	if p.host != nil {
 		t.Fatal("process still running after removal")
+	}
+}
+
+func TestSourceTrustApprovalRequiredForFirstUseAndChangedContent(t *testing.T) {
+	if _, err := catvod.FindNode(""); err != nil {
+		t.Skip(err)
+	}
+	script, err := os.ReadFile("internal/catvod/testdata/mockspider.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/index.js") || strings.HasSuffix(r.URL.Path, "/other.js") {
+			_, _ = w.Write(script)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/index.js.md5") {
+			http.NotFound(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	settings, err := p.AddSubscription("mock", srv.URL+"/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.LoadSource()
+	if err != nil || !r.TrustRequired || r.TrustSHA256 == "" || p.host != nil {
+		t.Fatalf("first use should wait for approval: result=%+v err=%v", r, err)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatal(err)
+	}
+	r, err = p.LoadSource()
+	if err != nil || r.TrustRequired || p.host == nil {
+		t.Fatalf("approved source failed to load: result=%+v err=%v", r, err)
+	}
+	oldBase := p.host.Base()
+	script = append(append([]byte(nil), script...), []byte("\n// changed fixture\n")...)
+	r, err = p.LoadSource()
+	if err != nil || !r.TrustRequired || p.host != nil {
+		t.Fatalf("changed content should stop and wait: result=%+v err=%v", r, err)
+	}
+	if resp, err := http.Get(oldBase + "/config"); err == nil {
+		resp.Body.Close()
+		t.Fatal("old plugin kept running after changed content was detected")
+	}
+	if _, err := p.UpdateSubscription(settings.Subscriptions[0].ID, "mock", srv.URL+"/other.js"); err != nil {
+		t.Fatal(err)
+	}
+	r, err = p.LoadSource()
+	if err != nil || !r.TrustRequired || p.host != nil {
+		t.Fatalf("URL change should require a fresh trust decision: result=%+v err=%v", r, err)
+	}
+}
+
+func TestDisablingLANStopsListenerBeforeFailedReload(t *testing.T) {
+	if _, err := catvod.FindNode(""); err != nil {
+		t.Skip(err)
+	}
+	script, err := os.ReadFile("internal/catvod/testdata/mockspider.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fail atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".md5") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/index.js") {
+			if fail.Load() {
+				http.Error(w, "fixture unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write(script)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	if _, err := p.AddSubscription("mock", srv.URL+"/index.js"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.LoadSource()
+	if err != nil || !r.TrustRequired {
+		t.Fatalf("initial trust: %+v %v", r, err)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LoadSource(); err != nil {
+		t.Fatal(err)
+	}
+	s := p.GetSettings()
+	s.AllowLAN = true
+	if err := p.SaveSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LoadSource(); err != nil {
+		t.Fatal(err)
+	}
+	oldBase := p.host.Base()
+	fail.Store(true)
+	s = p.GetSettings()
+	s.AllowLAN = false
+	// Saving the off toggle must wait for any in-flight LoadSource holding the
+	// same lock, then stop whatever host that load publishes.
+	p.loadMu.Lock()
+	saved := make(chan error, 1)
+	go func() { saved <- p.SaveSettings(s) }()
+	select {
+	case err := <-saved:
+		p.loadMu.Unlock()
+		t.Fatalf("LAN toggle returned before source-load serialization: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	p.loadMu.Unlock()
+	select {
+	case err := <-saved:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("LAN toggle did not complete after source-load lock released")
+	}
+	if p.host != nil {
+		t.Fatal("LAN host reference remained after disabling")
+	}
+	if resp, err := http.Get(oldBase + "/config"); err == nil {
+		resp.Body.Close()
+		t.Fatal("old LAN listener remained reachable after toggle")
+	}
+	if _, err := p.LoadSource(); err == nil {
+		t.Fatal("expected reload failure from local fixture")
+	}
+	if p.host != nil {
+		t.Fatal("failed loopback reload left a host running")
 	}
 }

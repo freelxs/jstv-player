@@ -1,6 +1,7 @@
 package catvod
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -126,6 +127,113 @@ func TestHostWithMockSpider(t *testing.T) {
 	}
 }
 
+func TestHostStopCallsPluginStopOverIPC(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "index.js")
+	code := `module.exports = { start() { const s = globalThis.catServerFactory((req,res) => { res.end(JSON.stringify({video:{sites:[]}})); }); s.listen(); }, stop() { console.log("MOCK_STOP_CALLED"); } };`
+	if err := os.WriteFile(script, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stopCalled := make(chan struct{}, 1)
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script, LogFunc: func(line string) {
+		if strings.Contains(line, "MOCK_STOP_CALLED") {
+			select {
+			case stopCalled <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	if err := h.Start(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	h.Stop()
+	if h.Base() != "" {
+		t.Fatal("Base remained available after stop")
+	}
+	select {
+	case <-stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("plugin stop was not called")
+	}
+}
+
+func TestHostStartFailureCleansUpChild(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "bad.js")
+	if err := os.WriteFile(script, []byte(`throw new Error("mock startup failure")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script}
+	if err := h.Start(3 * time.Second); err == nil {
+		t.Fatal("expected startup error")
+	}
+	if h.Base() != "" || h.cmd != nil {
+		t.Fatal("failed start left a live host reference")
+	}
+}
+
+func TestHostStartContextCancellationStopsChild(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hang.js")
+	if err := os.WriteFile(script, []byte(`module.exports = { start() { console.log("CANCEL_STARTED"); return new Promise(() => {}); }, stop() { console.log("CANCEL_STOP"); } };`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{}, 1)
+	stopped := make(chan struct{}, 1)
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script, LogFunc: func(line string) {
+		if strings.Contains(line, "CANCEL_STARTED") {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		}
+		if strings.Contains(line, "CANCEL_STOP") {
+			select {
+			case stopped <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	done := make(chan error, 1)
+	go func() { done <- h.StartContext(ctx, 30*time.Second) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("mock plugin did not enter start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected canceled start")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("context cancellation did not stop startup")
+	}
+	if h.Base() != "" || h.cmd != nil {
+		t.Fatal("canceled start left child state")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not invoke plugin stop")
+	}
+}
+
 func TestHeaderProxy(t *testing.T) {
 	var seg string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +261,7 @@ func TestHeaderProxy(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 4 || !strings.Contains(lines[1], url.QueryEscape(up.URL+"/a/key.bin")) || !strings.Contains(lines[3], url.QueryEscape(up.URL+"/abs/seg2.ts")) {
+	if len(lines) != 4 || !strings.Contains(lines[1], "/p/") || !strings.Contains(lines[1], "/key.ts\"") || !strings.Contains(lines[3], "/p/") || !strings.HasSuffix(lines[3], "/seg2.ts") || strings.Contains(string(b), "?u=") {
 		t.Fatal(string(b))
 	}
 	r2, err := http.Get(lines[2])
@@ -163,6 +271,53 @@ func TestHeaderProxy(t *testing.T) {
 	d, _ := io.ReadAll(r2.Body)
 	if string(d) != "DATA" || seg != "/a/seg1.ts" {
 		t.Fatal(string(d), seg)
+	}
+}
+
+func TestHeaderProxyOpaqueIDsRejectClientTargetsAndRevoke(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/private" {
+			_, _ = w.Write([]byte("authorized"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer up.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	session := p.NewSession()
+	wrapped := p.WrapSession(up.URL+"/private", map[string]string{"X-Test": "kept"}, session)
+	if strings.Contains(wrapped, "?u=") || strings.Contains(wrapped, "?h=") {
+		t.Fatalf("target leaked in proxy URL: %s", wrapped)
+	}
+	resp, err := http.Get(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "authorized" {
+		t.Fatalf("authorized resource failed: %s", b)
+	}
+	targetInject := p.base + "/p/not-an-id/file?u=" + url.QueryEscape(up.URL+"/private") + "&h=eyJYLUZha2UiOiAieWVzIn0"
+	resp, err = http.Get(targetInject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("arbitrary target route status=%d", resp.StatusCode)
+	}
+	p.Reset()
+	resp, err = http.Get(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("revoked ID status=%d", resp.StatusCode)
 	}
 }
 
@@ -202,6 +357,16 @@ func TestCheckLocalStreams(t *testing.T) {
 	}
 	if err := CheckLocalStreams(bad, base, "127.0.0.1:9979"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPluginPlayAllowsExplicitLoopbackMediaPort(t *testing.T) {
+	streams := []Stream{{URL: "http://127.0.0.1:49321/media.m3u8"}}
+	if err := CheckLocalStreams(streams, "http://127.0.0.1:60444"); err == nil {
+		t.Fatal("generic local URL checker unexpectedly allowed unrelated port")
+	}
+	if err := CheckPluginPlayStreams(streams, "http://127.0.0.1:60444"); err != nil {
+		t.Fatalf("explicit plugin play result was rejected: %v", err)
 	}
 }
 
@@ -294,7 +459,7 @@ func TestProxyRangeAndExtensions(t *testing.T) {
 	p := &HeaderProxy{}
 	p.Start()
 	u := p.Wrap(up.URL+"/v/index.m3u8", map[string]string{"Referer": "x"})
-	if !strings.Contains(u, "/p/index.m3u8?") {
+	if !strings.Contains(u, "/p/") || !strings.HasSuffix(u, "/index.m3u8") || strings.Contains(u, "?u=") || strings.Contains(u, "?h=") {
 		t.Fatal(u)
 	}
 	req, _ := http.NewRequest("GET", u, nil)
@@ -305,11 +470,144 @@ func TestProxyRangeAndExtensions(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 5 || !strings.Contains(lines[2], "/p/seg-00000.ts?") || !strings.Contains(lines[4], "/p/a1.ts?") {
+	if len(lines) != 5 || !strings.Contains(lines[2], "/p/") || !strings.HasSuffix(lines[2], "/seg-00000.ts") || !strings.Contains(lines[4], "/p/") || !strings.HasSuffix(lines[4], "/a1.ts") {
 		t.Fatal(string(b))
 	}
-	if !strings.Contains(p.Wrap(up.URL+"/play", map[string]string{"a": "b"}), "/p/play.bin?") {
+	if !strings.HasSuffix(p.Wrap(up.URL+"/play", map[string]string{"a": "b"}), "/play.bin") {
 		t.Fatal("no extension")
+	}
+}
+
+func TestProxyRejectsCrossOriginRedirectToLoopbackAndSupportsAuthorizedLAN(t *testing.T) {
+	secret := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("local-media")) }))
+	defer secret.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, secret.URL+"/media.ts", http.StatusFound)
+	}))
+	defer redirect.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	u := p.WrapAlways(redirect.URL+"/start.ts", nil)
+	resp, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("cross-origin loopback redirect status=%d", resp.StatusCode)
+	}
+	u = p.WrapAlwaysWithLAN(redirect.URL+"/start.ts", nil, true)
+	resp, err = http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "local-media" {
+		t.Fatalf("explicit LAN authorization failed: %d %q", resp.StatusCode, b)
+	}
+}
+
+func TestProxyGrantRequiredAndInvalidated(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer up.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WrapGranted(up.URL+"/media.mp4", nil); err == nil {
+		t.Fatal("unregistered URL was wrapped")
+	}
+	if err := p.Grant(up.URL+"/media.mp4", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := p.WrapGranted(up.URL+"/media.mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authorized ID status=%d", resp.StatusCode)
+	}
+	p.Reset()
+	if _, err := p.WrapGranted(up.URL+"/media.mp4", nil); err == nil {
+		t.Fatal("grant survived session reset")
+	}
+}
+
+func TestProxyRedirectedHLSVariantsKeysDynamicHostAndRange(t *testing.T) {
+	var gotRange string
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/media/master.m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nvariant/index.m3u8\n"))
+		case "/media/variant/index.m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"../../key.bin\"\nseg.ts\n"))
+		case "/media/variant/seg.ts":
+			gotRange = r.Header.Get("Range")
+			_, _ = w.Write([]byte("segment"))
+		case "/key.bin":
+			_, _ = w.Write([]byte("key"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cdn.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, cdn.URL+"/media/master.m3u8", http.StatusFound)
+	}))
+	defer redirect.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(p.WrapAlwaysWithLAN(redirect.URL+"/start.m3u8", nil, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	master, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	line := strings.Split(strings.TrimSpace(string(master)), "\n")[2]
+	resp, err = http.Get(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	lines := strings.Split(strings.TrimSpace(string(variant)), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[1], "/p/") || !strings.Contains(lines[1], "/key.ts\"") || !strings.HasSuffix(lines[2], "/seg.ts") {
+		t.Fatalf("variant not rewritten from redirect target: %s", variant)
+	}
+	req, _ := http.NewRequest(http.MethodGet, lines[2], nil)
+	req.Header.Set("Range", "bytes=0-1")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotRange != "bytes=0-1" {
+		t.Fatalf("Range was not forwarded: %q", gotRange)
+	}
+}
+
+func TestIsLANAddressURL(t *testing.T) {
+	for _, raw := range []string{"http://192.168.1.2/a.mp4", "http://10.0.0.2/a.mp4", "http://[fd00::1]/a.mp4"} {
+		if !IsLANAddressURL(raw) {
+			t.Errorf("expected LAN classification: %s", raw)
+		}
+	}
+	for _, raw := range []string{"http://127.0.0.1:1234/spider/mock", "https://203.0.113.1/a.mp4"} {
+		if IsLANAddressURL(raw) {
+			t.Errorf("unexpected LAN classification: %s", raw)
+		}
 	}
 }
 

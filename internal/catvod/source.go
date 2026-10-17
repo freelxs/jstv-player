@@ -2,8 +2,11 @@ package catvod
 
 import (
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -20,6 +23,7 @@ type Source struct {
 	Path       string // local copy
 	ConfigPath string // local index.config.js, if published
 	MD5        string // md5 of the local copy
+	SHA256     string // local SHA-256 for TOFU change detection
 	Expected   string // md5 published next to it (index.js.md5), if any
 }
 
@@ -51,6 +55,13 @@ func ScriptURLs(u string) (script, sum string) {
 // Fetch downloads the bundle into dir (cached under dir/source/index.js).
 // Basic-auth credentials in the URL (http://user:pass@host/…) are honored.
 func Fetch(client *http.Client, rawURL, dir string) (*Source, error) {
+	return FetchWithOptions(client, rawURL, dir, false)
+}
+
+// FetchWithOptions downloads into same-directory temporary files, enforces
+// byte limits, checks the publisher MD5 before publication when strictMD5 is
+// enabled, then atomically replaces each completed artifact.
+func FetchWithOptions(client *http.Client, rawURL, dir string, strictMD5 bool) (*Source, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 120 * time.Second}
 	}
@@ -59,34 +70,122 @@ func Fetch(client *http.Client, rawURL, dir string) (*Source, error) {
 	if b, err := get(client, sumURL, 1<<10); err == nil {
 		src.Expected = strings.ToLower(md5re.FindString(string(b)))
 	}
-	body, err := get(client, script, 256<<20)
-	if err != nil {
-		return nil, fmt.Errorf("下载 index.js 失败: %w", err)
-	}
-	if len(body) < 20 {
-		return nil, fmt.Errorf("index.js 内容异常（%d 字节）", len(body))
-	}
-	sum := md5.Sum(body)
-	src.MD5 = hex.EncodeToString(sum[:])
 	d := filepath.Join(dir, "source")
 	if err := os.MkdirAll(d, 0o755); err != nil {
 		return nil, err
 	}
+	tmpScript, size, md5sum, sha256sum, err := downloadTemp(client, script, d, 256<<20, true)
+	if err != nil {
+		return nil, fmt.Errorf("下载 index.js 失败: %w", err)
+	}
+	defer os.Remove(tmpScript)
+	if size < 20 {
+		return nil, fmt.Errorf("index.js 内容异常（%d 字节）", size)
+	}
+	src.MD5, src.SHA256 = md5sum, sha256sum
+	if strictMD5 && src.Expected != "" && src.MD5Mismatch() {
+		return nil, fmt.Errorf("md5 校验失败（文件 %s ≠ 发布 %s）", src.MD5, src.Expected)
+	}
 	src.Path = filepath.Join(d, "index.js")
-	_ = os.Remove(src.Path + ".mjs")
-	if err := os.WriteFile(src.Path, body, 0o644); err != nil {
+	cfgPath := filepath.Join(d, "index.config.js")
+	// Stage the optional config before replacing either published file.
+	configURL := strings.TrimSuffix(script, ".js") + ".config.js"
+	tmpConfig, cfgSize, _, _, cfgErr := downloadTemp(client, configURL, d, 64<<20, false)
+	removeConfig := false
+	if cfgErr != nil && !errors.Is(cfgErr, errNotFound) {
+		// Optional configuration retains the historical best-effort behavior for
+		// network/server failures; a size violation is never silently accepted.
+		if errors.Is(cfgErr, errTooLarge) {
+			return nil, cfgErr
+		}
+		// Do not destroy the previous cache if script publication later fails.
+		removeConfig = true
+	}
+	if cfgErr == nil {
+		defer os.Remove(tmpConfig)
+	}
+	if errors.Is(cfgErr, errNotFound) || (cfgErr == nil && cfgSize == 0) {
+		removeConfig = true
+	}
+	if err := replaceFile(tmpScript, src.Path); err != nil {
 		return nil, err
 	}
-	// CatPaw passes module.exports of index.config.js (next to index.js) to
-	// start(config).
-	cfgPath := filepath.Join(d, "index.config.js")
-	_ = os.Remove(cfgPath)
-	if cfg, err := get(client, strings.TrimSuffix(script, ".js")+".config.js", 64<<20); err == nil && len(cfg) > 0 {
-		if err := os.WriteFile(cfgPath, cfg, 0o644); err == nil {
-			src.ConfigPath = cfgPath
+	if cfgErr == nil && cfgSize > 0 {
+		if err := replaceFile(tmpConfig, cfgPath); err != nil {
+			return nil, err
 		}
+		src.ConfigPath = cfgPath
+	} else if removeConfig {
+		_ = os.Remove(cfgPath)
 	}
+	_ = os.Remove(src.Path + ".mjs")
 	return src, nil
+}
+
+var (
+	errNotFound = errors.New("optional file not found")
+	errTooLarge = errors.New("download exceeds size limit")
+)
+
+func downloadTemp(c *http.Client, u, dir string, limit int64, digest bool) (string, int64, string, string, error) {
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", 0, "", "", errNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, u)
+	}
+	tmp, err := os.CreateTemp(dir, ".download-*.tmp")
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	name := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(name)
+		}
+	}()
+	_ = tmp.Chmod(0o644)
+	var md hash.Hash
+	var sh hash.Hash
+	var dst io.Writer = tmp
+	if digest {
+		md, sh = md5.New(), sha256.New()
+		dst = io.MultiWriter(tmp, md, sh)
+	}
+	n, err := io.Copy(dst, io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		tmp.Close()
+		return "", 0, "", "", err
+	}
+	if n > limit {
+		tmp.Close()
+		return "", 0, "", "", fmt.Errorf("%w (%d bytes max)", errTooLarge, limit)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", 0, "", "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", 0, "", "", err
+	}
+	cleanup = false
+	mdsum, shsum := "", ""
+	if digest {
+		m, s := md.Sum(nil), sh.Sum(nil)
+		mdsum, shsum = hex.EncodeToString(m), hex.EncodeToString(s)
+	}
+	return name, n, mdsum, shsum, nil
 }
 
 func get(c *http.Client, u string, limit int64) ([]byte, error) {

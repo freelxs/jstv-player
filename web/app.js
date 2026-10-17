@@ -98,6 +98,17 @@ async function loadSource(fn = () => call('LoadSource')) {
     setView(skeletonGrid());
     const r = await fn();
     if (!browseRequests.current(request) || seq !== st.loadSeq) return; // a newer navigation or switch won
+    if (r.trustRequired) {
+      st.settings = await call('GetSettings');
+      renderSwitcher();
+      $('#trustTitle').textContent = r.trustSHA256 ? '确认插件版本' : '插件更新需要确认';
+      $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\nSHA-256：${r.trustSHA256}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
+      $('#sourceTrust').dataset.pending = '1';
+      if (!$('#sourceTrust').open) $('#sourceTrust').showModal();
+      setDot(''); $('#status').textContent = '等待确认';
+      setView(stateBox({ title: '插件尚未启动', text: '首次使用或检测到内容变化。请确认 SHA-256 后再运行。' }));
+      return;
+    }
     const reloadedSettings = await call('GetSettings');
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
     st.settings = reloadedSettings;
@@ -115,6 +126,19 @@ async function loadSource(fn = () => call('LoadSource')) {
       actions: [el('button', { class: 'btn', onclick: () => loadSource() }, icon('reload'), '重试'), el('button', { class: 'btn', onclick: () => openSettings('subs') }, '管理订阅'), el('button', { class: 'btn', onclick: () => openSettings('logs') }, '查看日志')] }));
   }
 }
+$('#trustReject').onclick = () => {
+  $('#sourceTrust').close(); delete $('#sourceTrust').dataset.pending;
+  toast('未批准此版本；新插件没有运行', { err: true });
+};
+$('#trustApprove').onclick = async () => {
+  const b = $('#trustApprove'); b.disabled = true;
+  try {
+    await call('ApproveSource');
+    $('#sourceTrust').close(); delete $('#sourceTrust').dataset.pending;
+    await loadSource();
+  } catch (e) { toast(errMsg(e), { err: true }); }
+  finally { b.disabled = false; }
+};
 const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '订阅是一个插件地址（index.js 或 index.js.md5）。可以添加多个并随时切换。',
   actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
@@ -376,18 +400,31 @@ async function openSettings(tab = 'subs') {
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
   $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
   $('#sAllowLan').checked = !!s.allowLan;
+  $('#sAllowLanMedia').checked = !!s.allowLanMedia;
+  $('#sInheritNodeEnv').checked = !!s.inheritNodeEnv;
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
 }
 $('#prefs').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked });
+    const oldAllowLAN = !!st.settings?.allowLan;
+    const nextAllowLAN = $('#sAllowLan').checked;
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
+    if (oldAllowLAN !== nextAllowLAN && st.settings.active) {
+      $('#settings').close();
+      await loadSource();
+    }
   } catch (err) { toast(errMsg(err), { err: true }); }
 });
 $('#sClose').onclick = () => $('#settings').close();
+$('#probeNodePermissions').onclick = async () => {
+  const out = $('#nodePermissionResult'); out.textContent = '检测中…';
+  try { out.textContent = await call('ProbeNodePermissions'); }
+  catch (e) { out.textContent = errMsg(e); }
+};
 
 $('#btnSettings').onclick = () => openSettings('subs');
 $('#btnReload').onclick = () => loadSource();

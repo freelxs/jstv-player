@@ -2,16 +2,18 @@ package catvod
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,12 +33,16 @@ type Host struct {
 	// ListenLAN binds the plugin's HTTP server to all interfaces (0.0.0.0)
 	// instead of loopback, so its config page is reachable from other devices.
 	ListenLAN bool
+	// InheritEnv is an explicit compatibility option. The default environment
+	// keeps only platform/runtime basics and CA variables, not proxy credentials.
+	InheritEnv bool
 
-	mu   sync.Mutex
-	cmd  *exec.Cmd
-	in   io.WriteCloser
-	port int
-	done chan struct{}
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	in      io.WriteCloser
+	port    int
+	done    chan struct{}
+	started bool
 }
 
 // FindNode returns a usable node executable: explicit, then PATH, then the
@@ -74,15 +80,6 @@ func FindNode(explicit string) (string, error) {
 	return "", errors.New("未找到 Node.js：请安装 Node.js 18+，或在设置中填写 node 路径")
 }
 
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
-}
-
 // listenHost is the address the plugin's HTTP server binds: loopback by
 // default, all interfaces when the user enables LAN access.
 func listenHost(lan bool) string {
@@ -94,6 +91,20 @@ func listenHost(lan bool) string {
 
 // Start launches the bundle and waits until GET /config answers.
 func (h *Host) Start(timeout time.Duration) error {
+	return h.StartContext(context.Background(), timeout)
+}
+
+// StartContext launches the bundle and waits for GET /config. Cancellation and
+// timeout both stop and reap a child that has already been started.
+func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	h.Stop()
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -104,13 +115,12 @@ func (h *Host) Start(timeout time.Duration) error {
 	if err := os.WriteFile(boot, bootstrapJS, 0o644); err != nil {
 		return err
 	}
-	port, err := freePort()
-	if err != nil {
-		return err
-	}
+	// Let the plugin bind port 0 itself and report the selected port. This
+	// removes the close-then-rebind race from reserving a free port in Go.
+	port := 0
 	cmd := exec.Command(h.Node, boot, h.Script)
 	cmd.Dir = h.Dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(nodeEnvironment(h.InheritEnv),
 		fmt.Sprintf("DEV_HTTP_PORT=%d", port),
 		"JSTV_LISTEN="+listenHost(h.ListenLAN),
 		"NODE_PATH="+h.Dir,
@@ -122,16 +132,28 @@ func (h *Host) Start(timeout time.Duration) error {
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {
+		_ = in.Close()
+		_ = pr.Close()
+		_ = pw.Close()
 		return err
 	}
-	h.cmd, h.in, h.port, h.done = cmd, in, port, make(chan struct{})
+	h.cmd, h.in, h.port, h.done, h.started = cmd, in, port, make(chan struct{}), true
 	var lastErr string
 	var lmu sync.Mutex
+	ready := make(chan int, 1)
 	go func() {
 		sc := bufio.NewScanner(pr)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for sc.Scan() {
 			line := sc.Text()
+			if strings.HasPrefix(line, "JSTV_READY ") {
+				if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "JSTV_READY "))); err == nil && n > 0 {
+					select {
+					case ready <- n:
+					default:
+					}
+				}
+			}
 			if strings.Contains(line, "JSTV_FATAL") || strings.Contains(line, "Error") {
 				lmu.Lock()
 				lastErr = line
@@ -144,27 +166,74 @@ func (h *Host) Start(timeout time.Duration) error {
 	}()
 	done := h.done
 	go func() { cmd.Wait(); pw.Close(); close(done) }()
+	select {
+	case h.port = <-ready:
+	case <-done:
+		lmu.Lock()
+		err := fmt.Errorf("源进程已退出: %s", lastErr)
+		lmu.Unlock()
+		h.stopLocked()
+		return err
+	case <-ctx.Done():
+		h.stopLocked()
+		return ctx.Err()
+	}
 
-	deadline := time.Now().Add(timeout)
 	c := &http.Client{Timeout: 3 * time.Second}
-	for time.Now().Before(deadline) {
+	for {
+		if err := ctx.Err(); err != nil {
+			h.stopLocked()
+			return err
+		}
 		select {
 		case <-done:
 			lmu.Lock()
-			defer lmu.Unlock()
-			return fmt.Errorf("源进程已退出: %s", lastErr)
+			err := fmt.Errorf("源进程已退出: %s", lastErr)
+			lmu.Unlock()
+			h.stopLocked()
+			return err
 		default:
 		}
-		resp, err := c.Get(h.baseLocked() + "/config")
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.baseLocked()+"/config", nil)
+		resp, err := c.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return nil
 			}
 		}
-		time.Sleep(300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			h.stopLocked()
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
 	}
-	return errors.New("等待源启动超时")
+}
+
+func nodeEnvironment(inherit bool) []string {
+	if inherit {
+		return os.Environ()
+	}
+	wanted := []string{"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "PATHEXT", "COMSPEC", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "LANG", "LC_ALL"}
+	values := make(map[string]string, len(wanted))
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		for _, allowed := range wanted {
+			if strings.EqualFold(key, allowed) {
+				values[key] = value
+				break
+			}
+		}
+	}
+	out := make([]string, 0, len(values))
+	for key, value := range values {
+		out = append(out, key+"="+value)
+	}
+	return out
 }
 
 func (h *Host) baseLocked() string { return fmt.Sprintf("http://127.0.0.1:%d", h.port) }
@@ -176,22 +245,41 @@ func (h *Host) Base() string {
 	if h.cmd == nil {
 		return ""
 	}
+	select {
+	case <-h.done:
+		return ""
+	default:
+	}
 	return h.baseLocked()
 }
 
-// Stop kills the child process.
+// Stop asks the bootstrap to call the plugin's stop(), then force-kills after
+// a bounded grace period. The JSON line protocol works on Windows and Unix.
 func (h *Host) Stop() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.stopLocked()
+}
+
+func (h *Host) stopLocked() {
 	if h.cmd == nil {
 		return
 	}
-	h.in.Close()
+	if h.in != nil && h.started {
+		_ = json.NewEncoder(h.in).Encode(map[string]string{"type": "shutdown"})
+	}
+	if h.in != nil {
+		_ = h.in.Close()
+	}
 	select {
 	case <-h.done:
 	case <-time.After(1500 * time.Millisecond):
-		h.cmd.Process.Kill()
+		_ = h.cmd.Process.Kill()
 		<-h.done
 	}
 	h.cmd = nil
+	h.in = nil
+	h.done = nil
+	h.port = 0
+	h.started = false
 }

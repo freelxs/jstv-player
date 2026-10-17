@@ -185,14 +185,14 @@ func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
-	return p.wrapStream(st), nil
+	return p.wrapStream(st)
 }
 
-func (p *Player) wrapStream(st *catvod.Stream) string {
-	if p.proxy != nil {
-		return p.proxy.WrapAlways(st.URL, st.Headers)
+func (p *Player) wrapStream(st *catvod.Stream) (string, error) {
+	if p.proxy == nil {
+		return "", errors.New("本地播放代理未启动")
 	}
-	return st.URL
+	return p.proxy.WrapGranted(st.URL, st.Headers)
 }
 
 // episodeStream resolves episode n once at a time: concurrent callers (the
@@ -258,7 +258,12 @@ func (p *Player) prefetchEpisode(pl *playlist, n int) {
 		p.log(fmt.Sprintf("预取第 %d 项失败: %v", n+1, err))
 		return
 	}
-	warmStream(p.wrapStream(st))
+	u, err := p.wrapStream(st)
+	if err != nil {
+		p.log("预热失败: " + err.Error())
+		return
+	}
+	warmStream(u)
 }
 
 const warmBytes = 2 << 20
@@ -334,13 +339,14 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	}
 	// Same checks as Open, on the first episode, so errors show up here.
 	u := first.URL
-	if p.proxy != nil {
-		u = p.proxy.WrapAlways(u, first.Headers)
+	if p.proxy == nil {
+		return nil, errors.New("本地播放代理未启动")
+	}
+	u, err = p.proxy.WrapGranted(u, first.Headers)
+	if err != nil {
+		return nil, err
 	}
 	var pre map[string]string
-	if u == first.URL {
-		pre = first.Headers
-	}
 	isHTML, err := catvod.Preflight(nil, u, pre)
 	if err != nil {
 		p.log("preflight: " + err.Error())

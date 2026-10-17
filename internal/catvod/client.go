@@ -2,14 +2,48 @@ package catvod
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// IsLANAddressURL identifies non-loopback private/link-local media targets.
+// Loopback is excluded because plugin-owned local service URLs are part of
+// the documented protocol and are authorized through a returned play URL.
+func IsLANAddressURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	private := func(ip net.IP) bool {
+		return ip != nil && !ip.IsLoopback() && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast())
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return private(ip)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if private(ip) {
+			return true
+		}
+	}
+	return false
+}
 
 // Site is one entry of GET /config → video.sites.
 type Site struct {
@@ -273,10 +307,23 @@ func SameHost(u, base string) bool {
 // running source (base) or by an allowed local service (the optional,
 // user-configured play bridge).
 func CheckLocalStreams(streams []Stream, base string, allowed ...string) error {
+	return checkLocalStreams(streams, base, false, allowed...)
+}
+
+// CheckPluginPlayStreams permits a loopback media endpoint explicitly
+// returned by the active plugin's play response. Open still requires a grant.
+func CheckPluginPlayStreams(streams []Stream, base string, allowed ...string) error {
+	return checkLocalStreams(streams, base, true, allowed...)
+}
+
+func checkLocalStreams(streams []Stream, base string, allowReturnedLoopback bool, allowed ...string) error {
 	for _, s := range streams {
 		ok := SameHost(s.URL, base)
 		for _, a := range allowed {
 			ok = ok || SameHost(s.URL, "http://"+a)
+		}
+		if allowReturnedLoopback && IsLoopback(s.URL) {
+			continue
 		}
 		if IsLoopback(s.URL) && !ok {
 			pu, _ := url.Parse(s.URL)
