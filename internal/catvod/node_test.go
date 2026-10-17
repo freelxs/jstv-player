@@ -55,7 +55,12 @@ func TestFindNodeWindowsBundleLayoutAndMissing(t *testing.T) {
 	if err := os.WriteFile(bundled, []byte("fixture"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stat := os.Stat
+	stat := func(path string) (os.FileInfo, error) {
+		if filepath.Clean(path) == filepath.Clean(bundled) {
+			return os.Stat(bundled)
+		}
+		return nil, os.ErrNotExist
+	}
 	getExe := func() (string, error) { return exe, nil }
 	noPath := func(string) (string, error) { return "", errors.New("no PATH") }
 	home := func() (string, error) { return root, nil }
@@ -67,7 +72,22 @@ func TestFindNodeWindowsBundleLayoutAndMissing(t *testing.T) {
 	if _, err := findNode(filepath.Join(root, "missing"), "windows", "amd64", getExe, noPath, stat, home, getenv); err == nil {
 		t.Fatal("missing explicit path accepted")
 	}
-	if _, err := findNode("", "windows", "amd64", func() (string, error) { return "", errors.New("missing") }, noPath, stat, home, getenv); err == nil {
+	missingStat := func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	if _, err := findNode("", "windows", "amd64", func() (string, error) { return "", errors.New("missing") }, noPath, missingStat, home, getenv); err == nil {
 		t.Fatal("missing Node should fail")
+	}
+
+	// Exercise the documented system install fallback without consulting the
+	// Windows runner's actual Program Files or user environment.
+	systemNode := `C:\Program Files\nodejs\node.exe`
+	systemStat := func(path string) (os.FileInfo, error) {
+		if filepath.Clean(path) == filepath.Clean(systemNode) {
+			return os.Stat(bundled)
+		}
+		return nil, os.ErrNotExist
+	}
+	got, err = findNode("", "windows", "amd64", func() (string, error) { return "", errors.New("missing") }, noPath, systemStat, home, getenv)
+	if err != nil || got != systemNode {
+		t.Fatalf("system fallback = %q, %v", got, err)
 	}
 }
