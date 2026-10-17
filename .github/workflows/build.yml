@@ -28,14 +28,16 @@ jobs:
         id: validate
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag || '' }}
+          PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          RELEASE_TAG="$(bash scripts/resolve-release-tag.sh)"
           if [[ -z "$RELEASE_TAG" ]]; then
-            echo 'release_tag=' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Release tag must look like vMAJOR.MINOR.PATCH.' >&2; exit 1; }
           VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
           [[ "$RELEASE_TAG" == "v$VERSION" ]] || { echo "Release tag $RELEASE_TAG does not match workflow source version $VERSION." >&2; exit 1; }
           git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" >/dev/null || { echo "Tag $RELEASE_TAG does not exist on origin." >&2; exit 1; }

@@ -47,6 +47,8 @@
 | Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
 | 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
 
+CI 的普通 `main` 推送只运行测试和构建。需要从已有标签恢复发布时，使用提交标题 `release: publish vX.Y.Z`（例如 `release: publish v0.3.2`）；工作流会确认标签已存在且版本匹配，再从标签源码构建，并在所有检查通过后创建 Release。该标记不会创建或移动 Git 标签；若同名 Release 已存在，发布步骤会失败且不会覆盖它。
+
 当前仓库未配置 Developer ID 代码签名或公证；本地构建的 app 可能带 ad-hoc 签名，但它不认证发布者。macOS 首次打开请右键 → 打开，或执行：
 
 ```sh

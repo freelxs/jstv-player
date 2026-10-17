@@ -17,11 +17,27 @@ for action in 'actions/checkout@v7' 'actions/setup-go@v7' 'actions/setup-node@v7
 done
 grep -Fq 'node-version: 24' "$WORKFLOW" || fail "frontend tests must use Node 24"
 grep -Fq 'release_tag:' "$WORKFLOW" || fail "workflow dispatch must expose optional release_tag"
-grep -Fq 'RELEASE_TAG: ${{ inputs.release_tag' "$WORKFLOW" || fail "release tag must enter shell through an environment variable"
-grep -Fq '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$WORKFLOW" || fail "release tag must be restricted to numeric v-prefixed versions"
+grep -Fq 'RELEASE_TAG_INPUT: ${{ inputs.release_tag' "$WORKFLOW" || fail "release tag must enter shell through an environment variable"
+grep -Fq '[[ -n "$release_tag" && ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$SOURCE_ROOT/scripts/resolve-release-tag.sh" || fail "release tag must be restricted to numeric v-prefixed versions"
 grep -Fq 'git ls-remote --exit-code --tags origin' "$WORKFLOW" || fail "release tag must already exist on origin"
 grep -Fq 'needs.resolve-release.outputs.release_tag' "$WORKFLOW" || fail "release jobs must use the validated tag"
 grep -Fq 'gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"' "$WORKFLOW" || fail "release creation must verify the existing tag and specify repository explicitly"
+grep -Fq 'release: publish vX.Y.Z' "$SOURCE_ROOT/README.md" || fail "README must document the opt-in release commit subject"
+
+resolve_tag() {
+  local event="$1" ref="$2" message="$3" input="$4"
+  GITHUB_EVENT_NAME="$event" GITHUB_REF="$ref" \
+    PUSH_COMMIT_MESSAGE="$message" RELEASE_TAG_INPUT="$input" \
+    bash "$SOURCE_ROOT/scripts/resolve-release-tag.sh"
+}
+[[ "$(resolve_tag push refs/heads/main 'release: publish v0.3.2' '')" == v0.3.2 ]] || fail "exact main commit subject must opt in to release"
+[[ -z "$(resolve_tag push refs/heads/main $'routine CI fix\nrelease: publish v0.3.2' '')" ]] || fail "release marker in commit body must not opt in"
+[[ -z "$(resolve_tag push refs/heads/main 'routine CI fix' '')" ]] || fail "ordinary main push must remain build-only"
+[[ "$(resolve_tag push refs/tags/v0.3.2 '' '')" == v0.3.2 ]] || fail "tag pushes must retain release behavior"
+[[ "$(resolve_tag workflow_dispatch refs/heads/main '' v0.3.2)" == v0.3.2 ]] || fail "manual release input must remain supported"
+if resolve_tag workflow_dispatch refs/heads/main '' 'v0.3.2;touch /tmp/not-allowed' >/dev/null 2>&1; then
+  fail "malformed release tag input must fail validation"
+fi
 
 new_fixture() {
   local name="$1" root="$FIXTURE/$1"
