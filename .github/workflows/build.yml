@@ -27,7 +27,9 @@ jobs:
           node-version: 20
       - run: go vet ./...
       - run: go test ./...
-      - run: node --test web/*.test.cjs
+      - name: Frontend tests
+        shell: bash
+        run: node --test web/*.test.cjs
       - name: Build script fixture tests
         if: runner.os != 'Windows'
         run: bash scripts/build.test.sh
