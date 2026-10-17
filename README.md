@@ -29,7 +29,7 @@
 ## 运行依赖
 
 - macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）
-- **Node.js 18+**（插件本身是 Node.js 程序）。App 会在 PATH 和常见安装位置（Homebrew、`/usr/bin`、`C:\Program Files\nodejs`、nvm、volta）查找，也可在设置里填写路径。
+- Node.js 18+（插件本身是 Node.js 程序）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io)。
 - Windows 和 Linux 的系统 web view 一般不能直接播放 HLS，所以默认用外部播放器：Windows 上依次选 PotPlayer、mpv、内置；Linux 上选 mpv、内置。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。所有外部播放器拿到的都是本地代理地址，请求头由代理加上。
 - 默认播放器只在还没保存过播放器设置时生效；已经保存过的设置不会被改动，可在设置 → 播放里切换。
@@ -42,6 +42,8 @@
 |---|---|
 | macOS | `JSTV-Player-<版本>-macos-universal.dmg` 或 `.zip` |
 | Windows | `JSTV-Player-<版本>-windows-amd64-setup.exe`（安装包）或 `.zip`（免安装） |
+| macOS（可选内置 Node） | `JSTV-Player-<版本>-macos-universal-with-node.dmg` 或 `.zip` |
+| Windows（可选内置 Node） | `JSTV-Player-<版本>-windows-amd64-with-node.zip` |
 | Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
 | 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
 
@@ -69,6 +71,9 @@ go vet ./... && go test ./...
 ./scripts/build.sh darwin --keep-app           # 可选保留本轮隔离构建目录
 ./scripts/build.sh windows                     # Windows x64 zip
 ./scripts/build.sh all                         # macOS + Windows（默认）
+./scripts/build.sh darwin --with-node           # macOS universal 包内置 Node
+./scripts/build.sh windows --with-node           # Windows x64 包内置 Node
+./scripts/build.sh all --with-node               # 两个平台的包内置 Node 变体
 go tool mygo build -platform darwin/universal   # 直接构建仍输出到 dist/，不会自动清理
 go tool mygo build -platform windows/amd64      # dist/windows-amd64/（装有 NSIS 时还会生成安装包）
 go tool mygo build -platform linux/amd64        # dist/linux-amd64/（可执行文件、.deb、.tar.gz）
@@ -76,6 +81,8 @@ go tool mygo dev                                # 开发模式
 ```
 
 构建脚本保留 Go 查找、`GO_BIN`、`JSTV_CACHE_ROOT`、`GOCACHE`、`GOMODCACHE`、`GOPATH`、`GOTOOLCHAIN` 和 `GOPROXY` 覆盖。macOS 归档验证失败时不会替换旧归档，并保留 `.jstv-build-*` 路径供检查。脚本不自动清理既有 `dist/` 构建目录。
+
+`--with-node` 使用脚本中固定的 Node.js 24.21.0（Node 24 LTS），仅从 `nodejs.org/dist/v24.21.0` 获取官方 macOS arm64/x64 或 Windows x64 归档，并按该目录官方 `SHASUMS256.txt` 校验 SHA-256；下载归档与校验清单缓存于 `$JSTV_CACHE_ROOT/node-v24.21.0`（默认工具缓存目录）。macOS 包同时携带 arm64 和 x64 可执行文件，按 `runtime.GOARCH` 选择，并用 `lipo` 验证架构；MyGo 将可执行资源纳入 app 的 ad-hoc 签名。此签名可在构建机验证，但不是 Developer ID 签名或公证，也不保证 Gatekeeper 在其他 Mac 放行。Node 更新需维护者更新固定版本并重新构建、验证两架构及动态依赖。只包含 Node 可执行文件和随官方发行归档提供的 `LICENSE`，不带 npm、npx 或头文件。内置 Node 只提供运行时，不包含第三方插件依赖；Windows 仍需 WebView2 Runtime。
 
 ## 使用
 

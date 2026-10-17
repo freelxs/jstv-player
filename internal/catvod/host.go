@@ -45,24 +45,53 @@ type Host struct {
 	started bool
 }
 
-// FindNode returns a usable node executable: explicit, then PATH, then the
+// FindNode returns a usable node executable: explicit, bundled, then PATH and
 // usual install locations (GUI apps on macOS get a minimal PATH).
 func FindNode(explicit string) (string, error) {
+	return findNode(explicit, runtime.GOOS, runtime.GOARCH, os.Executable, exec.LookPath, os.Stat, os.UserHomeDir, os.Getenv)
+}
+
+type executableFunc func() (string, error)
+type lookPathFunc func(string) (string, error)
+type statFunc func(string) (os.FileInfo, error)
+type homeDirFunc func() (string, error)
+type getenvFunc func(string) string
+
+func findNode(explicit, goos, goarch string, executable executableFunc, lookPath lookPathFunc, stat statFunc, homeDir homeDirFunc, getenv getenvFunc) (string, error) {
 	if explicit != "" {
-		if _, err := os.Stat(explicit); err == nil {
+		if _, err := stat(explicit); err == nil {
 			return explicit, nil
 		}
 		return "", fmt.Errorf("找不到 node: %s", explicit)
 	}
-	if p, err := exec.LookPath("node"); err == nil {
+	// MyGo puts platform resources at the top of Contents/Resources on macOS
+	// and beside the executable on Windows. Derive both from the executable,
+	// never from the caller's working directory.
+	if exe, err := executable(); err == nil {
+		candidates := []string{}
+		if goos == "darwin" {
+			resources := filepath.Join(filepath.Dir(filepath.Dir(exe)), "Resources")
+			if goarch == "arm64" || goarch == "amd64" {
+				candidates = append(candidates, filepath.Join(resources, "node", goarch, "bin", "node"))
+			}
+		} else {
+			candidates = append(candidates, filepath.Join(filepath.Dir(exe), "node", "bin", "node.exe"), filepath.Join(filepath.Dir(exe), "node.exe"))
+		}
+		for _, candidate := range candidates {
+			if _, err := stat(candidate); err == nil {
+				return candidate, nil
+			}
+		}
+	}
+	if p, err := lookPath("node"); err == nil {
 		return p, nil
 	}
-	home, _ := os.UserHomeDir()
+	home, _ := homeDir()
 	cands := []string{"/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"}
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		cands = []string{`C:\Program Files\nodejs\node.exe`}
 		for _, env := range []string{"ProgramFiles", "NVM_SYMLINK", "LOCALAPPDATA"} {
-			if d := os.Getenv(env); d != "" {
+			if d := getenv(env); d != "" {
 				cands = append(cands, filepath.Join(d, "nodejs", "node.exe"), filepath.Join(d, "node.exe"))
 			}
 		}
@@ -73,7 +102,7 @@ func FindNode(explicit string) (string, error) {
 	}
 	cands = append(cands, filepath.Join(home, ".volta/bin/node"), filepath.Join(home, ".local/bin/node"))
 	for _, c := range cands {
-		if _, err := os.Stat(c); err == nil {
+		if _, err := stat(c); err == nil {
 			return c, nil
 		}
 	}

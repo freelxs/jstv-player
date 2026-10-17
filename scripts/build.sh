@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
 # JSTV Player release helper. Source baseline: untracked Downloads script
 # SHA-256 c28226eb8dbb11b93f70cdc55d999d135aa2615366377c65caf16dcfc2218d13
-# Usage: scripts/build.sh [darwin|windows|all] [--keep-app]
+# Usage: scripts/build.sh [darwin|windows|all] [--with-node] [--keep-app]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 
 usage() {
-  echo "Usage: $0 [darwin|mac|macos|windows|win|all] [--keep-app]" >&2
+  echo "Usage: $0 [darwin|mac|macos|windows|win|all] [--with-node] [--keep-app]" >&2
   exit 2
 }
 
 TARGET="${1:-all}"
 KEEP_APP=0
-if [[ "${2:-}" == "--keep-app" && $# -eq 2 ]]; then
-  KEEP_APP=1
-elif [[ $# -gt 1 ]]; then
-  usage
-fi
+WITH_NODE=0
+for arg in "${@:2}"; do
+  case "$arg" in
+    --keep-app) [[ "$KEEP_APP" -eq 0 ]] || usage; KEEP_APP=1 ;;
+    --with-node) [[ "$WITH_NODE" -eq 0 ]] || usage; WITH_NODE=1 ;;
+    *) usage ;;
+  esac
+done
 
 # ---- Locate Go (preserves the original GO_BIN/fallback behavior) ----
 GO_BIN="${GO_BIN:-}"
@@ -49,6 +52,59 @@ mkdir -p "$OUT"
 [[ ! -L "$OUT" ]] || { echo "拒绝使用符号链接 out 目录: $OUT" >&2; exit 1; }
 
 LSREGISTER="${JSTV_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
+NODE_VERSION="24.21.0"
+NODE_CACHE="$CACHE_ROOT/node-v$NODE_VERSION"
+
+download_node_archive() {
+  local name="$1" url="https://nodejs.org/dist/v$NODE_VERSION/$1" sums="$NODE_CACHE/SHASUMS256.txt" archive="$NODE_CACHE/$1" expected actual
+  mkdir -p "$NODE_CACHE"
+  if [[ ! -f "$sums" ]]; then
+    curl --fail --location --retry 3 --connect-timeout 30 --silent --show-error "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" -o "$sums.tmp"
+    mv "$sums.tmp" "$sums"
+  fi
+  if [[ ! -f "$archive" ]]; then
+    curl --fail --location --continue-at - --retry 3 --connect-timeout 30 --silent --show-error "$url" -o "$archive.tmp"
+    mv "$archive.tmp" "$archive"
+  fi
+  expected="$(awk -v n="$name" '$2 == n {print $1}' "$sums")"
+  [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || { echo "Official SHASUMS has no SHA-256 for $name" >&2; return 1; }
+  actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+  [[ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]] || { rm -f "$archive"; echo "Node archive SHA-256 mismatch: $name" >&2; return 1; }
+  printf '%s\n' "$archive"
+}
+
+stage_node_macos() {
+  local stage="$ROOT/resources/darwin" arm x64 tmp
+  [[ ! -e "$stage" ]] || { echo "Refusing to overwrite existing resources/darwin" >&2; return 1; }
+  tmp="$(mktemp -d "$OUT/.node-stage.XXXXXX")"
+  arm="$(download_node_archive "node-v$NODE_VERSION-darwin-arm64.tar.gz")"
+  x64="$(download_node_archive "node-v$NODE_VERSION-darwin-x64.tar.gz")"
+  if ! { mkdir -p "$tmp/arm" "$tmp/x64" "$stage/node/arm64/bin" "$stage/node/amd64/bin" \
+    && tar -xzf "$arm" -C "$tmp/arm" --strip-components=2 "node-v$NODE_VERSION-darwin-arm64/bin/node" \
+    && tar -xzf "$arm" -C "$tmp/arm" --strip-components=1 "node-v$NODE_VERSION-darwin-arm64/LICENSE" \
+    && tar -xzf "$x64" -C "$tmp/x64" --strip-components=2 "node-v$NODE_VERSION-darwin-x64/bin/node" \
+    && tar -xzf "$x64" -C "$tmp/x64" --strip-components=1 "node-v$NODE_VERSION-darwin-x64/LICENSE" \
+    && cp "$tmp/arm/node" "$stage/node/arm64/bin/node" \
+    && cp "$tmp/x64/node" "$stage/node/amd64/bin/node" \
+    && cp "$tmp/arm/LICENSE" "$stage/node/LICENSE" \
+    && chmod 755 "$stage/node/arm64/bin/node" "$stage/node/amd64/bin/node"; }; then
+    rm -rf "$tmp" "$stage"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+stage_node_windows() {
+  local stage="$ROOT/resources/windows-amd64" archive
+  [[ ! -e "$stage" ]] || { echo "Refusing to overwrite existing resources/windows-amd64" >&2; return 1; }
+  archive="$(download_node_archive "node-v$NODE_VERSION-win-x64.zip")"
+  mkdir -p "$stage/node/bin"
+  if ! { unzip -p "$archive" "node-v$NODE_VERSION-win-x64/node.exe" > "$stage/node/bin/node.exe" \
+    && unzip -p "$archive" "node-v$NODE_VERSION-win-x64/LICENSE" > "$stage/node/LICENSE"; }; then
+    rm -rf "$stage"
+    return 1
+  fi
+}
 
 restore_artifacts() {
   local backups="$1" final="$2" name
@@ -89,12 +145,18 @@ build_darwin() {
   local keep_path=""
   echo "==> 构建 darwin/universal"
   build_root="$(mktemp -d "$OUT/.jstv-build.XXXXXX")"
+  if [[ "$WITH_NODE" -eq 1 ]]; then
+    stage_node_macos
+    trap 'rm -rf "$ROOT/resources/darwin"' RETURN
+  fi
   platform_dir="$build_root/dist/darwin-universal"
   app_dir="$platform_dir/JSTV Player.app"
-  zip_final="$OUT/JSTV-Player-$VERSION-macos-universal.zip"
-  dmg_final="$OUT/JSTV-Player-$VERSION-macos-universal.dmg"
-  zip_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal.zip.$$"
-  dmg_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal.dmg.$$"
+  local suffix=""
+  [[ "$WITH_NODE" -eq 1 ]] && suffix="-with-node"
+  zip_final="$OUT/JSTV-Player-$VERSION-macos-universal$suffix.zip"
+  dmg_final="$OUT/JSTV-Player-$VERSION-macos-universal$suffix.dmg"
+  zip_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal$suffix.zip.$$"
+  dmg_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal$suffix.dmg.$$"
 
   if ! "$GO_BIN" tool mygo build -platform darwin/universal -o "$build_root/dist"; then
     echo "macOS 构建失败；隔离输出保留在: $build_root" >&2
@@ -103,6 +165,16 @@ build_darwin() {
   if [[ ! -d "$app_dir" ]]; then
     echo "构建没有生成预期 app；隔离输出保留在: $build_root" >&2
     return 1
+  fi
+  if [[ "$WITH_NODE" -eq 1 ]]; then
+    local arm_node="$app_dir/Contents/Resources/node/arm64/bin/node"
+    local x64_node="$app_dir/Contents/Resources/node/amd64/bin/node"
+    [[ -x "$arm_node" && -x "$x64_node" ]] || { echo "macOS build lacks an architecture-specific Node runtime" >&2; return 1; }
+    lipo -verify_arch arm64 "$arm_node"
+    lipo -verify_arch x86_64 "$x64_node"
+    otool -L "$arm_node"
+    otool -L "$x64_node"
+    codesign --verify --deep --strict "$app_dir"
   fi
   shopt -s nullglob
   local dmg_files=("$platform_dir"/*.dmg)
@@ -162,15 +234,26 @@ build_darwin() {
 build_windows() {
   local platform_dir zip_final zip_tmp
   echo "==> 构建 windows/amd64"
+  if [[ "$WITH_NODE" -eq 1 ]]; then
+    stage_node_windows
+    trap 'rm -rf "$ROOT/resources/windows-amd64"' RETURN
+  fi
   "$GO_BIN" tool mygo build -platform windows/amd64
   platform_dir="$ROOT/dist/windows-amd64"
-  zip_final="$OUT/JSTV-Player-$VERSION-windows-amd64.zip"
-  zip_tmp="$OUT/.JSTV-Player-$VERSION-windows-amd64.zip.$$"
+  local suffix=""
+  [[ "$WITH_NODE" -eq 1 ]] && suffix="-with-node"
+  zip_final="$OUT/JSTV-Player-$VERSION-windows-amd64$suffix.zip"
+  zip_tmp="$OUT/.JSTV-Player-$VERSION-windows-amd64$suffix.zip.$$"
   [[ -f "$platform_dir/JSTV Player.exe" && -f "$platform_dir/icon.png" ]] || {
     echo "Windows 构建缺少 exe/icon: $platform_dir" >&2
     return 1
   }
-  if ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "JSTV Player.exe" icon.png); then
+  if [[ "$WITH_NODE" -eq 1 ]]; then
+    [[ -f "$platform_dir/node/bin/node.exe" && -f "$platform_dir/node/LICENSE" ]] || { echo "Windows build lacks bundled Node files" >&2; return 1; }
+  fi
+  if [[ "$WITH_NODE" -eq 1 ]]; then
+    if ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "JSTV Player.exe" icon.png node); then rm -f "$zip_tmp"; return 1; fi
+  elif ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "JSTV Player.exe" icon.png); then
     rm -f "$zip_tmp"
     return 1
   fi
