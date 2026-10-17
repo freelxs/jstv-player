@@ -38,12 +38,24 @@ fi
 export PATH="$(dirname "$GO_BIN"):$PATH"
 
 # ---- Cache defaults and all original environment overrides ----
-CACHE_ROOT="${JSTV_CACHE_ROOT:-$HOME/.lorca/workspaces/bot-d06858b1/tools/go-cache}"
-export GOCACHE="${GOCACHE:-$CACHE_ROOT/gocache}"
-export GOMODCACHE="${GOMODCACHE:-$CACHE_ROOT/gomodcache}"
-export GOPATH="${GOPATH:-$CACHE_ROOT/gopath}"
+if [[ "${CI:-}" == "true" ]]; then
+  # setup-go owns these standard Go cache paths on hosted runners. Keep only
+  # this script's downloaded Node archives under the runner's temporary dir.
+  CACHE_ROOT="${JSTV_CACHE_ROOT:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/jstv-player-cache}"
+  export GOCACHE="${GOCACHE:-$(go env GOCACHE)}"
+  export GOMODCACHE="${GOMODCACHE:-$(go env GOMODCACHE)}"
+  export GOPATH="${GOPATH:-$(go env GOPATH)}"
+  DEFAULT_GOPROXY="https://proxy.golang.org,direct"
+else
+  # Preserve the local offline-build defaults and overrides.
+  CACHE_ROOT="${JSTV_CACHE_ROOT:-$HOME/.lorca/workspaces/bot-d06858b1/tools/go-cache}"
+  export GOCACHE="${GOCACHE:-$CACHE_ROOT/gocache}"
+  export GOMODCACHE="${GOMODCACHE:-$CACHE_ROOT/gomodcache}"
+  export GOPATH="${GOPATH:-$CACHE_ROOT/gopath}"
+  DEFAULT_GOPROXY="off"
+fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
-export GOPROXY="${GOPROXY:-off}"
+export GOPROXY="${GOPROXY:-$DEFAULT_GOPROXY}"
 
 VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
 [[ -n "$VERSION" ]] || { echo "无法从 mygo.json 读取版本。" >&2; exit 1; }

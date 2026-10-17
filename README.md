@@ -82,7 +82,9 @@ go tool mygo dev                                # 开发模式
 
 构建脚本保留 Go 查找、`GO_BIN`、`JSTV_CACHE_ROOT`、`GOCACHE`、`GOMODCACHE`、`GOPATH`、`GOTOOLCHAIN` 和 `GOPROXY` 覆盖。macOS 归档验证失败时不会替换旧归档，并保留 `.jstv-build-*` 路径供检查。脚本不自动清理既有 `dist/` 构建目录。
 
-`--with-node` 使用脚本中固定的 Node.js 24.21.0（Node 24 LTS），仅从 `nodejs.org/dist/v24.21.0` 获取官方 macOS arm64/x64 或 Windows x64 归档，并按该目录官方 `SHASUMS256.txt` 校验 SHA-256；下载归档与校验清单缓存于 `$JSTV_CACHE_ROOT/node-v24.21.0`（默认工具缓存目录）。macOS 包同时携带 arm64 和 x64 可执行文件，按 `runtime.GOARCH` 选择，并用 `lipo` 验证架构；MyGo 将可执行资源纳入 app 的 ad-hoc 签名。此签名可在构建机验证，但不是 Developer ID 签名或公证，也不保证 Gatekeeper 在其他 Mac 放行。Node 更新需维护者更新固定版本并重新构建、验证两架构及动态依赖。只包含 Node 可执行文件和随官方发行归档提供的 `LICENSE`，不带 npm、npx 或头文件。内置 Node 只提供运行时，不包含第三方插件依赖；Windows 仍需 WebView2 Runtime。
+在 GitHub Actions 中，构建脚本使用 `setup-go` 的 Go 缓存路径，并通过 Go module proxy 下载缺少的依赖；本地默认仍使用隔离缓存和离线模式。
+
+`--with-node` 使用脚本中固定的 Node.js 24.21.0（Node 24 LTS），仅从 `nodejs.org/dist/v24.21.0` 获取官方 macOS arm64/x64 或 Windows x64 归档，并按该目录官方 `SHASUMS256.txt` 校验 SHA-256；下载归档与校验清单缓存于 `$JSTV_CACHE_ROOT/node-v24.21.0`（本地默认工具缓存目录，CI 默认 runner 临时目录）。macOS 包同时携带 arm64 和 x64 可执行文件，按 `runtime.GOARCH` 选择，并用 `lipo` 验证架构；MyGo 将可执行资源纳入 app 的 ad-hoc 签名。此签名可在构建机验证，但不是 Developer ID 签名或公证，也不保证 Gatekeeper 在其他 Mac 放行。Node 更新需维护者更新固定版本并重新构建、验证两架构及动态依赖。只包含 Node 可执行文件和随官方发行归档提供的 `LICENSE`，不带 npm、npx 或头文件。内置 Node 只提供运行时，不包含第三方插件依赖；Windows 仍需 WebView2 Runtime。
 
 ## 使用
 

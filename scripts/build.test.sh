@@ -8,7 +8,9 @@ trap 'rm -rf "$FIXTURE"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { [[ -f "$1" ]] || fail "expected file: $1"; }
 assert_absent() { [[ ! -e "$1" ]] || fail "expected absent: $1"; }
-assert_contains() { grep -Fq -- "$2" "$1" || fail "expected '$2' in $1"; }
+assert_contains() { grep -Fq -- "$2" "$1" || { cat "$1" >&2; fail "expected '$2' in $1"; }; }
+
+grep -Fq 'GOPROXY: https://proxy.golang.org,direct' "$SOURCE_ROOT/.github/workflows/build.yml" || fail "macOS CI build must use a network-enabled Go proxy"
 
 new_fixture() {
   local name="$1" root="$FIXTURE/$1"
@@ -19,6 +21,15 @@ new_fixture() {
   cat > "$root/mock-bin/go" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == env ]]; then
+  case "${2:-}" in
+    GOCACHE) printf '%s\n' "$TEST_ROOT/setup-go-cache" ;;
+    GOMODCACHE) printf '%s\n' "$TEST_ROOT/setup-go-modcache" ;;
+    GOPATH) printf '%s\n' "$TEST_ROOT/setup-go-path" ;;
+    *) exit 14 ;;
+  esac
+  exit 0
+fi
 printf 'GO %s | GO_BIN=%s | JSTV_CACHE_ROOT=%s | GOCACHE=%s | GOMODCACHE=%s | GOPATH=%s | GOTOOLCHAIN=%s | GOPROXY=%s\n' "$*" "${GO_BIN:-}" "${JSTV_CACHE_ROOT:-}" "${GOCACHE:-}" "${GOMODCACHE:-}" "${GOPATH:-}" "${GOTOOLCHAIN:-}" "${GOPROXY:-}" >> "$TEST_LOG"
 platform=""
 out=""
@@ -99,7 +110,9 @@ MOCK
 }
 
 prepare_node_cache() {
-  local root="$1" version=24.21.0 cache="$1/cache-root/node-v24.21.0" tree
+  local root="$1" version=24.21.0 tree
+  local cache_root="${2:-$root/cache-root}"
+  local cache="$cache_root/node-v$version"
   tree="$root/node-fixture"
   mkdir -p "$cache" \
     "$tree/node-v$version-darwin-arm64/bin" \
@@ -119,6 +132,14 @@ run_script() {
     JSTV_CACHE_ROOT="$root/cache-root" GOCACHE="$root/custom-gocache" \
     GOMODCACHE="$root/custom-gomodcache" GOPATH="$root/custom-gopath" \
     GOTOOLCHAIN=local GOPROXY=off JSTV_LSREGISTER="$root/mock-bin/lsregister" \
+    PATH="$root/mock-bin:$PATH" bash "$root/scripts/build.sh" "$@"
+}
+
+run_ci_script() {
+  local root="$1"; shift
+  env -u JSTV_CACHE_ROOT -u GOCACHE -u GOMODCACHE -u GOPATH -u GOTOOLCHAIN -u GOPROXY \
+    TEST_ROOT="$root" TEST_LOG="$root/tool.log" GO_BIN="$root/mock-bin/go" \
+    RUNNER_TEMP="$root/runner-temp" CI=true JSTV_LSREGISTER="$root/mock-bin/lsregister" \
     PATH="$root/mock-bin:$PATH" bash "$root/scripts/build.sh" "$@"
 }
 
@@ -158,6 +179,18 @@ run_script "$ROOT" win
 assert_file "$ROOT/out/JSTV-Player-0.3.2-windows-amd64.zip"
 assert_contains "$ROOT/tool.log" "GO tool mygo build -platform windows/amd64 | GO_BIN=$ROOT/mock-bin/go | JSTV_CACHE_ROOT=$ROOT/cache-root | GOCACHE=$ROOT/custom-gocache"
 assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/custom-gomodcache | GOPATH=$ROOT/custom-gopath | GOTOOLCHAIN=local | GOPROXY=off"
+
+# CI defaults use setup-go's go env cache paths and a reachable module proxy,
+# while placing helper downloads in the runner temp directory instead of a
+# developer-specific Lorca path.
+ROOT="$(new_fixture ci-defaults)"
+prepare_node_cache "$ROOT" "$ROOT/runner-temp/jstv-player-cache"
+run_ci_script "$ROOT" darwin --with-node
+assert_file "$ROOT/out/JSTV-Player-0.3.2-macos-universal-with-node.zip"
+grep -Fq 'node=present' "$ROOT/out/JSTV-Player-0.3.2-macos-universal-with-node.zip" || fail "CI cache defaults did not find the bundled Node fixtures"
+assert_contains "$ROOT/tool.log" "GOCACHE=$ROOT/setup-go-cache"
+assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/setup-go-modcache | GOPATH=$ROOT/setup-go-path | GOTOOLCHAIN=local | GOPROXY=https://proxy.golang.org,direct"
+if grep -Fq '.lorca/workspaces' "$ROOT/tool.log"; then fail "CI build used a developer-specific Lorca cache path"; fi
 
 # A failed fat build must clean only the Node staging directory, so a later
 # slim build cannot pick it up through MyGo's normal resources directory.
