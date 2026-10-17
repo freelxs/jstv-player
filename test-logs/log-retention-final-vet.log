@@ -1,0 +1,8 @@
+COMMAND: GOPROXY=off GOTOOLCHAIN=local GOMODCACHE=/private/tmp/jstv-player-gopath/pkg/mod GOCACHE=/private/tmp/jstv-player-gocache /opt/homebrew/bin/go vet ./...
+GO: go version go1.27.2 darwin/arm64
+GO_PATH: /opt/homebrew/bin/go
+GOMODCACHE: /private/tmp/jstv-player-gopath/pkg/mod
+GOCACHE: /private/tmp/jstv-player-gocache
+GOPROXY: off
+GOTOOLCHAIN: local
+EXIT_CODE: 0

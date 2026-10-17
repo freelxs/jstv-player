@@ -1,0 +1,25 @@
+COMMAND: node --test web/*.test.cjs
+NODE_PATH: /opt/homebrew/bin/node
+NODE_VERSION: v26.11.1
+✔ selectSite ignores stale Home success and stale Home failure (3.180084ms)
+✔ openCategory ignores stale success and stale failure, including same-site paging (1.437875ms)
+✔ filter metadata is strict, safe on malformed input, and scoped to the selected category (0.400334ms)
+✔ filters are sent on category selection, reset page on change, persist across paging, and clear on category/site change (2.261042ms)
+✔ loadSource does not assign stale first or second GetSettings results (1.05375ms)
+✔ first use and hash changes require explicit approval before source load continues (0.43425ms)
+✔ rejecting first-use trust does not approve or retry the source (0.349542ms)
+✔ search and detail ignore stale successes and failures (1.341084ms)
+✔ a newer browse request makes earlier responses stale (0.25025ms)
+✔ navigation invalidates work still in flight (0.043792ms)
+✔ YouTube login points to an existing plugin configuration site (0.396417ms)
+✔ YouTube guidance does not invent an app login route (0.093041ms)
+✔ non-YouTube sites receive no provider-specific login guidance (0.064291ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3597.856625
+EXIT_CODE: 0

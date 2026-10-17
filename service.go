@@ -75,11 +75,12 @@ type Player struct {
 	proxy  *catvod.HeaderProxy
 	bridge *catvod.Bridge
 
-	loadMu sync.Mutex // serializes LoadSource / switching
-	initMu sync.Mutex // serializes per-site init and permits retry after failure
-	eps    episodeServer
-	histMu sync.Mutex
-	logMu  sync.Mutex
+	loadMu       sync.Mutex // serializes LoadSource / switching
+	initMu       sync.Mutex // serializes per-site init and permits retry after failure
+	eps          episodeServer
+	histMu       sync.Mutex
+	logMu        sync.Mutex
+	logCleanupAt time.Time // guarded by logMu; bounds cleanup cost while appending
 
 	mu           sync.Mutex
 	settings     Settings
@@ -99,6 +100,7 @@ func newPlayer(dir string) *Player {
 	if b, err := os.ReadFile(filepath.Join(dir, "settings.json")); err == nil {
 		_ = json.Unmarshal(b, &p.settings)
 	}
+	_ = p.cleanupPersistentLogs(time.Now())
 	legacy := p.settings.SourceURL != ""
 	p.settings.migrate()
 	if legacy {
@@ -113,7 +115,7 @@ func newPlayer(dir string) *Player {
 
 func (p *Player) log(s string) {
 	s = sanitizeLogLine(s)
-	line := time.Now().Format("2006-01-02 15:04:05 ") + s
+	line := time.Now().UTC().Format(persistentLogLayout+" ") + s
 	p.logMu.Lock()
 	defer p.logMu.Unlock()
 	p.mu.Lock()
@@ -136,12 +138,13 @@ func (p *Player) Logs() []string {
 	persist := p.settings.PersistLogs
 	memory := append([]string(nil), p.logs...)
 	p.mu.Unlock()
+	lines, _ := p.readPersistentLogs()
 	if persist {
-		if lines, err := p.readPersistentLogs(); err == nil && len(lines) > 0 {
+		if len(lines) > 0 {
 			return lines
 		}
 	}
-	return memory
+	return filterPersistentLogLines(memory, time.Now())
 }
 
 // ClearLogs removes only in-memory and application-owned persistent log files.

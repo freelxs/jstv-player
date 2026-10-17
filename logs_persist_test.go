@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPersistentLogsAreOffByDefaultAndRedactedBeforeWrite(t *testing.T) {
@@ -165,11 +166,103 @@ func TestPersistentLogsBoundSingleLineAndExpireOldRotations(t *testing.T) {
 	if err := os.Chtimes(old, aged, aged); err != nil {
 		t.Fatal(err)
 	}
+	p.logCleanupAt = time.Time{} // simulate a cleanup boundary before the next append
 	if err := p.appendPersistentLog("fresh"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Fatalf("expired file remains: %v", err)
+	}
+}
+
+func TestPersistentLogTruncationPreservesUTF8AndIncludesNewlineInLimit(t *testing.T) {
+	p := &Player{dir: t.TempDir()}
+	stamp := time.Now().Format(persistentLogLayout) + " "
+	line := stamp + strings.Repeat("a", persistentLogLine-len(stamp)-3) + "€"
+	if err := p.appendPersistentLog(line); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p.logPath(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > persistentLogLine || !strings.HasSuffix(string(b), "\n") || !utf8.Valid(b) {
+		t.Fatalf("persistent row violates UTF-8/newline bound: bytes=%d valid=%v", len(b), utf8.Valid(b))
+	}
+}
+
+func TestPersistentLogsFilterRowsByTimestampEvenWhenFileMtimeIsFresh(t *testing.T) {
+	dir := t.TempDir()
+	p := &Player{dir: dir, settings: Settings{PersistLogs: true}}
+	now := time.Now()
+	old := now.Add(-persistentLogAge-time.Hour).Format(persistentLogLayout) + " old-row"
+	fresh := now.Format(persistentLogLayout) + " fresh-row"
+	if err := os.MkdirAll(p.persistentLogDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.logPath(0), []byte(old+"\n"+fresh+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p.logPath(0), now, now); err != nil {
+		t.Fatal(err)
+	}
+	got := p.Logs()
+	if len(got) != 1 || !strings.Contains(got[0], "fresh-row") {
+		t.Fatalf("fresh file mtime must not preserve expired rows: %q", got)
+	}
+	b, err := os.ReadFile(p.logPath(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "old-row") {
+		t.Fatalf("expired row not cleaned from disk: %s", b)
+	}
+}
+
+func TestPersistentLogsRestartReadOnlyCleansExpiredRowsWithoutAppend(t *testing.T) {
+	dir := t.TempDir()
+	first := &Player{dir: dir, settings: Settings{PersistLogs: true}}
+	old := time.Now().Add(-persistentLogAge-time.Hour).Format(persistentLogLayout) + " expired"
+	fresh := time.Now().Format(persistentLogLayout) + " retained"
+	if err := first.appendPersistentLog(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.appendPersistentLog(fresh); err != nil {
+		t.Fatal(err)
+	}
+	second := &Player{dir: dir, settings: Settings{PersistLogs: true}}
+	got := second.Logs() // new Player, read-only path: no append occurs
+	if len(got) != 1 || !strings.Contains(got[0], "retained") || len(second.logs) != 0 {
+		t.Fatalf("restart read returned unexpected rows or appended: rows=%q memory=%q", got, second.logs)
+	}
+	stored, err := os.ReadFile(second.logPath(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(stored), "expired") {
+		t.Fatalf("read-only cleanup left expired row: %s", stored)
+	}
+}
+
+func TestDisabledPersistentLogsCleanExpiredDiskRowsButDoNotDisplayDisk(t *testing.T) {
+	p := &Player{dir: t.TempDir()}
+	if err := os.MkdirAll(p.persistentLogDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-persistentLogAge-time.Hour).Format(persistentLogLayout) + " expired"
+	fresh := time.Now().Format(persistentLogLayout) + " persisted-while-disabled"
+	if err := os.WriteFile(p.logPath(0), []byte(old+"\n"+fresh+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Logs(); len(got) != 0 {
+		t.Fatalf("disabled persistence displayed disk rows: %q", got)
+	}
+	b, err := os.ReadFile(p.logPath(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "expired") || !strings.Contains(string(b), "persisted-while-disabled") {
+		t.Fatalf("disabled read cleanup did not preserve/filter the expected rows: %s", b)
 	}
 }
 
