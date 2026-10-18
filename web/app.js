@@ -290,7 +290,18 @@ function cards(list, site) {
     }
     if (v.vod_remarks) poster.append(el('span', { class: 'badge' }, v.vod_remarks));
     poster.append(el('span', { class: 'play' }, icon('play')));
-    const open = () => String(v.vod_id).startsWith('msearch:') ? ($('#onlySite').checked = false, $('#q').value = v.vod_name, search(v.vod_name)) : openDetail(site, v.vod_id);
+    const open = () => {
+      if (String(v.vod_id).startsWith('msearch:')) {
+        // These cards are search recommendations. Searching every site must
+        // also clear the "current site only" hint, which a bare checked=false
+        // does not, because it does not fire the checkbox change listener.
+        setSiteOnlySearch(false);
+        $('#q').value = v.vod_name;
+        search(v.vod_name);
+        return;
+      }
+      openDetail(site, v.vod_id);
+    };
     g.append(el('button', { class: 'card', title: v.vod_name || '', onclick: open }, poster,
       el('div', { class: 't' }, v.vod_name || ''), el('div', { class: 's' }, [v.vod_year, v.type_name].filter(Boolean).join(' · ') || '\u00a0')));
   }
@@ -517,7 +528,11 @@ $('#btnSettings').onclick = () => openSettings('subs');
 $('#btnReload').onclick = () => loadSource();
 $('#back').onclick = back;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(e.target.value.trim()); });
-$('#onlySite').addEventListener('change', (e) => ($('#q').placeholder = e.target.checked ? '搜索当前站点' : '搜索全部站点'));
+function setSiteOnlySearch(on) {
+  $('#onlySite').checked = !!on;
+  $('#q').placeholder = on ? '搜索当前站点' : '搜索全部站点';
+}
+$('#onlySite').addEventListener('change', (e) => setSiteOnlySearch(e.target.checked));
 
 (async () => {
   st.settings = await call('GetSettings'); renderSwitcher();

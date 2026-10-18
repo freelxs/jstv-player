@@ -57,7 +57,7 @@ function makeApp(callImpl = async () => ({})) {
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const startup = src.lastIndexOf('\n(async () => {');
   assert.ok(startup > 0, 'find application startup block');
-  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, filtersForCategory };`;
+  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, filtersForCategory, cards };`;
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
@@ -66,6 +66,23 @@ function makeApp(callImpl = async () => ({})) {
 
 const site = (name, api = name) => ({ name, key: name, api });
 const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test('recommendation card searches every site and resets the search hint', async () => {
+  const harness = makeApp(async () => ({}));
+  harness.app.st.sites = [site('豆瓣')];
+  harness.app.st.site = harness.app.st.sites[0];
+  const only = harness.el('#onlySite');
+  const q = harness.el('#q');
+  only.checked = true;
+  only.listeners.change({ target: only });
+  assert.equal(q.placeholder, '搜索当前站点');
+  const grid = harness.app.cards([{ vod_id: 'msearch:1', vod_name: '韩国制造' }], harness.app.st.site);
+  grid.children[0].listeners.click();
+  await settle();
+  assert.equal(only.checked, false);
+  assert.equal(q.value, '韩国制造');
+  assert.equal(q.placeholder, '搜索全部站点');
+});
 
 test('selectSite ignores stale Home success and stale Home failure', async () => {
   for (const fail of [false, true]) {
