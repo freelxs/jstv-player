@@ -59,7 +59,7 @@
 {"filters":{"1":[{"key":"area","name":"地区","init":"美国","value":[{"n":"全部","v":""},{"n":"美国","v":"美国"}]}]}}
 ```
 
-每个筛选项在 UI 中是独立的单选下拉框；用户选择后向 `category` 发送 `filters:{"area":"hk"}`，翻页保留选择，切换分类/站点/订阅清空。空字符串选项视为「全部」，不单独显示。非空 `init` 且能在选项中找到时，进入该分类会先带上这个值。缺失、重复 key、数组/字段类型错误或超出上限时，该分类不显示筛选控件并以空对象请求。这仍不是对任意多选 metadata 变体的支持声明；category 接口层仍接受字符串 map。
+每个筛选项在 UI 中是独立的单选下拉框；用户选择后向 `category` 发送 `filters:{"area":"hk"}`，翻页保留选择，切换分类/站点/订阅清空。空字符串选项视为「全部」，不单独显示。同一筛选项里重复的选项值只保留第一次出现的那项。非空 `init` 且能在选项中找到时，进入该分类会先带上这个值。缺失、重复 key、数组/字段类型错误或超出上限时，该分类不显示筛选控件并以空对象请求。这仍不是对任意多选 metadata 变体的支持声明；category 接口层仍接受字符串 map。
 
 `vod` 字段：`vod_id, vod_name, vod_pic, vod_remarks, vod_year, vod_area, vod_actor, vod_director, vod_content, type_name, vod_play_from, vod_play_url`。
 
