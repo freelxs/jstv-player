@@ -318,6 +318,80 @@ func TestDisablingLANStopsListenerBeforeFailedReload(t *testing.T) {
 	}
 }
 
+func TestConcurrentSettingsWriteKeepsSubscriptionsAndPreferences(t *testing.T) {
+	p := newPlayer(t.TempDir())
+	a, err := p.AddSubscription("A", "http://example.com/a/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var held atomic.Bool
+	prev := beginSettingsWrite
+	beginSettingsWrite = func() {
+		if held.CompareAndSwap(false, true) {
+			close(started)
+			<-release
+		}
+	}
+	t.Cleanup(func() { beginSettingsWrite = prev })
+
+	saved := make(chan error, 1)
+	go func() {
+		s := p.GetSettings()
+		s.Player = "builtin"
+		s.PersistLogs = true
+		saved <- p.SaveSettings(s)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("SaveSettings did not reach the write window")
+	}
+
+	added := make(chan error, 1)
+	go func() {
+		_, err := p.AddSubscription("B", "http://example.com/b/index.js")
+		added <- err
+	}()
+	select {
+	case err := <-added:
+		close(release)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := <-saved; err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("subscription edit ran during an in-flight settings write")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-saved; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-added; err != nil {
+		t.Fatal(err)
+	}
+	got := p.GetSettings()
+	if got.Player != "builtin" || !got.PersistLogs {
+		t.Fatalf("preferences lost: player=%q persist=%v", got.Player, got.PersistLogs)
+	}
+	var sawA, sawB bool
+	for _, sub := range got.Subscriptions {
+		if sub.Name == "A" {
+			sawA = true
+		}
+		if sub.Name == "B" {
+			sawB = true
+		}
+	}
+	if !sawA || !sawB || len(got.Subscriptions) != 2 || got.Active != a.Subscriptions[0].ID {
+		t.Fatalf("subscriptions lost: active=%s subs=%+v", got.Active, got.Subscriptions)
+	}
+}
+
 func TestApproveSourceKeepsPendingTrustWhenPinWriteFails(t *testing.T) {
 	if _, err := catvod.FindNode(""); err != nil {
 		t.Skip(err)
