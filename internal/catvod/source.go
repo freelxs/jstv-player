@@ -9,6 +9,7 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,10 +40,38 @@ var md5re = regexp.MustCompile(`(?i)\b[0-9a-f]{32}\b`)
 // ("…/index.js", "…/index.js.md5"); a directory URL gets "index.js" appended.
 func ScriptURLs(u string) (script, sum string) {
 	u = strings.TrimSpace(u)
+	pu, err := url.Parse(u)
+	if err != nil || pu.Scheme == "" || pu.Host == "" {
+		return scriptURLsRaw(u)
+	}
+	path := pu.Path
 	switch {
-	case strings.HasSuffix(u, ".md5"):
-		return strings.TrimSuffix(u, ".md5"), u
-	case strings.HasSuffix(u, ".js"):
+	case hasSuffixFold(path, ".md5"):
+		pu.Path = trimSuffixFold(path, ".md5")
+		pu.RawPath = ""
+		return pu.String(), u
+	case hasSuffixFold(path, ".js"):
+		pu.Path = path + ".md5"
+		pu.RawPath = ""
+		return u, pu.String()
+	default:
+		if path == "" || !strings.HasSuffix(path, "/") {
+			pu.Path = path + "/"
+		}
+		pu.RawPath = ""
+		base := *pu
+		base.Path += "index.js"
+		sumURL := *pu
+		sumURL.Path += "index.js.md5"
+		return base.String(), sumURL.String()
+	}
+}
+
+func scriptURLsRaw(u string) (script, sum string) {
+	switch {
+	case hasSuffixFold(u, ".md5"):
+		return trimSuffixFold(u, ".md5"), u
+	case hasSuffixFold(u, ".js"):
 		return u, u + ".md5"
 	default:
 		if !strings.HasSuffix(u, "/") {
@@ -50,6 +79,17 @@ func ScriptURLs(u string) (script, sum string) {
 		}
 		return u + "index.js", u + "index.js.md5"
 	}
+}
+
+func hasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
+}
+
+func trimSuffixFold(s, suffix string) string {
+	if hasSuffixFold(s, suffix) {
+		return s[:len(s)-len(suffix)]
+	}
+	return s
 }
 
 // Fetch downloads the bundle into dir (cached under dir/source/index.js).

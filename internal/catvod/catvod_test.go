@@ -18,13 +18,21 @@ import (
 )
 
 func TestScriptURLs(t *testing.T) {
-	for in, want := range map[string]string{
-		"https://example.com/b/index.js.md5": "https://example.com/b/index.js",
-		"https://example.com/b/index.js":     "https://example.com/b/index.js",
-		"https://example.com/b":              "https://example.com/b/index.js",
-	} {
-		if got, _ := ScriptURLs(in); got != want {
-			t.Errorf("%s: got %s", in, got)
+	cases := []struct{ in, script, sum string }{
+		{"https://example.com/b/index.js.md5", "https://example.com/b/index.js", "https://example.com/b/index.js.md5"},
+		{"https://example.com/b/index.js", "https://example.com/b/index.js", "https://example.com/b/index.js.md5"},
+		{"https://example.com/b", "https://example.com/b/index.js", "https://example.com/b/index.js.md5"},
+		{"https://example.com/b/", "https://example.com/b/index.js", "https://example.com/b/index.js.md5"},
+		{"https://example.com/b/index.js.md5?token=a+b&x=1", "https://example.com/b/index.js?token=a+b&x=1", "https://example.com/b/index.js.md5?token=a+b&x=1"},
+		{"https://example.com/b/index.js?v=1#top", "https://example.com/b/index.js?v=1#top", "https://example.com/b/index.js.md5?v=1#top"},
+		{"https://user:pass@example.com/cat/index.js.md5", "https://user:pass@example.com/cat/index.js", "https://user:pass@example.com/cat/index.js.md5"},
+		{"https://example.com/b?v=1", "https://example.com/b/index.js?v=1", "https://example.com/b/index.js.md5?v=1"},
+		{"https://example.com/Cat/Index.JS", "https://example.com/Cat/Index.JS", "https://example.com/Cat/Index.JS.md5"},
+	}
+	for _, tc := range cases {
+		got, sum := ScriptURLs(tc.in)
+		if got != tc.script || sum != tc.sum {
+			t.Errorf("%s:\n script got %s want %s\n sum got %s want %s", tc.in, got, tc.script, sum, tc.sum)
 		}
 	}
 }
