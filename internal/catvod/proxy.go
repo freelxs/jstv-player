@@ -236,13 +236,17 @@ func proxyName(u string) string {
 		}
 	}
 	name = safeName.ReplaceAllString(name, "_")
-	if len(name) > 80 {
-		name = name[len(name)-80:]
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	// Long paths are often base64 of the real media URL. Keeping the tail
+	// put signatures into the local filename the player and logs can see.
+	if len(stem) > 40 {
+		stem = "stream"
 	}
-	if path.Ext(name) == "" {
-		name += ".bin"
+	if ext == "" {
+		ext = ".bin"
 	}
-	return name
+	return stem + ext
 }
 
 // segName names a playlist entry: playlists keep .m3u8; media segments
