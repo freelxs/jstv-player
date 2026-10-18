@@ -355,7 +355,6 @@ func (p *Player) ApproveSource() error {
 	}
 	p.mu.Lock()
 	pending, ok := p.pendingTrust[sub.ID]
-	delete(p.pendingTrust, sub.ID)
 	p.mu.Unlock()
 	if !ok {
 		return errors.New("没有待确认的插件版本")
@@ -367,6 +366,11 @@ func (p *Player) ApproveSource() error {
 	if err := writePin(filepath.Join(p.dir, "subs", sub.ID), pending); err != nil {
 		return err
 	}
+	p.mu.Lock()
+	if cur, still := p.pendingTrust[sub.ID]; still && cur == pending {
+		delete(p.pendingTrust, sub.ID)
+	}
+	p.mu.Unlock()
 	return nil
 }
 
@@ -413,13 +417,20 @@ func nodePermissionFlags(help string) []string {
 }
 
 func (p *Player) client(api string) (*catvod.Client, error) {
+	return p.clientWithContext(context.Background(), api)
+}
+
+func (p *Player) clientWithContext(ctx context.Context, api string) (*catvod.Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	p.mu.Lock()
 	h := p.host
 	p.mu.Unlock()
 	if h == nil || h.Base() == "" {
 		return nil, errors.New("源未加载")
 	}
-	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN}
+	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN, Context: ctx}
 	if api != "" {
 		if err := p.initSite(api, c, h); err != nil {
 			return nil, err
@@ -491,10 +502,17 @@ func (p *Player) Search(api, wd string, page int) (catvod.M, error) {
 // SearchAll searches every searchable site at once, streaming each site's
 // answer to the page as it arrives.
 func (p *Player) SearchAll(ctx context.Context, wd string, out *mygo.Channel[SiteResults]) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	p.mu.Lock()
 	sites := append([]catvod.Site(nil), p.sites...)
 	p.mu.Unlock()
 	var wg sync.WaitGroup
+	var sendMu sync.Mutex
+	var sendErr error
 	sem := make(chan struct{}, 6)
 	for _, s := range sites {
 		if !s.CanSearch() {
@@ -503,25 +521,53 @@ func (p *Player) SearchAll(ctx context.Context, wd string, out *mygo.Channel[Sit
 		wg.Add(1)
 		go func(s catvod.Site) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
 			defer func() { <-sem }()
 			if ctx.Err() != nil {
 				return
 			}
 			r := SiteResults{Site: s}
-			m, err := p.Search(s.API, wd, 1)
+			c, err := p.clientWithContext(ctx, s.API)
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				r.Error = err.Error()
-			} else if l, ok := m["list"].([]any); ok {
-				r.List = l
+			} else {
+				var m catvod.M
+				m, err = c.Search(s.API, wd, 1)
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					r.Error = err.Error()
+				} else if l, ok := m["list"].([]any); ok {
+					r.List = l
+				}
 			}
-			if len(r.List) > 0 || r.Error != "" {
-				out.Send(r)
+			if len(r.List) == 0 && r.Error == "" {
+				return
+			}
+			sendMu.Lock()
+			defer sendMu.Unlock()
+			if sendErr != nil || ctx.Err() != nil {
+				return
+			}
+			if err := out.Send(r); err != nil {
+				sendErr = err
+				cancel()
 			}
 		}(s)
 	}
 	wg.Wait()
-	return nil
+	if sendErr != nil {
+		return sendErr
+	}
+	return ctx.Err()
 }
 
 // Detail returns a vod with its play lines.

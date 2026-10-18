@@ -48,7 +48,12 @@ function makeApp(callImpl = async () => ({})) {
     createElement: (tag) => new MockElement(tag),
     addEventListener() {},
   };
-  const window = { mygo: { call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args), channel: () => 'mock-channel' } };
+  const channels = [];
+  const window = { mygo: { call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args), channel: (onmessage) => {
+    const ch = { onmessage, closed: false, close() { this.closed = true; } };
+    channels.push(ch);
+    return ch;
+  } } };
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const startup = src.lastIndexOf('\n(async () => {');
   assert.ok(startup > 0, 'find application startup block');
@@ -56,7 +61,7 @@ function makeApp(callImpl = async () => ({})) {
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
-  return { app: context.app, el: get };
+  return { app: context.app, el: get, channels };
 }
 
 const site = (name, api = name) => ({ name, key: name, api });
@@ -217,6 +222,25 @@ test('rejecting first-use trust does not approve or retry the source', async () 
   assert.equal(approvals, 0);
   assert.equal(loads, 1);
   assert.match(app.el('#toast').textContent, /未批准/);
+});
+
+test('all-site search closes its channel when the user navigates away', async () => {
+  const pending = deferred();
+  const harness = makeApp((method) => method === 'SearchAll' ? pending.promise : Promise.resolve({ list: [] }));
+  harness.el('#onlySite').checked = false;
+  harness.app.st.sites = [site('one')];
+  harness.app.st.site = site('one');
+  harness.app.st.home = { class: [] };
+  const pendingSearch = harness.app.search('万物生灵');
+  await settle();
+  assert.equal(harness.channels.length, 1);
+  assert.equal(harness.channels[0].closed, false);
+  const category = harness.app.openCategory('1', 1);
+  await settle();
+  assert.equal(harness.channels[0].closed, true);
+  pending.resolve();
+  await pendingSearch;
+  await category;
 });
 
 test('search and detail ignore stale successes and failures', async () => {

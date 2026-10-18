@@ -317,3 +317,47 @@ func TestDisablingLANStopsListenerBeforeFailedReload(t *testing.T) {
 		t.Fatal("failed loopback reload left a host running")
 	}
 }
+
+func TestApproveSourceKeepsPendingTrustWhenPinWriteFails(t *testing.T) {
+	if _, err := catvod.FindNode(""); err != nil {
+		t.Skip(err)
+	}
+	script, err := os.ReadFile("internal/catvod/testdata/mockspider.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/index.js") {
+			_, _ = w.Write(script)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	settings, err := p.AddSubscription("mock", srv.URL+"/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.LoadSource()
+	if err != nil || !r.TrustRequired {
+		t.Fatalf("expected a trust prompt: %+v %v", r, err)
+	}
+	sourceDir := filepath.Join(p.dir, "subs", settings.Subscriptions[0].ID, "source")
+	if err := os.RemoveAll(sourceDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourceDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ApproveSource(); err == nil {
+		t.Fatal("expected pin write to fail")
+	}
+	if err := os.Remove(sourceDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatalf("approval was dropped after the failed pin write: %v", err)
+	}
+}
