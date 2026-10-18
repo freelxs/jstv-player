@@ -90,6 +90,38 @@ test('openCategory ignores stale success and stale failure, including same-site 
   }
 });
 
+test('catvod filter metadata uses name, n/v values, and init', () => {
+  const app = makeApp().app;
+  const home = { filters: { '1': [
+    { key: 'area', name: '地区', init: '美国', value: [{ n: '全部', v: '' }, { n: '美国', v: '美国' }, { n: '日本', v: '日本' }] },
+    { key: 'year', name: '年份', value: [{ n: '2024', v: 2024 }] },
+  ] } };
+  const parsed = app.filtersForCategory(home, 1);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].label, '地区');
+  assert.equal(parsed[0].init, '美国');
+  assert.deepEqual([...parsed[0].options.map((o) => o.value)], ['美国', '日本']);
+  assert.equal(parsed[1].options[0].value, '2024');
+  assert.equal(parsed[1].options[0].label, '2024');
+});
+
+test('opening a category sends catvod init filters', async () => {
+  const calls = [];
+  const app = makeApp(async (method, ...args) => {
+    calls.push([method, ...args]);
+    if (method === 'Home') return { class: [{ type_id: '1', type_name: '电影' }], filters: {
+      '1': [{ key: 'area', name: '地区', init: '美国', value: [{ n: '全部', v: '' }, { n: '美国', v: '美国' }] }],
+    } };
+    if (method === 'Category') return { list: [{ vod_id: 'x', vod_name: 'mock' }], pagecount: 2 };
+    return {};
+  });
+  app.app.st.sites = [site('first')];
+  await app.app.selectSite(site('first'));
+  const cats = calls.filter((c) => c[0] === 'Category');
+  assert.ok(cats.length >= 1);
+  assert.deepEqual({ ...cats.at(-1)[4] }, { area: '美国' });
+});
+
 test('filter metadata is strict, safe on malformed input, and scoped to the selected category', () => {
   const app = makeApp().app;
   const supported = { filters: { '1': [{ key: 'area', label: '地区', options: [{ value: 'hk', label: '香港' }] }], '2': [] } };
