@@ -38,6 +38,9 @@ export interface LoadResult {
   mismatch: boolean;
   node: string;
   subscription: Subscription;
+  trustRequired?: boolean;
+  trustSHA256?: string;
+  trustURL?: string;
 }
 
 /** Settings are kept in settings.json in the user data directory. */
@@ -69,6 +72,9 @@ export interface Settings {
    * the server listens on loopback only.
    */
   allowLan: boolean;
+  allowLanMedia: boolean;
+  inheritNodeEnv: boolean;
+  persistLogs: boolean;
 }
 
 /** Site is one entry of GET /config → video.sites. */
@@ -114,15 +120,29 @@ export const Player = {
   addSubscription(name: string, url: string): Promise<Settings> {
     return call("Player.AddSubscription", name, url);
   },
+  /**
+   * ApproveSource records the exact currently active URL and hash presented by
+   * the UI. It never starts the bundle; the caller must explicitly reload.
+   */
+  approveSource(): Promise<void> {
+    return call("Player.ApproveSource");
+  },
   /** Category lists one page of a category. */
   category(api: string, tid: string, page: number, filters: Record<string, string>): Promise<Record<string, unknown>> {
     return call("Player.Category", api, tid, page, filters);
+  },
+  /** ClearLogs removes only in-memory and application-owned persistent log files. */
+  clearLogs(): Promise<void> {
+    return call("Player.ClearLogs");
   },
   /** Detail returns a vod with its play lines. */
   detail(api: string, id: string): Promise<DetailResult | null> {
     return call("Player.Detail", api, id);
   },
-  /** GetHistory returns the last episode played of a show, or nil. */
+  /**
+   * GetHistory returns the last episode played of a show in the active
+   * subscription, or nil.
+   */
   getHistory(api: string, vodID: string): Promise<HistoryEntry | null> {
     return call("Player.GetHistory", api, vodID);
   },
@@ -162,6 +182,13 @@ export const Player = {
    */
   playEpisodes(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<Stream[]> {
     return call("Player.PlayEpisodes", api, vodID, show, flag, eps, start);
+  },
+  /**
+   * ProbeNodePermissions reports which permission-related flags are advertised
+   * by the selected Node binary. It does not enable them or claim sandboxing.
+   */
+  probeNodePermissions(): Promise<string> {
+    return call("Player.ProbeNodePermissions");
   },
   /**
    * RemoveSubscription deletes a subscription and its downloaded files. When
