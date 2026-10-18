@@ -171,7 +171,7 @@ async function selectSite(s) {
       for (const c of cls.slice(0, 4)) {
         if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
         try {
-          const r = await call('Category', s.api, String(c.type_id), 1, {});
+          const r = await call('Category', s.api, String(c.type_id), 1, defaultFilters(c.type_id));
           if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
           if ((r.list || []).length) { openCategory(c.type_id, 1); return; }
         } catch (e) {
@@ -183,23 +183,43 @@ async function selectSite(s) {
   } catch (e) { if (browseRequests.current(request) && seq === st.loadSeq && st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
 
+function filterText(v, max) {
+  if (typeof v === 'string') return v.length <= max ? v : null;
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const s = String(v);
+    return s.length <= max ? s : null;
+  }
+  return null;
+}
 function filtersForCategory(home, tid) {
   const raw = home && home.filters && typeof home.filters === 'object' && !Array.isArray(home.filters) ? home.filters[String(tid)] : null;
   if (!Array.isArray(raw) || raw.length > 20) return [];
   const parsed = [];
   for (const f of raw) {
-    if (!f || typeof f !== 'object' || Array.isArray(f) || typeof f.key !== 'string' || !f.key.trim() || f.key.length > 80 ||
-        typeof f.label !== 'string' || !f.label.trim() || f.label.length > 80 || !Array.isArray(f.options) || !f.options.length || f.options.length > 50) return [];
+    if (!f || typeof f !== 'object' || Array.isArray(f) || typeof f.key !== 'string' || !f.key.trim() || f.key.length > 80) return [];
+    const label = typeof f.label === 'string' ? f.label : typeof f.name === 'string' ? f.name : '';
+    if (!label.trim() || label.length > 80) return [];
+    const rawOptions = Array.isArray(f.options) ? f.options : Array.isArray(f.value) ? f.value : null;
+    if (!rawOptions || !rawOptions.length || rawOptions.length > 50) return [];
     const options = [];
-    for (const o of f.options) {
-      if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.value !== 'string' || o.value.length > 120 ||
-          typeof o.label !== 'string' || !o.label.trim() || o.label.length > 80) return [];
-      options.push({ value: o.value, label: o.label });
+    for (const o of rawOptions) {
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return [];
+      // Documented {value,label} stays strict. CatVod {n,v} also accepts numbers.
+      const value = typeof o.value === 'string' ? (o.value.length <= 120 ? o.value : null) : filterText(o.v, 120);
+      const olabel = typeof o.label === 'string' ? o.label : filterText(o.n, 80);
+      if (value == null || olabel == null || !String(olabel).trim() || olabel.length > 80) return [];
+      if (value !== '') options.push({ value, label: olabel });
     }
-    if (new Set(options.map((o) => o.value)).size !== options.length || parsed.some((x) => x.key === f.key)) return [];
-    parsed.push({ key: f.key, label: f.label, options });
+    if (!options.length || new Set(options.map((o) => o.value)).size !== options.length || parsed.some((x) => x.key === f.key)) return [];
+    const init = typeof f.init === 'string' && options.some((o) => o.value === f.init) ? f.init : '';
+    parsed.push({ key: f.key, label, options, init });
   }
   return parsed;
+}
+function defaultFilters(tid) {
+  const out = {};
+  for (const f of filtersForCategory(st.home, tid)) if (f.init) out[f.key] = f.init;
+  return out;
 }
 function renderFilters(tid) {
   const box = $('#filters'); box.replaceChildren();
@@ -220,7 +240,7 @@ function renderFilters(tid) {
 }
 async function openCategory(tid, page, selected = null) {
   const request = browseRequests.begin();
-  if (String(st.tid) !== String(tid)) st.filters = {};
+  if (String(st.tid) !== String(tid)) st.filters = defaultFilters(tid);
   else if (selected) st.filters = { ...selected };
   st.tid = tid; st.page = page;
   renderFilters(tid);
