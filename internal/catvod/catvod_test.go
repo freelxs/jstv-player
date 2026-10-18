@@ -1148,3 +1148,24 @@ func TestPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPreflightTimeoutDoesNotRevealURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer srv.Close()
+	c := &http.Client{Timeout: 100 * time.Millisecond}
+	_, err := Preflight(c, srv.URL+"/secret-path/media.m3u8", nil)
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	if strings.Contains(err.Error(), "secret-path") || strings.Contains(err.Error(), srv.Listener.Addr().String()) {
+		t.Fatalf("playback error includes the address: %v", err)
+	}
+	if !strings.Contains(err.Error(), "无法连接播放地址") || !strings.Contains(err.Error(), "超时") {
+		t.Fatal(err)
+	}
+}

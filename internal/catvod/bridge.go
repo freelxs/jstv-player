@@ -1,6 +1,8 @@
 package catvod
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -329,7 +331,13 @@ func Preflight(c *http.Client, u string, headers map[string]string) (html bool, 
 	req.Header.Set("Range", "bytes=0-1023")
 	resp, err := c.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("无法连接播放地址: %v", err)
+		// The transport error names the URL. The page shows this string in a
+		// toast, so keep the reason and drop the address.
+		var target *url.Error
+		if errors.As(err, &target) && target.Timeout() || errors.Is(err, context.DeadlineExceeded) {
+			return false, errors.New("无法连接播放地址：等待响应超时")
+		}
+		return false, errors.New("无法连接播放地址")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
