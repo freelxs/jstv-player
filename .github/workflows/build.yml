@@ -211,7 +211,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           path: release-assets
@@ -226,12 +226,21 @@ jobs:
           GITHUB_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
+          SOURCE_VERSION="$VERSION" bash scripts/validate-release-tag.sh "$TAG"
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          else
+            [[ "$(git rev-parse HEAD)" == "$(git rev-parse "$TAG^{commit}")" ]]
+          fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists. Existing releases and assets are never overwritten; bump mygo.json for a new release." >&2
             exit 1
           fi
-          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}" >/dev/null 2>&1; then
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
             [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]] || { echo "Tag $TAG disappeared before publishing." >&2; exit 1; }
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "refs/tags/$TAG"
           fi
