@@ -4,6 +4,18 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
 const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0 };
 const browseRequests = BrowseRequestToken();
+let activeSearch = null;
+function closeActiveSearch() {
+  const ch = activeSearch;
+  activeSearch = null;
+  if (ch && typeof ch.close === 'function') {
+    try { ch.close(); } catch (e) { /* already closed */ }
+  }
+}
+const beginBrowse = browseRequests.begin.bind(browseRequests);
+const invalidateBrowse = browseRequests.invalidate.bind(browseRequests);
+browseRequests.begin = () => { closeActiveSearch(); return beginBrowse(); };
+browseRequests.invalidate = () => { closeActiveSearch(); invalidateBrowse(); };
 
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
 
@@ -310,6 +322,7 @@ async function search(wd) {
   st.stack = []; show(render);
   const isTop = () => st.stack[st.stack.length - 1] === render;
   const ch = window.mygo.channel((r) => { if (!browseRequests.current(request)) return; r.list = r.list || []; results.push(r); if (isTop()) render(); });
+  activeSearch = ch;
   try { await call('SearchAll', wd, ch); } catch (e) { if (browseRequests.current(request)) toast(errMsg(e), { err: true }); }
   if (!browseRequests.current(request)) return;
   done = true; if (isTop()) render();
