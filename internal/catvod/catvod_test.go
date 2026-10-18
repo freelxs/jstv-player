@@ -732,26 +732,29 @@ func TestIsWebPage(t *testing.T) {
 func TestLocalizeURL(t *testing.T) {
 	src := "http://127.0.0.1:60444"
 	for in, want := range map[string]string{
-		"http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8": "http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8",
-		"http://127.0.0.1:59100/spider/mock/3/proxy/x.m3u8": "http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8",
-		"http://localhost:9988/spider/a/3/proxy/1.m3u8":     "http://127.0.0.1:60444/spider/a/3/proxy/1.m3u8",
-		"http://127.0.0.1:9979/play?vid=1":                  "http://127.0.0.1:5555/play?vid=1",
-		"https://cdn.example.com/a.m3u8":                    "https://cdn.example.com/a.m3u8",
-		"https://127.0.0.1:59100/website/":                  "https://127.0.0.1:59100/website/",
-		"data:text/html,hello":                              "data:text/html,hello",
-		"javascript:alert(1)":                               "javascript:alert(1)",
-		"http://127.0.0.1:59100/other-service/":             "http://127.0.0.1:59100/other-service/",
+		"http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8":                                   "http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8",
+		"http://127.0.0.1:59100/spider/mock/3/proxy/x.m3u8":                                   "http://127.0.0.1:60444/spider/mock/3/proxy/x.m3u8",
+		"http://localhost:9988/spider/a/3/proxy/1.m3u8":                                       "http://127.0.0.1:60444/spider/a/3/proxy/1.m3u8",
+		"http://127.0.0.1:9979/play?vid=1":                                                    "http://127.0.0.1:5555/play?vid=1",
+		"https://cdn.example.com/a.m3u8":                                                      "https://cdn.example.com/a.m3u8",
+		"https://127.0.0.1:59100/website/":                                                    "https://127.0.0.1:59100/website/",
+		"data:text/html,hello":                                                                "data:text/html,hello",
+		"javascript:alert(1)":                                                                 "javascript:alert(1)",
+		"http://127.0.0.1:59100/other-service/":                                               "http://127.0.0.1:59100/other-service/",
+		"http://127.0.0.1:59100/imageProxy?url=https%3A%2F%2Fimg.example%2Fa.jpg&cache=86400": "http://127.0.0.1:60444/imageProxy?url=https%3A%2F%2Fimg.example%2Fa.jpg&cache=86400",
+		"http://127.0.0.1:59100/imageProxyExtra":                                              "http://127.0.0.1:59100/imageProxyExtra",
 	} {
 		if got := LocalizeURL(in, src, "127.0.0.1:5555"); got != want {
 			t.Errorf("%s -> %s", in, got)
 		}
 	}
 	for in, want := range map[string]string{
-		"/website/?mode=edit#qr":                       "http://127.0.0.1:60444/website/?mode=edit#qr",
-		"website/?mode=edit#qr":                        "http://127.0.0.1:60444/website/?mode=edit#qr",
-		"http://127.0.0.1:59100/website/?mode=edit#qr": "http://127.0.0.1:60444/website/?mode=edit#qr",
-		"http://[::1]:59100/website/?mode=edit#qr":     "http://127.0.0.1:60444/website/?mode=edit#qr",
-		"//127.0.0.1:59100/website/?mode=edit#qr":      "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"/website/?mode=edit#qr":                            "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"website/?mode=edit#qr":                             "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"http://127.0.0.1:59100/website/?mode=edit#qr":      "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"http://[::1]:59100/website/?mode=edit#qr":          "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"//127.0.0.1:59100/website/?mode=edit#qr":           "http://127.0.0.1:60444/website/?mode=edit#qr",
+		"/imageProxy?url=https%3A%2F%2Fimg.example%2Fa.jpg": "http://127.0.0.1:60444/imageProxy?url=https%3A%2F%2Fimg.example%2Fa.jpg",
 	} {
 		if got := LocalizeURL(in, src, "127.0.0.1:5555"); got != want {
 			t.Errorf("%s -> %s; want %s", in, got, want)

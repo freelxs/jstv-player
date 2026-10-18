@@ -215,7 +215,8 @@ func LocalizeURL(u, sourceBase, bridgeAddr string) string {
 func sourceOwnedRoute(path string) bool {
 	return path == "/website" || strings.HasPrefix(path, "/website/") ||
 		strings.HasPrefix(path, "/spider/") || path == "/m3u8-clean" ||
-		path == "/proxy" || strings.HasPrefix(path, "/proxy/")
+		path == "/proxy" || strings.HasPrefix(path, "/proxy/") ||
+		path == "/imageProxy" || strings.HasPrefix(path, "/imageProxy/")
 }
 
 func isInterfaceIP(host string) bool {
