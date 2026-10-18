@@ -127,6 +127,16 @@ test('opening a category sends catvod init filters', async () => {
   assert.deepEqual({ ...cats.at(-1)[4] }, { area: '美国' });
 });
 
+test('duplicate catvod filter options do not hide the rest of the category', () => {
+  const app = makeApp().app;
+  const parsed = app.filtersForCategory({ filters: { '1': [
+    { key: 'cid', name: '类型', value: [{ n: '全部', v: '-1' }, { n: '全部', v: '-1' }, { n: '青春校园', v: '5' }] },
+  ] } }, '1');
+  assert.equal(parsed.length, 1);
+  assert.deepEqual([...parsed[0].options.map((o) => o.value)], ['-1', '5']);
+  assert.deepEqual([...parsed[0].options.map((o) => o.label)], ['全部', '青春校园']);
+});
+
 test('filter metadata is strict, safe on malformed input, and scoped to the selected category', () => {
   const app = makeApp().app;
   const supported = { filters: { '1': [{ key: 'area', label: '地区', options: [{ value: 'hk', label: '香港' }] }], '2': [] } };

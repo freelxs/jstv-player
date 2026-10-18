@@ -214,13 +214,16 @@ function filtersForCategory(home, tid) {
     const rawOptions = Array.isArray(f.options) ? f.options : Array.isArray(f.value) ? f.value : null;
     if (!rawOptions || !rawOptions.length || rawOptions.length > 50) return [];
     const options = [];
+    const seen = new Set();
     for (const o of rawOptions) {
       if (!o || typeof o !== 'object' || Array.isArray(o)) return [];
       // Documented {value,label} stays strict. CatVod {n,v} also accepts numbers.
       const value = typeof o.value === 'string' ? (o.value.length <= 120 ? o.value : null) : filterText(o.v, 120);
       const olabel = typeof o.label === 'string' ? o.label : filterText(o.n, 80);
       if (value == null || olabel == null || !String(olabel).trim() || olabel.length > 80) return [];
-      if (value !== '') options.push({ value, label: olabel });
+      // Plugins repeat the blank "全部" choice. Keep the first value so the
+      // rest of the filter stays usable.
+      if (value !== '' && !seen.has(value)) { seen.add(value); options.push({ value, label: olabel }); }
     }
     if (!options.length || new Set(options.map((o) => o.value)).size !== options.length || parsed.some((x) => x.key === f.key)) return [];
     const init = typeof f.init === 'string' && options.some((o) => o.value === f.init) ? f.init : '';
