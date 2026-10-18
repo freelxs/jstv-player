@@ -24,8 +24,12 @@ grep -Fq 'group: jstv-player-release-${{ needs.resolve-release.outputs.release_t
 grep -Fq 'cancel-in-progress: false' "$WORKFLOW" || fail "release workflows must not cancel in-progress releases"
 grep -Fq 'git push origin "refs/tags/$TAG"' "$WORKFLOW" || fail "main release must create its version tag after builds"
 grep -Fq "git config user.name 'github-actions[bot]'" "$WORKFLOW" || fail "annotated release tags must configure their Git author"
-grep -Fq 'SOURCE_VERSION="$VERSION" bash scripts/validate-release-tag.sh "$TAG"' "$WORKFLOW" || fail "release job must revalidate the remote tag immediately before publishing"
+grep -Fq 'bash scripts/validate-release-tag.sh "$TAG"' "$WORKFLOW" || fail "release job must revalidate the remote tag immediately before publishing"
 grep -Fq 'ls_status" -ne 2' "$SOURCE_ROOT/scripts/validate-release-tag.sh" || fail "tag validation must distinguish missing refs from remote query errors"
+grep -Fq 'source_sha: ${{ steps.validate.outputs.source_sha }}' "$WORKFLOW" || fail "resolver must expose the immutable validated source commit"
+grep -Fq 'ref: ${{ needs.resolve-release.outputs.source_sha }}' "$WORKFLOW" || fail "test and build jobs must checkout the validated source commit"
+grep -Fq 'SOURCE_VERSION: ${{ needs.resolve-release.outputs.release_version }}' "$WORKFLOW" || fail "release validation must use the validated tag source version"
+grep -Fq 'ref: ${{ github.sha }}' "$WORKFLOW" || fail "release job must checkout workflow source for recovery helpers"
 grep -Fq 'needs.resolve-release.outputs.release_tag' "$WORKFLOW" || fail "release jobs must use the validated tag"
 grep -Fq 'gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"' "$WORKFLOW" || fail "release creation must verify the existing tag and specify repository explicitly"
 grep -Fq 'mygo.json' "$SOURCE_ROOT/README.md" || fail "README must document version bump requirements"
@@ -61,6 +65,7 @@ git -C "$GIT_FIXTURE/work" add mygo.json
 git -C "$GIT_FIXTURE/work" commit -qm tagged-source
 TAGGED_SHA="$(git -C "$GIT_FIXTURE/work" rev-parse HEAD)"
 git -C "$GIT_FIXTURE/work" tag -a v0.3.3 -m fixture
+[[ ! -e "$GIT_FIXTURE/work/scripts/validate-release-tag.sh" ]] || fail "legacy tag fixture unexpectedly contains the new helper"
 git -C "$GIT_FIXTURE/work" push -q origin main --tags
 printf 'later commit\n' > "$GIT_FIXTURE/work/change.txt"
 git -C "$GIT_FIXTURE/work" add change.txt
@@ -71,6 +76,7 @@ if (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB
 fi
 (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$TAGGED_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) || fail "same-commit tag should pass validation"
 (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.3.3 GITHUB_SHA="$TAGGED_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) || fail "tag push recovery should validate existing tag"
+(cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.4 GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) || fail "manual recovery should validate version from the original tag"
 (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.4 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$CONFLICT_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.4) || fail "new main version should be allowed before its tag is created"
 git -C "$GIT_FIXTURE/work" remote set-url origin "$GIT_FIXTURE/missing.git"
 if (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.4 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$CONFLICT_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.4) >/dev/null 2>&1; then

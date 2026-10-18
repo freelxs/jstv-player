@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.validate.outputs.release_tag }}
+      source_sha: ${{ steps.validate.outputs.source_sha }}
+      release_version: ${{ steps.validate.outputs.release_version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,11 +39,21 @@ jobs:
           [[ -n "$VERSION" ]] || { echo "Could not read version from mygo.json." >&2; exit 1; }
           export SOURCE_VERSION="$VERSION"
           RELEASE_TAG="$(bash scripts/resolve-release-tag.sh)"
+          SOURCE_SHA="$GITHUB_SHA"
+          RELEASE_VERSION="$VERSION"
           if [[ -z "$RELEASE_TAG" ]]; then
+            echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+            echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           SOURCE_VERSION="$VERSION" bash scripts/validate-release-tag.sh "$RELEASE_TAG"
+          if git rev-parse "$RELEASE_TAG^{commit}" >/dev/null 2>&1; then
+            SOURCE_SHA="$(git rev-parse "$RELEASE_TAG^{commit}")"
+            RELEASE_VERSION="$(git show "$RELEASE_TAG:mygo.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
+          fi
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
   test:
     needs: resolve-release
@@ -53,21 +65,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
+          ref: ${{ needs.resolve-release.outputs.source_sha }}
       - name: Verify checked-out release source
         if: needs.resolve-release.outputs.release_tag != ''
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ needs.resolve-release.outputs.source_sha }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
-            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          else
-            [[ "$(git describe --tags --exact-match HEAD)" == "$RELEASE_TAG" ]]
-          fi
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
           VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
           [[ "$RELEASE_TAG" == "v$VERSION" ]]
       - uses: actions/setup-go@v7
@@ -104,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
+          ref: ${{ needs.resolve-release.outputs.source_sha }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -211,7 +218,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@v8
         with:
           path: release-assets
@@ -224,14 +231,20 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ needs.resolve-release.outputs.source_sha }}
+          SOURCE_VERSION: ${{ needs.resolve-release.outputs.release_version }}
         run: |
           set -euo pipefail
-          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
-          SOURCE_VERSION="$VERSION" bash scripts/validate-release-tag.sh "$TAG"
+          bash scripts/validate-release-tag.sh "$TAG"
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
             [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          fi
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            [[ "$(git rev-parse "$TAG^{commit}")" == "$SOURCE_SHA" ]]
           else
-            [[ "$(git rev-parse HEAD)" == "$(git rev-parse "$TAG^{commit}")" ]]
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]
+            [[ "$SOURCE_SHA" == "$GITHUB_SHA" ]]
+            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists. Existing releases and assets are never overwritten; bump mygo.json for a new release." >&2
