@@ -48,6 +48,10 @@ type proxyGrant struct {
 }
 
 const proxyResourceTTL = 2 * time.Hour
+
+// defaultMediaUserAgent is sent when a plugin play response does not name
+// one. Many hosts reject Go's default client token.
+const defaultMediaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 const maxProxyResources = 16384
 const maxProxyGrants = 4096
 
@@ -312,6 +316,12 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for k, v := range h {
 		req.Header.Set(k, v)
 	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", defaultMediaUserAgent)
+	}
+	// Leave content decoding to the HTTP transport. Forwarding this header
+	// makes it pass gzip bytes through to players that expect media.
+	req.Header.Del("Accept-Encoding")
 	looksM3U8 := strings.HasSuffix(strings.ToLower(tu.Path), ".m3u8") || strings.HasSuffix(strings.ToLower(resource.Name), ".m3u8")
 	if rg := r.Header.Get("Range"); rg != "" && !looksM3U8 {
 		req.Header.Set("Range", rg)
@@ -338,20 +348,23 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, err.Error(), 502)
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	bodyReader := bufio.NewReader(resp.Body)
+	prefix, _ := bodyReader.Peek(64)
 	ct := resp.Header.Get("Content-Type")
-	isM3U8 := strings.Contains(strings.ToLower(ct), "mpegurl") || looksM3U8
+	isM3U8 := strings.Contains(strings.ToLower(ct), "mpegurl") || looksM3U8 || playlistMagic(prefix)
 	if isM3U8 && (resp.StatusCode == 200 || resp.StatusCode == 206) {
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		body, err := io.ReadAll(io.LimitReader(bodyReader, 32<<20))
 		if err != nil {
-			http.Error(w, err.Error(), 502)
+			http.Error(w, "upstream request failed", http.StatusBadGateway)
 			return
 		}
-		if bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U")) {
+		if playlistMagic(body) {
+			body = bytes.TrimPrefix(bytes.TrimSpace(body), []byte{0xEF, 0xBB, 0xBF})
 			base := resp.Request.URL
 			if base == nil {
 				base = tu
@@ -387,7 +400,15 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	io.Copy(w, bodyReader)
+}
+
+// playlistMagic reports an HLS playlist, including a leading UTF-8 BOM.
+func playlistMagic(b []byte) bool {
+	b = bytes.TrimSpace(b)
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
+	b = bytes.TrimSpace(b)
+	return bytes.HasPrefix(b, []byte("#EXTM3U"))
 }
 
 func sameOrigin(a, b *url.URL) bool {
