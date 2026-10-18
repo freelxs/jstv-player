@@ -1,6 +1,8 @@
 package catvod
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -260,6 +262,47 @@ func TestHostStartContextCancellationStopsChild(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("cancellation did not invoke plugin stop")
+	}
+}
+
+func TestHostKeepsReadingAfterOversizedLogLine(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "longlog.js")
+	code := `module.exports = { start() {
+  console.log("X".repeat(2 * 1024 * 1024));
+  console.log("JSTV_AFTER_LONG");
+  const s = globalThis.catServerFactory((req, res) => {
+    res.end(JSON.stringify({ video: { sites: [] } }));
+  });
+  s.listen();
+}, stop() {} };`
+	if err := os.WriteFile(script, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(chan struct{}, 1)
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script, LogFunc: func(line string) {
+		if strings.Contains(line, "JSTV_AFTER_LONG") {
+			select {
+			case seen <- struct{}{}:
+			default:
+			}
+		}
+	}}
+	if err := h.Start(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop()
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("log reader stopped at the oversized line")
+	}
+	if _, err := (&Client{Base: h.Base()}).Config(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -928,6 +971,135 @@ func TestClientLocalizesVODPostersOnBrowseEndpoints(t *testing.T) {
 				t.Fatalf("ordinary text was rewritten: %#v", vod["vod_name"])
 			}
 		})
+	}
+}
+
+func TestProxyRewritesExtensionlessPlaylist(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/media" {
+			_, _ = w.Write([]byte("TS"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("\xef\xbb\xbf#EXTM3U\nseg.ts\n"))
+	}))
+	defer up.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(p.WrapAlways(up.URL+"/media", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), "#EXTM3U") || !strings.Contains(string(b), "/p/") || !strings.Contains(string(b), "/seg.ts") {
+		t.Fatalf("extensionless playlist was not rewritten: %d %s", resp.StatusCode, b)
+	}
+}
+
+func TestProxyErrorHidesUpstreamURL(t *testing.T) {
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "super-secret-token"
+	u := p.WrapAlways("http://127.0.0.1:1/media.mp4?sig="+secret, map[string]string{"Referer": "https://example.com/"})
+	resp, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status %d body %s", resp.StatusCode, b)
+	}
+	if strings.Contains(string(b), secret) || strings.Contains(string(b), "media.mp4") {
+		t.Fatalf("upstream URL leaked: %s", b)
+	}
+}
+
+func TestProxySuppliesUserAgentAndDoesNotForwardAcceptEncoding(t *testing.T) {
+	var ua, ae string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		ae = r.Header.Get("Accept-Encoding")
+		if strings.Contains(ae, "gzip") {
+			var buf bytes.Buffer
+			zw := gzip.NewWriter(&buf)
+			_, _ = zw.Write([]byte("plain-media"))
+			_ = zw.Close()
+			w.Header().Set("Content-Encoding", "gzip")
+			_, _ = w.Write(buf.Bytes())
+			return
+		}
+		_, _ = w.Write([]byte("plain-media"))
+	}))
+	defer up.Close()
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(p.WrapAlways(up.URL+"/a.mp4", map[string]string{"Accept-Encoding": "gzip"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(b) != "plain-media" || strings.Contains(resp.Header.Get("Content-Encoding"), "gzip") {
+		t.Fatalf("player received encoded media: body %q encoding %q upstream-ae %q", b, resp.Header.Get("Content-Encoding"), ae)
+	}
+	if ua == "" || strings.Contains(ua, "Go-http-client") {
+		t.Fatalf("missing browser user agent: %q", ua)
+	}
+	resp, err = http.Get(p.WrapAlways(up.URL+"/b.mp4", map[string]string{"User-Agent": "PluginUA/1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if ua != "PluginUA/1" {
+		t.Fatalf("plugin user agent was replaced: %q", ua)
+	}
+}
+
+func TestClientDoStopsWhenContextCanceled(t *testing.T) {
+	started := make(chan struct{})
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-r.Context().Done()
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &Client{Base: "http://" + ln.Addr().String(), Context: ctx, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	done := make(chan error, 1)
+	go func() {
+		var out M
+		done <- c.do("GET", "/config", nil, &out)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach the plugin")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("canceled request returned success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client kept the request after cancel")
 	}
 }
 

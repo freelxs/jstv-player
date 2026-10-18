@@ -70,6 +70,8 @@ type Config struct {
 type Client struct {
 	Base string
 	HTTP *http.Client
+	// Context aborts an in-flight protocol call. Nil uses the background context.
+	Context context.Context
 	// LAN reports whether the plugin's server is reachable from other devices
 	// (user enabled LAN access); the configuration page URL is then kept on
 	// the machine's LAN address instead of loopback.
@@ -89,7 +91,11 @@ func (c *Client) do(method, path string, body any, out any) error {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.Base+path, rd)
+	ctx := c.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, rd)
 	if err != nil {
 		return err
 	}

@@ -109,6 +109,32 @@ func findNode(explicit, goos, goarch string, executable executableFunc, lookPath
 	return "", errors.New("未找到 Node.js：请安装 Node.js 18+，或在设置中填写 node 路径")
 }
 
+// readPluginLogLine returns the next line, discarding it when it exceeds max.
+// A scanner that stops on ErrTooLong leaves the stdout pipe full, which stalls
+// the plugin and prevents the process from exiting.
+func readPluginLogLine(r *bufio.Reader, max int) (string, error) {
+	var buf []byte
+	oversized := false
+	for {
+		frag, err := r.ReadSlice('\n')
+		if !oversized {
+			if len(buf)+len(frag) > max {
+				oversized = true
+				buf = nil
+			} else {
+				buf = append(buf, frag...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if oversized {
+			return "", err
+		}
+		return strings.TrimRight(string(buf), "\r\n"), err
+	}
+}
+
 // listenHost is the address the plugin's HTTP server binds: loopback by
 // default, all interfaces when the user enables LAN access.
 func listenHost(lan bool) string {
@@ -171,25 +197,29 @@ func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
 	var lmu sync.Mutex
 	ready := make(chan int, 1)
 	go func() {
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 64<<10), 1<<20)
-		for sc.Scan() {
-			line := sc.Text()
-			if strings.HasPrefix(line, "JSTV_READY ") {
-				if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "JSTV_READY "))); err == nil && n > 0 {
-					select {
-					case ready <- n:
-					default:
+		rd := bufio.NewReaderSize(pr, 64<<10)
+		for {
+			line, err := readPluginLogLine(rd, 1<<20)
+			if line != "" {
+				if strings.HasPrefix(line, "JSTV_READY ") {
+					if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "JSTV_READY "))); err == nil && n > 0 {
+						select {
+						case ready <- n:
+						default:
+						}
 					}
 				}
+				if strings.Contains(line, "JSTV_FATAL") || strings.Contains(line, "Error") {
+					lmu.Lock()
+					lastErr = line
+					lmu.Unlock()
+				}
+				if h.LogFunc != nil {
+					h.LogFunc(line)
+				}
 			}
-			if strings.Contains(line, "JSTV_FATAL") || strings.Contains(line, "Error") {
-				lmu.Lock()
-				lastErr = line
-				lmu.Unlock()
-			}
-			if h.LogFunc != nil {
-				h.LogFunc(line)
+			if err != nil {
+				return
 			}
 		}
 	}()
