@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.4
+
+- Accept CatVod category filters, including numeric option values and a
+  repeated blank choice, and apply a filter's initial value when a category
+  opens.
+- Keep the query string and fragment on a plugin script address.
+- Keep reading plugin output after an oversized log line so the Node process
+  cannot stall.
+- Recognize BOM-prefixed and extensionless HLS playlists in the local playback
+  proxy. Playback and preflight errors no longer repeat the stream address.
+  A browser User-Agent is sent only when the plugin does not provide one, and
+  compressed upstream bytes are decoded before they reach the player.
+- Stop an all-site search when the user leaves the results, and let protocol
+  calls observe cancellation.
+- Keep a pending plugin trust decision when saving the pin fails, so approval
+  can be retried.
+- Scope watch history to the active subscription, and keep a continuous
+  playlist on the subscription that created it.
+- Rewrite stale plugin poster URLs, and avoid copying long signed media paths
+  into local proxy filenames.
+- Serialize settings and subscription saves so one write cannot drop the other.
+- A recommendation card that searches every site also clears the current-site
+  search hint.
+- The built-in continuous player starts from the resolved playback address.
+  Its failure hint names a player available on the current system.
+
 ## 0.3.3
 
 - Treat nil and empty stream headers as the same playback grant identity after

@@ -223,8 +223,8 @@ run_ci_script() {
 # removes only this invocation's isolated directory, and leaves old dist app.
 ROOT="$(new_fixture success)"
 run_script "$ROOT" darwin
-assert_file "$ROOT/out/JSTV-Player-0.3.3-macos-universal.zip"
-assert_file "$ROOT/out/JSTV-Player-0.3.3-macos-universal.dmg"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-macos-universal.zip"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-macos-universal.dmg"
 assert_contains "$ROOT/tool.log" "-u "
 assert_contains "$ROOT/tool.log" ".jstv-build."
 assert_contains "$ROOT/dist/darwin-universal/JSTV Player.app/KEEP" prior-dist
@@ -240,19 +240,19 @@ if grep -Fq -- '-u ' "$ROOT/tool.log"; then fail "--keep-app unexpectedly unregi
 
 # Archive failure keeps the new app and prior published archives byte-for-byte.
 ROOT="$(new_fixture archive-failure)"
-printf prior-zip > "$ROOT/out/JSTV-Player-0.3.3-macos-universal.zip"
-printf prior-dmg > "$ROOT/out/JSTV-Player-0.3.3-macos-universal.dmg"
+printf prior-zip > "$ROOT/out/JSTV-Player-0.3.4-macos-universal.zip"
+printf prior-dmg > "$ROOT/out/JSTV-Player-0.3.4-macos-universal.dmg"
 if FAIL_UNZIP=1 run_script "$ROOT" darwin; then fail "injected ZIP validation failure unexpectedly succeeded"; fi
 BUILD_ROOT="$(find "$ROOT/out" -maxdepth 1 -type d -name '.jstv-build.*' -print -quit)"
 [[ -n "$BUILD_ROOT" ]] || fail "failed build scratch path was not retained"
 assert_file "$BUILD_ROOT/dist/darwin-universal/JSTV Player.app/Contents/Info.plist"
-[[ "$(cat "$ROOT/out/JSTV-Player-0.3.3-macos-universal.zip")" == prior-zip ]] || fail "prior ZIP was replaced on failure"
-[[ "$(cat "$ROOT/out/JSTV-Player-0.3.3-macos-universal.dmg")" == prior-dmg ]] || fail "prior DMG was replaced on failure"
+[[ "$(cat "$ROOT/out/JSTV-Player-0.3.4-macos-universal.zip")" == prior-zip ]] || fail "prior ZIP was replaced on failure"
+[[ "$(cat "$ROOT/out/JSTV-Player-0.3.4-macos-universal.dmg")" == prior-dmg ]] || fail "prior DMG was replaced on failure"
 
 # Windows selector, all selector, aliases, and Go/cache overrides are retained.
 ROOT="$(new_fixture windows)"
 run_script "$ROOT" win
-assert_file "$ROOT/out/JSTV-Player-0.3.3-windows-amd64.zip"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-windows-amd64.zip"
 assert_contains "$ROOT/tool.log" "GO tool mygo build -platform windows/amd64 | GO_BIN=$ROOT/mock-bin/go | JSTV_CACHE_ROOT=$ROOT/cache-root | GOCACHE=$ROOT/custom-gocache"
 assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/custom-gomodcache | GOPATH=$ROOT/custom-gopath | GOTOOLCHAIN=local | GOPROXY=off"
 
@@ -262,8 +262,8 @@ assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/custom-gomodcache | GOPATH=$R
 ROOT="$(new_fixture ci-defaults)"
 prepare_node_cache "$ROOT" "$ROOT/runner-temp/jstv-player-cache"
 run_ci_script "$ROOT" darwin --with-node
-assert_file "$ROOT/out/JSTV-Player-0.3.3-macos-universal-with-node.zip"
-grep -Fq 'node=present' "$ROOT/out/JSTV-Player-0.3.3-macos-universal-with-node.zip" || fail "CI cache defaults did not find the bundled Node fixtures"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-macos-universal-with-node.zip"
+grep -Fq 'node=present' "$ROOT/out/JSTV-Player-0.3.4-macos-universal-with-node.zip" || fail "CI cache defaults did not find the bundled Node fixtures"
 assert_contains "$ROOT/tool.log" "GOCACHE=$ROOT/setup-go-cache"
 assert_contains "$ROOT/tool.log" "GOMODCACHE=$ROOT/setup-go-modcache | GOPATH=$ROOT/setup-go-path | GOTOOLCHAIN=local | GOPROXY=https://proxy.golang.org,direct"
 if grep -Fq '.lorca/workspaces' "$ROOT/tool.log"; then fail "CI build used a developer-specific Lorca cache path"; fi
@@ -276,7 +276,7 @@ if FAIL_GO_DARWIN=1 run_script "$ROOT" darwin --with-node; then fail "injected f
 assert_absent "$ROOT/resources/darwin"
 [[ -z "$(find "$ROOT/out" -maxdepth 1 -type d -name '.node-stage.*' -print -quit)" ]] || fail "Node extraction scratch survived failed build"
 run_script "$ROOT" darwin
-grep -Fq 'node=absent' "$ROOT/out/JSTV-Player-0.3.3-macos-universal.zip" || fail "slim ZIP fixture contains bundled Node"
+grep -Fq 'node=absent' "$ROOT/out/JSTV-Player-0.3.4-macos-universal.zip" || fail "slim ZIP fixture contains bundled Node"
 
 # Existing resources are never claimed or removed by cleanup.
 ROOT="$(new_fixture existing-resource)"
@@ -290,8 +290,8 @@ assert_contains "$ROOT/resources/darwin/keep.txt" user-resource
 # It must not prevent the all target from building Windows.
 ROOT="$(new_fixture all-not-registered)"
 LSREGISTER_MODE=not-registered run_script "$ROOT" all > "$ROOT/build.log" 2>&1 || fail "expected not-registered result stopped all build"
-assert_file "$ROOT/out/JSTV-Player-0.3.3-macos-universal.zip"
-assert_file "$ROOT/out/JSTV-Player-0.3.3-windows-amd64.zip"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-macos-universal.zip"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-windows-amd64.zip"
 [[ "$(grep -c '^GO ' "$ROOT/tool.log")" -eq 2 ]] || fail "all must invoke both platform builds"
 assert_contains "$ROOT/build.log" "-10814"
 
@@ -299,7 +299,7 @@ assert_contains "$ROOT/build.log" "-10814"
 # the Windows half of the all target to finish.
 ROOT="$(new_fixture all-unregister-error)"
 LSREGISTER_MODE=other-error run_script "$ROOT" all > "$ROOT/build.log" 2>&1 || fail "other unregister error stopped all build"
-assert_file "$ROOT/out/JSTV-Player-0.3.3-windows-amd64.zip"
+assert_file "$ROOT/out/JSTV-Player-0.3.4-windows-amd64.zip"
 assert_contains "$ROOT/build.log" "app 保留在"
 [[ -n "$(find "$ROOT/out" -path '*/JSTV Player.app/Contents/Info.plist' -print -quit)" ]] || fail "unexpected unregister error did not retain app"
 
