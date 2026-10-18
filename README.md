@@ -47,7 +47,7 @@
 | Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
 | 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
 
-CI 的普通 `main` 推送只运行测试和构建。需要从已有标签恢复发布时，使用提交标题 `release: publish vX.Y.Z`（例如 `release: publish v0.3.2`）；工作流会确认标签已存在且版本匹配，再从标签源码构建，并在所有检查通过后创建 Release。该标记不会创建或移动 Git 标签；若同名 Release 已存在，发布步骤会失败且不会覆盖它。
+推送到 `main` 后，CI 会对该次推送的 commit 运行测试和三平台构建；全部成功后，使用 `mygo.json` 中的版本创建 `v<版本>` Git 标签并发布 GitHub Release。每次新发布前先更新 `mygo.json` 的版本。若同版本标签已指向其他 commit，或该版本的 Release 已存在，工作流会失败并提示更新版本，不会移动标签或覆盖 Release 资产。Pull request 和其他分支推送不会自动发布。推送 `vMAJOR.MINOR.PATCH` 标签仍可从该标签源码构建并发布；也可在 Actions 手动运行工作流并填写已有标签，以恢复发布。
 
 当前仓库未配置 Developer ID 代码签名或公证；本地构建的 app 可能带 ad-hoc 签名，但它不认证发布者。macOS 首次打开请右键 → 打开，或执行：
 

@@ -2,13 +2,13 @@ name: Build
 
 on:
   push:
-    branches: [main, ci-node-release-750c]
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing vMAJOR.MINOR.PATCH tag to publish after successful builds; leave empty for build-only
+        description: Existing vMAJOR.MINOR.PATCH tag to rebuild and publish; leave empty for build-only
         required: false
         type: string
 
@@ -24,26 +24,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-      - name: Validate existing release tag
+      - name: Resolve release version and validate source
         id: validate
         shell: bash
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag || '' }}
-          PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
+          [[ -n "$VERSION" ]] || { echo "Could not read version from mygo.json." >&2; exit 1; }
+          export SOURCE_VERSION="$VERSION"
           RELEASE_TAG="$(bash scripts/resolve-release-tag.sh)"
           if [[ -z "$RELEASE_TAG" ]]; then
             exit 0
           fi
-          VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
-          [[ "$RELEASE_TAG" == "v$VERSION" ]] || { echo "Release tag $RELEASE_TAG does not match workflow source version $VERSION." >&2; exit 1; }
-          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}" >/dev/null || { echo "Tag $RELEASE_TAG does not exist on origin." >&2; exit 1; }
-          git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          TAG_VERSION="$(git show "refs/tags/$RELEASE_TAG:mygo.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')"
-          [[ "$RELEASE_TAG" == "v$TAG_VERSION" ]] || { echo "Tag source version $TAG_VERSION does not match $RELEASE_TAG." >&2; exit 1; }
+          SOURCE_VERSION="$VERSION" bash scripts/validate-release-tag.sh "$RELEASE_TAG"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
   test:
@@ -56,15 +53,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve-release.outputs.release_tag != '' && needs.resolve-release.outputs.release_tag || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
       - name: Verify checked-out release source
         if: needs.resolve-release.outputs.release_tag != ''
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.resolve-release.outputs.release_tag }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          [[ "$(git describe --tags --exact-match HEAD)" == "$RELEASE_TAG" ]]
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          else
+            [[ "$(git describe --tags --exact-match HEAD)" == "$RELEASE_TAG" ]]
+          fi
           VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
           [[ "$RELEASE_TAG" == "v$VERSION" ]]
       - uses: actions/setup-go@v7
@@ -101,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve-release.outputs.release_tag != '' && needs.resolve-release.outputs.release_tag || github.sha }}
+          ref: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || needs.resolve-release.outputs.release_tag || github.sha }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -198,17 +201,38 @@ jobs:
   release:
     if: needs.resolve-release.outputs.release_tag != ''
     needs: [build, resolve-release]
+    # Serialize only runs that target the same version tag.
+    concurrency:
+      group: jstv-player-release-${{ needs.resolve-release.outputs.release_tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
       - name: Publish GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-release.outputs.release_tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Existing releases and assets are never overwritten; bump mygo.json for a new release." >&2
+            exit 1
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}" >/dev/null 2>&1; then
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]] || { echo "Tag $TAG disappeared before publishing." >&2; exit 1; }
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+          gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"

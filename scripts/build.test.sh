@@ -19,25 +19,56 @@ grep -Fq 'node-version: 24' "$WORKFLOW" || fail "frontend tests must use Node 24
 grep -Fq 'release_tag:' "$WORKFLOW" || fail "workflow dispatch must expose optional release_tag"
 grep -Fq 'RELEASE_TAG_INPUT: ${{ inputs.release_tag' "$WORKFLOW" || fail "release tag must enter shell through an environment variable"
 grep -Fq '[[ -n "$release_tag" && ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$SOURCE_ROOT/scripts/resolve-release-tag.sh" || fail "release tag must be restricted to numeric v-prefixed versions"
-grep -Fq 'git ls-remote --exit-code --tags origin' "$WORKFLOW" || fail "release tag must already exist on origin"
+grep -Fq 'branches: [main]' "$WORKFLOW" || fail "automatic releases must only run for main pushes"
+grep -Fq 'group: jstv-player-release-${{ needs.resolve-release.outputs.release_tag }}' "$WORKFLOW" || fail "release jobs must serialize per version tag"
+grep -Fq 'cancel-in-progress: false' "$WORKFLOW" || fail "release workflows must not cancel in-progress releases"
+grep -Fq 'git push origin "refs/tags/$TAG"' "$WORKFLOW" || fail "main release must create its version tag after builds"
 grep -Fq 'needs.resolve-release.outputs.release_tag' "$WORKFLOW" || fail "release jobs must use the validated tag"
 grep -Fq 'gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"' "$WORKFLOW" || fail "release creation must verify the existing tag and specify repository explicitly"
-grep -Fq 'release: publish vX.Y.Z' "$SOURCE_ROOT/README.md" || fail "README must document the opt-in release commit subject"
+grep -Fq 'mygo.json' "$SOURCE_ROOT/README.md" || fail "README must document version bump requirements"
 
 resolve_tag() {
-  local event="$1" ref="$2" message="$3" input="$4"
+  local event="$1" ref="$2" version="$3" input="$4"
   GITHUB_EVENT_NAME="$event" GITHUB_REF="$ref" \
-    PUSH_COMMIT_MESSAGE="$message" RELEASE_TAG_INPUT="$input" \
+    SOURCE_VERSION="$version" RELEASE_TAG_INPUT="$input" \
     bash "$SOURCE_ROOT/scripts/resolve-release-tag.sh"
 }
-[[ "$(resolve_tag push refs/heads/main 'release: publish v0.3.2' '')" == v0.3.2 ]] || fail "exact main commit subject must opt in to release"
-[[ -z "$(resolve_tag push refs/heads/main $'routine CI fix\nrelease: publish v0.3.2' '')" ]] || fail "release marker in commit body must not opt in"
-[[ -z "$(resolve_tag push refs/heads/main 'routine CI fix' '')" ]] || fail "ordinary main push must remain build-only"
+[[ "$(resolve_tag push refs/heads/main 0.3.3 '')" == v0.3.3 ]] || fail "main push must automatically release its source version"
 [[ "$(resolve_tag push refs/tags/v0.3.2 '' '')" == v0.3.2 ]] || fail "tag pushes must retain release behavior"
 [[ "$(resolve_tag workflow_dispatch refs/heads/main '' v0.3.2)" == v0.3.2 ]] || fail "manual release input must remain supported"
+[[ -z "$(resolve_tag push refs/heads/feature/test 0.3.3 '')" ]] || fail "feature branch pushes must not release"
+[[ -z "$(resolve_tag pull_request refs/heads/main 0.3.3 '')" ]] || fail "pull requests must not release"
+if resolve_tag push refs/heads/main invalid '' >/dev/null 2>&1; then
+  fail "malformed main source version must fail validation"
+fi
 if resolve_tag workflow_dispatch refs/heads/main '' 'v0.3.2;touch /tmp/not-allowed' >/dev/null 2>&1; then
   fail "malformed release tag input must fail validation"
 fi
+
+# Existing remote tags must not let a different main commit reuse that version.
+GIT_FIXTURE="$FIXTURE/tag-sha-check"
+mkdir -p "$GIT_FIXTURE"
+git init -q --bare "$GIT_FIXTURE/remote.git"
+git init -q -b main "$GIT_FIXTURE/work"
+git -C "$GIT_FIXTURE/work" config user.name fixture
+git -C "$GIT_FIXTURE/work" config user.email fixture@example.invalid
+git -C "$GIT_FIXTURE/work" remote add origin "$GIT_FIXTURE/remote.git"
+printf '{"version":"0.3.3"}\n' > "$GIT_FIXTURE/work/mygo.json"
+git -C "$GIT_FIXTURE/work" add mygo.json
+git -C "$GIT_FIXTURE/work" commit -qm tagged-source
+TAGGED_SHA="$(git -C "$GIT_FIXTURE/work" rev-parse HEAD)"
+git -C "$GIT_FIXTURE/work" tag -a v0.3.3 -m fixture
+git -C "$GIT_FIXTURE/work" push -q origin main --tags
+printf 'later commit\n' > "$GIT_FIXTURE/work/change.txt"
+git -C "$GIT_FIXTURE/work" add change.txt
+git -C "$GIT_FIXTURE/work" commit -qm conflicting-source
+CONFLICT_SHA="$(git -C "$GIT_FIXTURE/work" rev-parse HEAD)"
+if (cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$CONFLICT_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) >/dev/null 2>&1; then
+  fail "main push accepted a version tag pointing at another commit"
+fi
+(cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$TAGGED_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) || fail "same-commit tag should pass validation"
+(cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.3 GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.3.3 GITHUB_SHA="$TAGGED_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.3) || fail "tag push recovery should validate existing tag"
+(cd "$GIT_FIXTURE/work" && SOURCE_VERSION=0.3.4 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/main GITHUB_SHA="$CONFLICT_SHA" bash "$SOURCE_ROOT/scripts/validate-release-tag.sh" v0.3.4) || fail "new main version should be allowed before its tag is created"
 
 new_fixture() {
   local name="$1" root="$FIXTURE/$1"
