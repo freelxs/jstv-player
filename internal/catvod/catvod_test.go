@@ -977,6 +977,22 @@ func TestClientLocalizesVODPostersOnBrowseEndpoints(t *testing.T) {
 	}
 }
 
+func TestProxyNameDoesNotEmbedOpaqueUpstreamPath(t *testing.T) {
+	secret := "super-secret-token"
+	raw := "https://cdn.example/proxy/" + strings.Repeat("a", 40) + "sign=" + secret
+	p := &HeaderProxy{base: "http://127.0.0.1:9"}
+	u := p.WrapAlways(raw, map[string]string{"Referer": "https://example.com/"})
+	if strings.Contains(u, secret) || strings.Contains(u, "sign") {
+		t.Fatalf("proxy filename leaked the upstream path: %s", u)
+	}
+	if !strings.HasSuffix(u, "/stream.bin") {
+		t.Fatalf("expected a generic filename, got %s", u)
+	}
+	if !strings.HasSuffix(p.WrapAlways("https://cdn.example/v/index.m3u8", map[string]string{"Referer": "x"}), "/index.m3u8") {
+		t.Fatal("media filenames should keep their extension")
+	}
+}
+
 func TestProxyRewritesExtensionlessPlaylist(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/media" {
