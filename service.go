@@ -77,6 +77,7 @@ type Player struct {
 
 	loadMu       sync.Mutex // serializes LoadSource / switching
 	initMu       sync.Mutex // serializes per-site init and permits retry after failure
+	settingsMu   sync.Mutex // serializes writers of the whole settings file
 	eps          episodeServer
 	histMu       sync.Mutex
 	logMu        sync.Mutex
@@ -172,25 +173,33 @@ func (p *Player) writeSettings(s Settings) error {
 	return os.WriteFile(filepath.Join(p.dir, "settings.json"), b, 0o600)
 }
 
+// beginSettingsWrite runs after a settings snapshot is taken and before that
+// snapshot is written. Tests hold this window open; production leaves it empty.
+var beginSettingsWrite = func() {}
+
 // SaveSettings stores the general settings (player, node, md5, bridge).
 // Subscriptions are managed by the Subscription methods and kept as they are.
 func (p *Player) SaveSettings(s Settings) error {
 	if s.Player == "" {
 		s.Player = defaultPlayer()
 	}
+	p.settingsMu.Lock()
 	p.logMu.Lock()
 	p.mu.Lock()
 	oldLAN := p.settings.AllowLAN
 	s.Subscriptions, s.Active, s.SourceURL = p.settings.Subscriptions, p.settings.Active, ""
 	p.mu.Unlock()
+	beginSettingsWrite()
 	if err := p.writeSettings(s); err != nil {
 		p.logMu.Unlock()
+		p.settingsMu.Unlock()
 		return err
 	}
 	p.mu.Lock()
 	p.settings = s
 	p.mu.Unlock()
 	p.logMu.Unlock()
+	p.settingsMu.Unlock()
 	p.startBridge(s.BridgeTemplate)
 	// The plugin server binds its listen address at start; rebind on toggle.
 	if oldLAN != s.AllowLAN && s.Active != "" {
@@ -206,6 +215,8 @@ func (p *Player) SaveSettings(s Settings) error {
 
 // editSubs applies f to a copy of the settings and saves the result.
 func (p *Player) editSubs(f func(s *Settings) error) (Settings, error) {
+	p.settingsMu.Lock()
+	defer p.settingsMu.Unlock()
 	p.mu.Lock()
 	s := p.settings
 	s.Subscriptions = append([]Subscription(nil), s.Subscriptions...)
@@ -213,6 +224,7 @@ func (p *Player) editSubs(f func(s *Settings) error) (Settings, error) {
 	if err := f(&s); err != nil {
 		return Settings{}, err
 	}
+	beginSettingsWrite()
 	if err := p.writeSettings(s); err != nil {
 		return Settings{}, err
 	}
