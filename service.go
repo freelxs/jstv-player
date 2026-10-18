@@ -701,9 +701,10 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 }
 
 func (p *Player) openBuiltin(title, page string) {
+	base := playbackPageBase(p.eps.base)
 	mygo.RunOnMain(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})
-		w.Page().LoadHTML(page, "")
+		w.Page().LoadHTML(page, base)
 	})
 }
 
@@ -861,5 +862,17 @@ func playerPage(u, title string) string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
 <style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%}#e{position:fixed;top:8px;left:8px;color:#f88;font:13px system-ui}</style></head>
 <body><video src="` + html.EscapeString(u) + `" controls autoplay playsinline></video><div id="e"></div>
-<script>document.querySelector('video').addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 mpv 或 IINA'})</script></body></html>`
+<script>document.querySelector('video').addEventListener('error',()=>{document.getElementById('e').textContent='` + builtinPlaybackHint() + `'})</script></body></html>`
+}
+
+// builtinPlaybackHint names a player the current OS can actually launch.
+func builtinPlaybackHint() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "播放失败，可在设置里改用 IINA 或 mpv"
+	case "windows":
+		return "播放失败，可在设置里改用 PotPlayer 或 mpv"
+	default:
+		return "播放失败，可在设置里改用 mpv"
+	}
 }

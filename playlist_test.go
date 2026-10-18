@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,45 @@ func TestPlaylistEviction(t *testing.T) {
 	}
 	if s.get(first) != nil || len(s.lists) != maxPlaylists {
 		t.Fatal("old playlists not evicted")
+	}
+}
+
+func TestBuiltinEpisodeItemsUseResolvedFirstURL(t *testing.T) {
+	eps := []catvod.Episode{{Name: "E1"}, {Name: "E2"}, {Name: "E3"}}
+	items := builtinEpisodeItems("Show", eps, 1, func(i int) string { return "http://127.0.0.1:1/ep/x/" + strconv.Itoa(i) }, "http://127.0.0.1:2/p/resolved/a.m3u8")
+	if len(items) != 2 || items[0].URL != "http://127.0.0.1:2/p/resolved/a.m3u8" || items[1].URL != "http://127.0.0.1:1/ep/x/2" {
+		t.Fatalf("%+v", items)
+	}
+	if items[0].Title != "Show - E2" {
+		t.Fatal(items[0].Title)
+	}
+	lazy := builtinEpisodeItems("Show", eps, 0, func(i int) string { return "http://127.0.0.1:1/ep/x/" + strconv.Itoa(i) }, "")
+	if lazy[0].URL != "http://127.0.0.1:1/ep/x/0" {
+		t.Fatal(lazy[0].URL)
+	}
+}
+
+func TestPlaybackPageBase(t *testing.T) {
+	if playbackPageBase("") != "http://127.0.0.1/" || playbackPageBase("http://127.0.0.1:9") != "http://127.0.0.1:9/" {
+		t.Fatal(playbackPageBase(""), playbackPageBase("http://127.0.0.1:9"))
+	}
+}
+
+func TestBuiltinFailureHintMatchesPlatform(t *testing.T) {
+	page := playerPage("http://127.0.0.1/a.mp4", "t") + builtinPlaylistPage(nil)
+	switch runtime.GOOS {
+	case "linux":
+		if strings.Contains(page, "IINA") || strings.Contains(page, "PotPlayer") || !strings.Contains(page, "mpv") {
+			t.Fatal("linux failure hint names a player this system cannot use")
+		}
+	case "darwin":
+		if !strings.Contains(page, "IINA") || strings.Contains(page, "PotPlayer") {
+			t.Fatal("darwin failure hint")
+		}
+	case "windows":
+		if !strings.Contains(page, "PotPlayer") || strings.Contains(page, "IINA") {
+			t.Fatal("windows failure hint")
+		}
 	}
 }
 
@@ -111,6 +152,9 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("playlist response is not readable by the built-in player page")
+	}
 	b := make([]byte, 4096)
 	n, _ := resp.Body.Read(b)
 	resp.Body.Close()
@@ -127,6 +171,9 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 	loc := resp.Header.Get("Location")
 	if resp.StatusCode != http.StatusFound || !strings.Contains(loc, "/p/") || !strings.Contains(loc, "e2") {
 		t.Fatalf("%d %s", resp.StatusCode, loc)
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("episode redirect is not readable by the built-in player page")
 	}
 	if h := p.GetHistory(api, "v1"); h == nil || h.Index != 1 || h.Flag != line.Flag {
 		t.Fatalf("%+v", h)
@@ -167,8 +214,13 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 		t.Fatal("prefetched answer not consumed")
 	}
 	pl.mu.Unlock()
-	if resp, _ := http.Get(p.eps.epURL(id, 0) + "?prefetch=1"); resp.StatusCode != http.StatusNoContent {
-		t.Fatal("prefetch endpoint", resp.StatusCode)
+	resp, err = http.Get(p.eps.epURL(id, 0) + "?prefetch=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("prefetch endpoint %d cors %q", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 }
 

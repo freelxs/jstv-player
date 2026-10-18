@@ -137,6 +137,9 @@ func (p *Player) startEpisodeServer() error {
 }
 
 func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
+	// The built-in player page is not this server's origin. Its media
+	// element and prefetch fetch must be allowed to read redirects.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/playlist/"):
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/playlist/"), ".m3u")
@@ -373,10 +376,10 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
 	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
 	if s.Player == "builtin" || s.Player == "" {
-		var items []builtinItem
-		for i := start; i < len(eps); i++ {
-			items = append(items, builtinItem{Title: entryTitle(show, eps[i].Name), URL: p.eps.epURL(id, i)})
-		}
+		// The first episode is already resolved. Hand that proxied URL to
+		// the video element; a redirect from the episode server is what the
+		// Linux web view fails to play. Later episodes stay lazy.
+		items := builtinEpisodeItems(show, eps, start, func(i int) string { return p.eps.epURL(id, i) }, u)
 		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlaylistPage(items))
 		return nil, nil
 	}
@@ -386,6 +389,28 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 type builtinItem struct {
 	Title string `json:"t"`
 	URL   string `json:"u"`
+}
+
+// builtinEpisodeItems lists episodes from start. The first entry uses the
+// already resolved proxy URL when one exists; the rest point at the episode
+// server so they are resolved only when the player reaches them.
+func builtinEpisodeItems(show string, eps []catvod.Episode, start int, epURL func(int) string, firstURL string) []builtinItem {
+	items := make([]builtinItem, 0, len(eps)-start)
+	for i := start; i < len(eps); i++ {
+		u := epURL(i)
+		if i == start && firstURL != "" {
+			u = firstURL
+		}
+		items = append(items, builtinItem{Title: entryTitle(show, eps[i].Name), URL: u})
+	}
+	return items
+}
+
+func playbackPageBase(loopback string) string {
+	if loopback == "" {
+		return "http://127.0.0.1/"
+	}
+	return strings.TrimRight(loopback, "/") + "/"
 }
 
 // builtinPlaylistPage is the built-in player with auto-advance on "ended".
@@ -404,7 +429,7 @@ body:hover #bar{opacity:1}#t{flex:1;overflow:hidden;text-overflow:ellipsis;white
 <script>const L=` + js + `;let i=0;const v=document.querySelector('video');
 function go(k){if(k<0||k>=L.length)return;i=k;document.title=L[i].t;document.getElementById('t').textContent=L[i].t+'  ('+(i+1)+'/'+L.length+')';document.getElementById('e').textContent='';v.src=L[i].u;v.play().catch(()=>{})}
 let pf=-1;v.addEventListener('timeupdate',()=>{if(i+1<L.length&&pf!==i+1&&v.duration&&v.duration-v.currentTime<60){pf=i+1;fetch(L[i+1].u+'?prefetch=1').catch(()=>{})}});
-v.addEventListener('ended',()=>go(i+1));v.addEventListener('error',()=>{document.getElementById('e').textContent='播放失败，可在设置里改用 mpv 或 IINA'});
+v.addEventListener('ended',()=>go(i+1));v.addEventListener('error',()=>{document.getElementById('e').textContent='` + builtinPlaybackHint() + `'});
 document.getElementById('p').onclick=()=>go(i-1);document.getElementById('n').onclick=()=>go(i+1);go(0)</script></body></html>`
 }
 
