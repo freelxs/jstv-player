@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +210,93 @@ func TestFirstPlayableSkipsURLsThatCannotReceiveProxyGrants(t *testing.T) {
 	}
 	if got := firstPlayable(streams[:4]); got != nil {
 		t.Fatalf("unsupported candidate selected: %#v", got)
+	}
+}
+
+func TestHistoryScopedToActiveSubscription(t *testing.T) {
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	first, err := p.AddSubscription("A", "https://example.com/a/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA := first.Active
+	second, err := p.AddSubscription("B", "https://example.com/b/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idB string
+	for _, sub := range second.Subscriptions {
+		if sub.ID != idA {
+			idB = sub.ID
+		}
+	}
+	p.recordHistory("", "/api", "show", HistoryEntry{Flag: "线路", Index: 2, Name: "第3集"})
+	if h := p.GetHistory("/api", "show"); h == nil || h.Index != 2 {
+		t.Fatalf("active subscription lost its history: %+v", h)
+	}
+	p.mu.Lock()
+	p.settings.Active = idB
+	p.mu.Unlock()
+	if h := p.GetHistory("/api", "show"); h != nil {
+		t.Fatalf("other subscription saw the history: %+v", h)
+	}
+	p.recordHistory(idA, "/api", "show", HistoryEntry{Flag: "线路", Index: 4, Name: "第5集"})
+	if h := p.GetHistory("/api", "show"); h != nil {
+		t.Fatalf("playlist subscription history leaked into the active one: %+v", h)
+	}
+	p.mu.Lock()
+	p.settings.Active = idA
+	p.mu.Unlock()
+	if h := p.GetHistory("/api", "show"); h == nil || h.Index != 4 {
+		t.Fatalf("history was not kept on the originating subscription: %+v", h)
+	}
+}
+
+func TestLegacyHistoryMigratesToActiveSubscription(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(`{"/api\u0000show":{"flag":"L","index":4,"name":"E5","time":1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := newPlayer(dir)
+	defer p.StopSource()
+	first, err := p.AddSubscription("A", "https://example.com/a/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA := first.Active
+	second, err := p.AddSubscription("B", "https://example.com/b/index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idB string
+	for _, sub := range second.Subscriptions {
+		if sub.ID != idA {
+			idB = sub.ID
+		}
+	}
+	h := p.GetHistory("/api", "show")
+	if h == nil || h.Index != 4 || h.Name != "E5" {
+		t.Fatalf("legacy history was not adopted: %+v", h)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]HistoryEntry
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["/api\x00show"]; ok {
+		t.Fatal("legacy key remained readable by every subscription")
+	}
+	if _, ok := stored[idA+"\x00"+"/api\x00show"]; !ok {
+		t.Fatalf("legacy entry was not moved onto the active subscription: %#v", stored)
+	}
+	p.mu.Lock()
+	p.settings.Active = idB
+	p.mu.Unlock()
+	if h := p.GetHistory("/api", "show"); h != nil {
+		t.Fatalf("migrated history still visible on another subscription: %+v", h)
 	}
 }

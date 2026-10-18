@@ -27,6 +27,7 @@ import (
 
 type playlist struct {
 	api, vodID, show, flag string
+	subID                  string // subscription that owns this show; empty uses the active one
 	eps                    []catvod.Episode
 	start                  int
 	first                  *catvod.Stream // already resolved start episode
@@ -181,7 +182,7 @@ func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p.recordHistory(pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name})
+	p.recordHistory(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name})
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
@@ -333,8 +334,12 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	if err != nil {
 		return nil, err
 	}
-	p.recordHistory(api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
 	s := p.GetSettings()
+	subID := ""
+	if sub, ok := s.active(); ok {
+		subID = sub.ID
+	}
+	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
 	first := firstPlayable(streams)
 	if s.DisableContinuous || s.Player == "system" || len(streams) != 1 || p.eps.base == "" {
 		return streams, nil
@@ -365,7 +370,7 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	if isHTML {
 		return streams, nil
 	}
-	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, eps: eps, start: start, first: first})
+	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
 	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
 	if s.Player == "builtin" || s.Player == "" {
 		var items []builtinItem
@@ -405,17 +410,42 @@ document.getElementById('p').onclick=()=>go(i-1);document.getElementById('n').on
 
 // ---- watch history ----
 
-func historyKey(api, vodID string) string { return api + "\x00" + vodID }
+func historyKey(subID, api, vodID string) string {
+	return subID + "\x00" + api + "\x00" + vodID
+}
 
-func (p *Player) recordHistory(api, vodID string, e HistoryEntry) {
+func legacyHistoryParts(key string) (api, vodID string, ok bool) {
+	if strings.Count(key, "\x00") != 1 {
+		return "", "", false
+	}
+	api, vodID, ok = strings.Cut(key, "\x00")
+	if !ok || api == "" || vodID == "" {
+		return "", "", false
+	}
+	return api, vodID, true
+}
+
+func (p *Player) activeSubID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i := p.settings.find(p.settings.Active); i >= 0 {
+		return p.settings.Active
+	}
+	return ""
+}
+
+func (p *Player) recordHistory(subID, api, vodID string, e HistoryEntry) {
 	if vodID == "" {
 		return
+	}
+	if subID == "" {
+		subID = p.activeSubID()
 	}
 	e.Time = time.Now().Unix()
 	p.histMu.Lock()
 	defer p.histMu.Unlock()
-	h := p.loadHistoryLocked()
-	h[historyKey(api, vodID)] = e
+	h := p.loadHistoryLocked(subID)
+	h[historyKey(subID, api, vodID)] = e
 	if len(h) > 2000 {
 		var oldK string
 		var oldT int64 = 1 << 62
@@ -430,19 +460,43 @@ func (p *Player) recordHistory(api, vodID string, e HistoryEntry) {
 	_ = os.WriteFile(filepath.Join(p.dir, "history.json"), b, 0o600)
 }
 
-func (p *Player) loadHistoryLocked() map[string]HistoryEntry {
+func (p *Player) loadHistoryLocked(subID string) map[string]HistoryEntry {
 	h := map[string]HistoryEntry{}
-	if b, err := os.ReadFile(filepath.Join(p.dir, "history.json")); err == nil {
+	path := filepath.Join(p.dir, "history.json")
+	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &h)
+	}
+	if subID == "" {
+		return h
+	}
+	changed := false
+	for key, entry := range h {
+		api, vodID, ok := legacyHistoryParts(key)
+		if !ok {
+			continue
+		}
+		scoped := historyKey(subID, api, vodID)
+		if _, exists := h[scoped]; !exists {
+			h[scoped] = entry
+		}
+		delete(h, key)
+		changed = true
+	}
+	if changed {
+		if b, err := json.Marshal(h); err == nil {
+			_ = os.WriteFile(path, b, 0o600)
+		}
 	}
 	return h
 }
 
-// GetHistory returns the last episode played of a show, or nil.
+// GetHistory returns the last episode played of a show in the active
+// subscription, or nil.
 func (p *Player) GetHistory(api, vodID string) *HistoryEntry {
+	subID := p.activeSubID()
 	p.histMu.Lock()
 	defer p.histMu.Unlock()
-	if e, ok := p.loadHistoryLocked()[historyKey(api, vodID)]; ok {
+	if e, ok := p.loadHistoryLocked(subID)[historyKey(subID, api, vodID)]; ok {
 		return &e
 	}
 	return nil
