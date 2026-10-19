@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+// fileIsExecutable reports whether Stat shows a Unix execute bit. Windows
+// files do not, even after Chmod 0755.
+func fileIsExecutable(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode()&0o111 != 0
+}
+
 func TestSenPlayerOpenArgs(t *testing.T) {
 	media := "http://127.0.0.1:9/p/a?x=1&y=2"
 	args := senPlayerOpenArgs(media)
@@ -131,8 +138,14 @@ func TestValidateCustomPlayer(t *testing.T) {
 	if err := os.Chmod(script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCustomPlayerOS("linux", script); err != nil {
-		t.Fatal(err)
+	// Windows does not store a Unix execute bit, so Stat never reports +x.
+	if fileIsExecutable(script) {
+		if err := validateCustomPlayerOS("linux", script); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCustomPlayerOS("darwin", script); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := validateCustomPlayerOS("windows", script); err == nil {
 		t.Fatal("windows accepted a file that is not .exe")
@@ -179,9 +192,19 @@ func TestCustomLaunchPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	media := "http://127.0.0.1:9/playlist/x.m3u"
-	name, args, err := customLaunchPlan("linux", script, "--foo", media)
-	if err != nil || name != script || len(args) != 2 || args[0] != "--foo" || args[1] != media {
-		t.Fatalf("%s %v %v", name, args, err)
+	if fileIsExecutable(script) {
+		name, args, err := customLaunchPlan("linux", script, "--foo", media)
+		if err != nil || name != script || len(args) != 2 || args[0] != "--foo" || args[1] != media {
+			t.Fatalf("%s %v %v", name, args, err)
+		}
+	}
+	exe := filepath.Join(dir, "player.exe")
+	if err := os.WriteFile(exe, []byte("MZ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, args, err := customLaunchPlan("windows", exe, "--foo", media)
+	if err != nil || name != exe || len(args) != 2 || args[0] != "--foo" || args[1] != media {
+		t.Fatalf("windows exe: %s %v %v", name, args, err)
 	}
 	app := filepath.Join(dir, "My Player.app")
 	if err := os.MkdirAll(filepath.Join(app, "Contents"), 0o755); err != nil {
@@ -201,6 +224,9 @@ func TestCustomLaunchPlan(t *testing.T) {
 }
 
 func TestCustomPlayerLaunchesStub(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stub is a Unix script; Windows launch uses a .exe argv plan")
+	}
 	dir := t.TempDir()
 	out := filepath.Join(dir, "args.txt")
 	script := filepath.Join(dir, "player")
@@ -260,7 +286,11 @@ func TestCustomPlayerSettingsRoundTrip(t *testing.T) {
 	if got := p.GetSettings(); got.Player != "builtin" || got.CustomPlayer != "" || got.CustomArgs != "" {
 		t.Fatalf("saved player changed or custom fields invented: %+v", got)
 	}
-	script := filepath.Join(dir, "player")
+	name := "player"
+	if runtime.GOOS == "windows" {
+		name = "player.exe"
+	}
+	script := filepath.Join(dir, name)
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
