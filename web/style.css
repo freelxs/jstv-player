@@ -226,6 +226,9 @@ code{font:11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:1p
 .sub-form{display:grid;grid-template-columns:130px 1fr auto auto;gap:8px}
 input:not([type=checkbox]),select{height:34px;padding:0 10px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--panel);outline:0;transition:border-color .15s,box-shadow .15s;min-width:0}
 input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+.path-row{display:flex;gap:8px;align-items:center}
+.path-row input{flex:1}
+.path-row .btn{height:34px;flex:none}
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
 .field>span{font-weight:600;font-size:12.5px}
 .field em{font-style:normal;font-weight:400;color:var(--text-3);margin-left:6px}

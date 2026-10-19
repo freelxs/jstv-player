@@ -26,9 +26,14 @@ type Settings struct {
 	Active        string         `json:"active"`
 	// SourceURL is the pre-0.2 single address, migrated on load.
 	SourceURL string `json:"sourceUrl,omitempty"`
-	NodePath  string `json:"nodePath"`  // optional explicit node executable
-	Player    string `json:"player"`    // builtin | potplayer | iina | mpv | system
-	StrictMD5 bool   `json:"strictMd5"` // refuse to run when index.js.md5 differs
+	NodePath  string `json:"nodePath"` // optional explicit node executable
+	Player    string `json:"player"`   // builtin | potplayer | iina | senplayer | mpv | custom | system
+	// CustomPlayer is the application or executable used when Player is
+	// "custom". CustomArgs is an optional argv list; {url} is the media or
+	// playlist address. Both are ignored for every other player.
+	CustomPlayer string `json:"customPlayer,omitempty"`
+	CustomArgs   string `json:"customArgs,omitempty"`
+	StrictMD5    bool   `json:"strictMd5"` // refuse to run when index.js.md5 differs
 	// BridgeTemplate is where the built-in play bridge (/play?vid=) finds
 	// media: {vid} and {res} are substituted. Empty disables the bridge.
 	BridgeTemplate string `json:"bridgeTemplate"`
@@ -182,6 +187,9 @@ var beginSettingsWrite = func() {}
 func (p *Player) SaveSettings(s Settings) error {
 	if s.Player == "" {
 		s.Player = defaultPlayer()
+	}
+	if err := normalizeCustomPlayer(&s); err != nil {
+		return err
 	}
 	p.settingsMu.Lock()
 	p.logMu.Lock()
@@ -711,6 +719,8 @@ func (p *Player) openBuiltin(title, page string) {
 // launch opens u (a stream or an M3U playlist) in an external player.
 func (p *Player) launch(player, u, title string) error {
 	switch player {
+	case "system":
+		return mygo.Shell.OpenExternal(u)
 	case "potplayer":
 		if runtime.GOOS != "windows" {
 			return errors.New("PotPlayer 只支持 Windows，请改用 mpv")
@@ -726,38 +736,46 @@ func (p *Player) launch(player, u, title string) error {
 		}
 		go cmd.Wait()
 		return nil
-	case "iina", "mpv":
-		var name string
-		var args []string
-		if player == "iina" {
-			if runtime.GOOS != "darwin" {
-				return errors.New("IINA 只支持 macOS，请改用 mpv")
-			}
-			name = findExe("/Applications/IINA.app/Contents/MacOS/iina-cli", "iina")
-			if name == "" {
-				return errors.New("未找到 IINA（/Applications/IINA.app）")
-			}
-			args = iinaArgs(u)
-		} else {
-			name = findExe(mpvCandidates()...)
-			if name == "" {
-				return errors.New(mpvHint())
-			}
-			args = mpvArgs(u, title)
-		}
-		p.log(name + " " + strings.Join(args, " "))
-		cmd := exec.Command(name, args...)
-		devnull, _ := os.Open(os.DevNull)
-		cmd.Stdin = devnull
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		go cmd.Wait()
-		return nil
-	case "system":
-		return mygo.Shell.OpenExternal(u)
 	}
-	return fmt.Errorf("未知播放器: %s", player)
+	name, args, err := p.externalCommand(player, u, title)
+	if err != nil {
+		return err
+	}
+	p.log(name + " " + strings.Join(args, " "))
+	return runExternal(name, args)
+}
+
+func (p *Player) externalCommand(player, u, title string) (string, []string, error) {
+	switch player {
+	case "iina":
+		if runtime.GOOS != "darwin" {
+			return "", nil, errors.New("IINA 只支持 macOS，请改用 mpv")
+		}
+		name := findExe("/Applications/IINA.app/Contents/MacOS/iina-cli", "iina")
+		if name == "" {
+			return "", nil, errors.New("未找到 IINA（/Applications/IINA.app）")
+		}
+		return name, iinaArgs(u), nil
+	case "mpv":
+		name := findExe(mpvCandidates()...)
+		if name == "" {
+			return "", nil, errors.New(mpvHint())
+		}
+		return name, mpvArgs(u, title), nil
+	case "senplayer":
+		if runtime.GOOS != "darwin" {
+			return "", nil, errors.New("SenPlayer 只支持 macOS，请改用 mpv")
+		}
+		if findSenPlayer() == "" {
+			return "", nil, errors.New("未找到 SenPlayer（/Applications/SenPlayer.app）")
+		}
+		return "open", senPlayerOpenArgs(u), nil
+	case "custom":
+		s := p.GetSettings()
+		return customLaunch(s.CustomPlayer, s.CustomArgs, u)
+	default:
+		return "", nil, fmt.Errorf("未知播放器: %s", player)
+	}
 }
 
 // iinaArgs: options before the URL, and --no-stdin. Without it iina-cli
@@ -790,6 +808,8 @@ func mpvArgs(u, title string) []string {
 // defaultPlayer: the macOS web view plays HLS itself; on Windows and Linux
 // the web views generally do not, so an installed external player is the
 // better default there: PotPlayer (Windows), then mpv, then built-in.
+// SenPlayer and a custom player are opt-in. This runs only when no player
+// has been saved.
 func defaultPlayer() string {
 	return pickDefaultPlayer(runtime.GOOS, findPotPlayer() != "", findExe(mpvCandidates()...) != "")
 }
@@ -869,7 +889,7 @@ func playerPage(u, title string) string {
 func builtinPlaybackHint() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return "播放失败，可在设置里改用 IINA 或 mpv"
+		return "播放失败，可在设置里改用 IINA、SenPlayer 或 mpv"
 	case "windows":
 		return "播放失败，可在设置里改用 PotPlayer 或 mpv"
 	default:

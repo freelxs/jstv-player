@@ -72,9 +72,21 @@
         <option value="builtin">内置播放器（HLS / MP4）</option>
         <option value="potplayer" data-os="win">PotPlayer（Windows）</option>
         <option value="iina" data-os="mac">IINA（macOS）</option>
+        <option value="senplayer" data-os="mac">SenPlayer（macOS）</option>
         <option value="mpv">mpv</option>
+        <option value="custom">自定义播放器</option>
         <option value="system">系统默认</option>
       </select></label>
+    <div id="customPlayerFields" hidden>
+      <label class="field"><span>播放器路径</span>
+        <span class="path-row">
+          <input id="sCustomPlayer" placeholder="选择应用程序或可执行文件" spellcheck="false">
+          <button type="button" class="btn" id="sBrowsePlayer">浏览…</button>
+        </span></label>
+      <label class="field"><span>附加参数 <em>可选。{url} 表示代理后的地址，不写则追加在末尾</em></span>
+        <input id="sCustomArgs" placeholder="例如 --fs {url}" spellcheck="false"></label>
+      <p class="hint small">macOS 可选 .app，Windows 选 .exe，Linux 选可执行文件。参数按列表传递，不经过 shell。连播时 {url} 是本地 M3U。</p>
+    </div>
     <label class="field"><span>Node.js 路径 <em>留空自动查找</em></span>
       <input id="sNode" placeholder="/usr/local/bin/node" /></label>
     <label class="field"><span>播放桥模板 <em>可选，留空关闭；{vid}、{res} 会被替换</em></span>

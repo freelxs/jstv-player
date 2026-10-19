@@ -493,8 +493,14 @@ async function openSettings(tab = 'subs') {
   const s = st.settings;
   // Only offer the OS-specific players on their OS (keep a saved one visible).
   const os = /Windows/i.test(navigator.userAgent) ? 'win' : /Mac/i.test(navigator.userAgent) ? 'mac' : 'linux';
-  for (const o of $$('#sPlayer option[data-os]')) o.hidden = o.dataset.os !== os && o.value !== s.player;
+  // WebKit's select popup ignores hidden and display:none on <option>, so
+  // drop the node. A saved choice for another OS stays in the list.
+  for (const o of $$('#sPlayer option[data-os]')) {
+    if (o.dataset.os !== os && o.value !== s.player) o.remove();
+  }
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
+  $('#sCustomPlayer').value = s.customPlayer || ''; $('#sCustomArgs').value = s.customArgs || '';
+  syncCustomPlayerFields();
   $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
   $('#sAllowLan').checked = !!s.allowLan;
   $('#sAllowLanMedia').checked = !!s.allowLanMedia;
@@ -508,7 +514,7 @@ $('#prefs').addEventListener('submit', async (e) => {
   try {
     const oldAllowLAN = !!st.settings?.allowLan;
     const nextAllowLAN = $('#sAllowLan').checked;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
     if (oldAllowLAN !== nextAllowLAN && st.settings.active) {
@@ -517,6 +523,16 @@ $('#prefs').addEventListener('submit', async (e) => {
     }
   } catch (err) { toast(errMsg(err), { err: true }); }
 });
+function syncCustomPlayerFields() {
+  $('#customPlayerFields').hidden = $('#sPlayer').value !== 'custom';
+}
+$('#sPlayer').addEventListener('change', syncCustomPlayerFields);
+$('#sBrowsePlayer').onclick = async () => {
+  try {
+    const path = await call('PickCustomPlayer');
+    if (path) $('#sCustomPlayer').value = path;
+  } catch (e) { toast(errMsg(e), { err: true }); }
+};
 $('#sClose').onclick = () => $('#settings').close();
 $('#probeNodePermissions').onclick = async () => {
   const out = $('#nodePermissionResult'); out.textContent = '检测中…';

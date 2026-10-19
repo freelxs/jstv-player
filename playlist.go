@@ -326,9 +326,9 @@ func firstPlayable(streams []catvod.Stream) *catvod.Stream {
 
 // PlayEpisodes plays episode start of a line. With 连播 on and a player
 // that takes playlists, the rest of the line follows automatically and nil
-// is returned. Otherwise (连播 off, system player, several qualities to
-// choose from, or a web page) the streams of that episode are returned and
-// the page continues with Open as before.
+// is returned. Otherwise (连播 off, the system player, SenPlayer, several
+// qualities to choose from, or a web page) the streams of that episode are
+// returned and the page continues with Open as before.
 func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int) ([]catvod.Stream, error) {
 	if start < 0 || start >= len(eps) {
 		return nil, errors.New("剧集不存在")
@@ -344,7 +344,7 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	}
 	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
 	first := firstPlayable(streams)
-	if s.DisableContinuous || s.Player == "system" || len(streams) != 1 || p.eps.base == "" {
+	if s.DisableContinuous || !playerUsesPlaylist(s.Player) || len(streams) != 1 || p.eps.base == "" {
 		return streams, nil
 	}
 	if first == nil {
