@@ -55,8 +55,15 @@ export interface Settings {
   sourceUrl?: string;
   /** optional explicit node executable */
   nodePath: string;
-  /** builtin | potplayer | iina | mpv | system */
+  /** builtin | potplayer | iina | senplayer | mpv | custom | system */
   player: string;
+  /**
+   * CustomPlayer is the application or executable used when Player is
+   * "custom". CustomArgs is an optional argv list; {url} is the media or
+   * playlist address. Both are ignored for every other player.
+   */
+  customPlayer?: string;
+  customArgs?: string;
   /** refuse to run when index.js.md5 differs */
   strictMd5: boolean;
   /**
@@ -169,6 +176,13 @@ export const Player = {
   open(st: Stream, title: string): Promise<void> {
     return call("Player.Open", st, title);
   },
+  /**
+   * PickCustomPlayer shows the native file dialog and returns the chosen path,
+   * or "" when the dialog is canceled.
+   */
+  pickCustomPlayer(): Promise<string> {
+    return call("Player.PickCustomPlayer");
+  },
   /** Play resolves an episode to streams. */
   play(api: string, flag: string, id: string): Promise<Stream[]> {
     return call("Player.Play", api, flag, id);
@@ -176,9 +190,9 @@ export const Player = {
   /**
    * PlayEpisodes plays episode start of a line. With 连播 on and a player
    * that takes playlists, the rest of the line follows automatically and nil
-   * is returned. Otherwise (连播 off, system player, several qualities to
-   * choose from, or a web page) the streams of that episode are returned and
-   * the page continues with Open as before.
+   * is returned. Otherwise (连播 off, the system player, SenPlayer, several
+   * qualities to choose from, or a web page) the streams of that episode are
+   * returned and the page continues with Open as before.
    */
   playEpisodes(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<Stream[]> {
     return call("Player.PlayEpisodes", api, vodID, show, flag, eps, start);

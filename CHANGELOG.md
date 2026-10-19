@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- macOS can use SenPlayer. Detection checks `/Applications/SenPlayer.app`,
+  `~/Applications/SenPlayer.app`, then Spotlight for bundle id
+  `com.wuziqi.SenPlayer`. Playback runs `open -b` with SenPlayer's
+  `senplayer://x-callback-url/play?url=` scheme so the proxied address is one
+  argument. That scheme plays a single URL; continuous play falls back to the
+  selected episode instead of the local M3U. SenPlayer was not launched on a
+  Mac in this change.
+- Settings → Playback can select a custom player on every platform. A native
+  file dialog picks a macOS `.app`, a Windows `.exe`, or a Linux executable.
+  The path and optional arguments are stored in `settings.json`. `{url}` is
+  replaced in the argument list, or the proxied URL / playlist is appended.
+  The path must exist and be launchable. Arguments are argv, not a shell
+  command. A previously saved player is left as it was.
+
 ## 0.3.4
 
 - Accept CatVod category filters, including numeric option values and a
