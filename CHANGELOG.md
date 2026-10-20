@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5
 
 - macOS can use SenPlayer. Detection checks `/Applications/SenPlayer.app`,
   `~/Applications/SenPlayer.app`, then Spotlight for bundle id
