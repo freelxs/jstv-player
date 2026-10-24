@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,15 +56,15 @@ func TestPlaylistEviction(t *testing.T) {
 func TestBuiltinEpisodeItemsUseResolvedFirstURL(t *testing.T) {
 	eps := []catvod.Episode{{Name: "E1"}, {Name: "E2"}, {Name: "E3"}}
 	items := builtinEpisodeItems("Show", eps, 1, func(i int) string { return "http://127.0.0.1:1/ep/x/" + strconv.Itoa(i) }, "http://127.0.0.1:2/p/resolved/a.m3u8")
-	if len(items) != 2 || items[0].URL != "http://127.0.0.1:2/p/resolved/a.m3u8" || items[1].URL != "http://127.0.0.1:1/ep/x/2" {
+	if len(items) != 3 || items[1].URL != "http://127.0.0.1:2/p/resolved/a.m3u8" || items[0].URL != "http://127.0.0.1:1/ep/x/0" || items[2].URL != "http://127.0.0.1:1/ep/x/2" {
 		t.Fatalf("%+v", items)
 	}
-	if items[0].Title != "Show - E2" {
-		t.Fatal(items[0].Title)
+	if items[1].Title != "Show - E2" {
+		t.Fatal(items[1].Title)
 	}
 	lazy := builtinEpisodeItems("Show", eps, 0, func(i int) string { return "http://127.0.0.1:1/ep/x/" + strconv.Itoa(i) }, "")
-	if lazy[0].URL != "http://127.0.0.1:1/ep/x/0" {
-		t.Fatal(lazy[0].URL)
+	if len(lazy) != 3 || lazy[0].URL != "http://127.0.0.1:1/ep/x/0" {
+		t.Fatal(lazy)
 	}
 }
 
@@ -94,6 +96,45 @@ func TestBuiltinPlaylistPage(t *testing.T) {
 	page := builtinPlaylistPage([]builtinItem{{Title: "a</script>", URL: "http://127.0.0.1:1/ep/x/0"}, {Title: "b", URL: "http://127.0.0.1:1/ep/x/1"}})
 	if strings.Contains(page, "a</script>") || !strings.Contains(page, "addEventListener('ended'") {
 		t.Fatal(page)
+	}
+	if !strings.Contains(page, "hls.min.js") || !strings.Contains(page, "enableWorker:false") || !strings.Contains(page, "direct=1") || !strings.Contains(page, "player/close") {
+		t.Fatal("built-in page is missing the hls.js player")
+	}
+	if !strings.Contains(page, "const START=0") {
+		t.Fatal("playlist page should start at the first item")
+	}
+	started := builtinPlayerPage([]builtinItem{{Title: "a", URL: "http://127.0.0.1/a.m3u8"}, {Title: "b", URL: "http://127.0.0.1/b.m3u8"}}, 1)
+	if !strings.Contains(started, "const START=1") || strings.Contains(started, "a</script>") {
+		t.Fatal(started)
+	}
+	single := playerPage("http://127.0.0.1/a.m3u8", "movie")
+	if !strings.Contains(single, "hls.min.js") || !strings.Contains(single, "enableWorker:false") {
+		t.Fatal("single-item built-in page is missing hls.js")
+	}
+}
+
+func TestEpisodeServerServesHlsJS(t *testing.T) {
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	resp, err := http.Get(p.eps.base + "/hls.min.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "javascript") || !bytes.Contains(body, []byte("function Hls")) && !bytes.Contains(body, []byte("Hls")) {
+		t.Fatalf("%d %s %d", resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("hls.js is not readable by the player page")
+	}
+	closed, err := http.Get(p.eps.base + "/player/close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Body.Close()
+	if closed.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatal(closed.StatusCode)
 	}
 }
 
@@ -174,6 +215,21 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 	}
 	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatal("episode redirect is not readable by the built-in player page")
+	}
+	directResp, err := http.Get(p.eps.epURL(id, 1) + "?direct=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directBody, _ := io.ReadAll(directResp.Body)
+	directResp.Body.Close()
+	if directResp.StatusCode != http.StatusOK {
+		t.Fatalf("direct %d %s", directResp.StatusCode, directBody)
+	}
+	var direct struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(directBody, &direct); err != nil || !strings.Contains(direct.URL, "/p/") || !strings.Contains(direct.URL, "e2") {
+		t.Fatalf("%v %s", err, directBody)
 	}
 	if h := p.GetHistory(api, "v1"); h == nil || h.Index != 1 || h.Flag != line.Flag {
 		t.Fatalf("%+v", h)

@@ -137,8 +137,8 @@ func (p *Player) startEpisodeServer() error {
 }
 
 func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
-	// The built-in player page is not this server's origin. Its media
-	// element and prefetch fetch must be allowed to read redirects.
+	// Media is served by the header proxy on another loopback port, and the
+	// page prefetches episode URLs. Let the player read those responses.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/playlist/"):
@@ -150,6 +150,25 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 		w.Write([]byte(p.eps.m3u(id, pl)))
+	case r.URL.Path == "/hls.min.js":
+		b, err := webAssets.ReadFile("webassets/hls.min.js")
+		if err != nil {
+			http.Error(w, "播放器组件缺失", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(b)
+	case r.URL.Path == "/player/close":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+			return
+		}
+		// The page cannot close a MyGo window itself. This only closes the
+		// in-window player, and only while the desktop UI loop is running.
+		p.closeBuiltin()
+		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(r.URL.Path, "/ep/"):
 		id, n, ok := parseEpPath(r.URL.Path)
 		pl := p.eps.get(id)
@@ -170,6 +189,13 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Query().Get("direct") == "1" {
+			// The video element follows this redirect unreliably, and hls.js
+			// needs the final proxy URL. External players keep the 302.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(w).Encode(map[string]string{"url": u})
+			return
+		}
 		http.Redirect(w, r, u, http.StatusFound)
 	default:
 		http.NotFound(w, r)
@@ -379,11 +405,12 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
 	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
 	if s.Player == "builtin" || s.Player == "" {
-		// The first episode is already resolved. Hand that proxied URL to
-		// the video element; a redirect from the episode server is what the
-		// Linux web view fails to play. Later episodes stay lazy.
+		// The clicked episode is already resolved. Hand that proxied URL to
+		// the page; other episodes stay as /ep/ links and are resolved with
+		// ?direct=1, because a video element follows the 302 unreliably and
+		// hls.js needs the final proxy URL. External players still get the M3U.
 		items := builtinEpisodeItems(show, eps, start, func(i int) string { return p.eps.epURL(id, i) }, u)
-		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlaylistPage(items))
+		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlayerPage(items, start))
 		return nil, nil
 	}
 	return nil, p.launch(s.Player, p.eps.playlistURL(id), "")
@@ -394,12 +421,14 @@ type builtinItem struct {
 	URL   string `json:"u"`
 }
 
-// builtinEpisodeItems lists episodes from start. The first entry uses the
-// already resolved proxy URL when one exists; the rest point at the episode
-// server so they are resolved only when the player reaches them.
+// builtinEpisodeItems lists the whole line. The clicked episode uses the
+// already resolved proxy URL when one exists; every other entry points at
+// the episode server so it is resolved only when the player reaches it.
+// Previous and next can therefore move both ways. External M3U playlists
+// still start at the clicked episode and are built separately.
 func builtinEpisodeItems(show string, eps []catvod.Episode, start int, epURL func(int) string, firstURL string) []builtinItem {
-	items := make([]builtinItem, 0, len(eps)-start)
-	for i := start; i < len(eps); i++ {
+	items := make([]builtinItem, 0, len(eps))
+	for i := 0; i < len(eps); i++ {
 		u := epURL(i)
 		if i == start && firstURL != "" {
 			u = firstURL
@@ -416,24 +445,119 @@ func playbackPageBase(loopback string) string {
 	return strings.TrimRight(loopback, "/") + "/"
 }
 
-// builtinPlaylistPage is the built-in player with auto-advance on "ended".
+// builtinPlaylistPage is the in-window player starting at the first item.
 func builtinPlaylistPage(items []builtinItem) string {
-	j, _ := json.Marshal(items)
-	js := strings.ReplaceAll(string(j), "</", `<\/`)
-	t := ""
-	if len(items) > 0 {
-		t = items[0].Title
+	return builtinPlayerPage(items, 0)
+}
+
+// builtinPlayerPage is the desktop built-in player: the same HTML5 video and
+// hls.js path as web mode. start is the index to play first. The page is
+// loaded with the episode server as its base, so hls.min.js and player/close
+// resolve there. macOS can play HLS natively; other web views use hls.js
+// (enableWorker false, because a blob worker is not required and is easier
+// to block). Episode-server URLs are resolved with ?direct=1 first.
+func builtinPlayerPage(items []builtinItem, start int) string {
+	if items == nil {
+		items = []builtinItem{}
 	}
-	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(t) + `</title>
-<style>html,body{margin:0;height:100%;background:#000;font:13px system-ui;color:#fff}video{width:100%;height:100%}
-#bar{position:fixed;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;padding:8px 12px;background:linear-gradient(#000a,#0000);opacity:0;transition:opacity .2s}
-body:hover #bar{opacity:1}#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button{background:#fff2;color:#fff;border:0;border-radius:6px;padding:4px 10px;cursor:pointer}#e{color:#f88}</style></head>
-<body><video controls autoplay playsinline></video><div id="bar"><span id="t"></span><span id="e"></span><button id="p">上一集</button><button id="n">下一集</button></div>
-<script>const L=` + js + `;let i=0;const v=document.querySelector('video');
-function go(k){if(k<0||k>=L.length)return;i=k;document.title=L[i].t;document.getElementById('t').textContent=L[i].t+'  ('+(i+1)+'/'+L.length+')';document.getElementById('e').textContent='';v.src=L[i].u;v.play().catch(()=>{})}
-let pf=-1;v.addEventListener('timeupdate',()=>{if(i+1<L.length&&pf!==i+1&&v.duration&&v.duration-v.currentTime<60){pf=i+1;fetch(L[i+1].u+'?prefetch=1').catch(()=>{})}});
-v.addEventListener('ended',()=>go(i+1));v.addEventListener('error',()=>{document.getElementById('e').textContent='` + builtinPlaybackHint() + `'});
-document.getElementById('p').onclick=()=>go(i-1);document.getElementById('n').onclick=()=>go(i+1);go(0)</script></body></html>`
+	if start < 0 || start >= len(items) {
+		start = 0
+	}
+	j, _ := json.Marshal(items)
+	payload := strings.ReplaceAll(string(j), "</", `<\/`)
+	title := ""
+	if len(items) > 0 {
+		title = items[start].Title
+	}
+	hint, _ := json.Marshal(builtinPlaybackHint())
+	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
+<style>html,body{margin:0;height:100%;background:#000;color:#fff;font:13px system-ui,sans-serif}video{width:100%;height:100%;background:#000}
+#bar{position:fixed;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;padding:8px 12px;background:linear-gradient(#000c,#0000);z-index:2}
+#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button{background:#fff2;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
+button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:42%}
+#go{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);background:#fff;color:#111;font-size:15px;padding:10px 18px;z-index:3}</style></head>
+<body><video controls autoplay playsinline crossorigin="anonymous"></video><button id="go" type="button" hidden>点击播放</button>
+<div id="bar"><span id="t"></span><span id="e"></span><button id="p" type="button">上一集</button><button id="n" type="button">下一集</button><button id="c" type="button">关闭</button></div>
+<script src="hls.min.js"></script>
+<script>
+const L=` + payload + `;
+const START=` + strconv.Itoa(start) + `;
+const HINT=` + string(hint) + `;
+let i=-1, token=0, hls=null, pf=-1, suppress=false;
+const v=document.querySelector('video');
+const err=document.getElementById('e');
+const goBtn=document.getElementById('go');
+function showErr(m){err.textContent=m||HINT;}
+function sync(){
+  document.getElementById('p').disabled=i<=0;
+  document.getElementById('n').disabled=i<0||i+1>=L.length;
+  const label=L.length&&i>=0?(L[i].t+'  ('+(i+1)+'/'+L.length+')'):'';
+  document.getElementById('t').textContent=label;
+  if(i>=0&&L[i]) document.title=L[i].t||'';
+}
+function destroyHls(){
+  suppress=true;
+  if(hls){hls.destroy();hls=null;}
+  v.pause();
+  v.removeAttribute('src');
+  try{v.load();}catch(e){}
+}
+function tryPlay(){
+  goBtn.hidden=true;
+  const pending=v.play();
+  if(pending&&pending.catch) pending.catch(function(){goBtn.hidden=false;});
+}
+function isEpisode(u){
+  try{return /^\/ep\/[^/]+\/\d+(\/|$)/.test(new URL(u).pathname);}catch(e){return false;}
+}
+function isHls(u){return /\.m3u8?(\?|#|$)/i.test(u);}
+async function mediaURL(u){
+  if(!isEpisode(u)) return u;
+  const sep=u.indexOf('?')>=0?'&':'?';
+  const r=await fetch(u+sep+'direct=1',{headers:{Accept:'application/json'}});
+  const body=await r.json().catch(function(){return {};});
+  if(!r.ok||!body.url) throw new Error((body&&body.error)||'这一集解析失败');
+  return body.url;
+}
+function attach(url){
+  const hlsLike=isHls(url);
+  if(hlsLike&&v.canPlayType('application/vnd.apple.mpegurl')){suppress=false;v.src=url;tryPlay();return;}
+  if(hlsLike&&window.Hls&&window.Hls.isSupported()){
+    hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
+    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;showErr(HINT);});
+    hls.on(window.Hls.Events.MANIFEST_PARSED,function(){tryPlay();});
+    hls.loadSource(url);
+    hls.attachMedia(v);
+    setTimeout(function(){suppress=false;},0);
+    return;
+  }
+  if(hlsLike){showErr('当前窗口不能播放 HLS（没有 Media Source Extensions）。'+HINT);return;}
+  suppress=false;v.src=url;tryPlay();
+}
+async function go(k){
+  if(!L.length||k<0||k>=L.length)return;
+  const mine=++token;
+  i=k;sync();err.textContent='';goBtn.hidden=true;
+  destroyHls();
+  let url;
+  try{url=await mediaURL(L[i].u);}catch(e){if(mine===token)showErr((e&&e.message)||HINT);return;}
+  if(mine!==token)return;
+  attach(url);
+}
+v.addEventListener('timeupdate',function(){
+  if(i+1<L.length&&pf!==i+1&&v.duration&&isFinite(v.duration)&&v.duration-v.currentTime<60){
+    pf=i+1;const u=L[i+1].u;
+    if(isEpisode(u)) fetch(u+(u.indexOf('?')>=0?'&':'?')+'prefetch=1').catch(function(){});
+  }
+});
+v.addEventListener('ended',function(){if(i+1<L.length)go(i+1);});
+v.addEventListener('error',function(){if(suppress)return;if(!v.getAttribute('src')&&!hls)return;if(!err.textContent)showErr(HINT);});
+document.getElementById('p').onclick=function(){go(i-1);};
+document.getElementById('n').onclick=function(){go(i+1);};
+document.getElementById('c').onclick=function(){token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
+goBtn.onclick=function(){tryPlay();};
+if(L.length) go(START); else showErr('没有可播放的地址');
+</script></body></html>`
 }
 
 // ---- watch history ----

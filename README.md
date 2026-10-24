@@ -15,8 +15,8 @@
 - 站点列表、分类浏览与翻页、单站/全站搜索（结果逐站流式返回）
 - 分类筛选 UI：支持 `home.filters` 中按分类 ID 提供的字符串选项格式；无效或缺失 metadata 时安全隐藏筛选控件
 - 详情页、多线路剧集列表、多清晰度选择
-- 播放：内置播放器、mpv（三个平台）、PotPlayer（仅 Windows）、IINA（仅 macOS）、SenPlayer（仅 macOS）、自定义播放器、系统默认；需要请求头的流经本地代理转发
-- **连播**：点某一集后，同一线路的后续剧集自动接着播放（mpv / IINA / PotPlayer / 自定义播放器通过本地 M3U 播放列表，每一集在播到时才向插件解析；内置播放器播完自动下一集）。SenPlayer 的 URL Scheme 只接受一个播放地址，连播会退回当前这一集。设置 → 播放里可关闭。当前一集播放时会在后台提前解析并预热下一集，mpv / IINA 还会在快结束时提前打开下一项，换集不卡顿。启动 IINA 时传入仅用于该次启动的 `disableOSDFileStartMsg` 偏好覆盖，不写入 IINA 全局偏好。记住每部剧上次看到的集数，详情页可“继续播放”
+- 播放：内置播放器（窗口里的 HTML5 `<video>` + hls.js，和网页模式同一套）、mpv（三个平台）、PotPlayer（仅 Windows）、IINA（仅 macOS）、SenPlayer（仅 macOS）、自定义播放器、系统默认；需要请求头的流经本地代理转发
+- **连播**：点某一集后，同一线路的后续剧集自动接着播放（mpv / IINA / PotPlayer / 自定义播放器通过本地 M3U 播放列表，每一集在播到时才向插件解析；内置播放器在窗口里用上一集 / 下一集切换，播完自动下一集，也可以回到更早的集）。SenPlayer 的 URL Scheme 只接受一个播放地址，连播会退回当前这一集。设置 → 播放里可关闭。当前一集播放时会在后台提前解析并预热下一集，mpv / IINA 还会在快结束时提前打开下一项，换集不卡顿。启动 IINA 时传入仅用于该次启动的 `disableOSDFileStartMsg` 偏好覆盖，不写入 IINA 全局偏好。记住每部剧上次看到的集数，详情页可“继续播放”
 - 浅色 / 深色模式跟随系统；海报网格、骨架屏加载、空状态和错误状态（带重试）
 - 插件返回网页（`parse:1` 或 `text/html`）时在新窗口打开
 - 可选的播放桥（`/play?vid=`）：默认关闭，只有在设置里填写自己的 URL 模板后才启用
@@ -28,10 +28,10 @@
 
 ## 运行依赖
 
-- macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）
+- macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）。Linux 上用内置播放器看 HLS 时，WebKitGTK 还需要 GStreamer 解码插件：`gstreamer1.0-plugins-good`、`gstreamer1.0-plugins-bad`、`gstreamer1.0-libav`。Debian 包把这三项列为依赖。AC3 等专利编码另需 `gstreamer1.0-plugins-ugly`。Fedora 上对应包名是 `gstreamer1-plugins-good`、`gstreamer1-plugins-bad-free` 和 `gstreamer1-libav`。
 - Node.js 18+（插件本身是 Node.js 程序）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io) 或 [SenPlayer](https://apps.apple.com/app/senplayer-media-player/id6443975850)。
-- Windows 和 Linux 的系统 web view 一般不能直接播放 HLS，所以默认用外部播放器：Windows 上依次选 PotPlayer、mpv、内置；Linux 上选 mpv、内置。macOS 仍默认内置播放器。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
+- 内置播放器在桌面窗口里播放，用的是和网页模式同一套 HTML5 `<video>` 与 hls.js。macOS 的 web view 能直接播 HLS，会走系统解码；Windows WebView2 和 Linux WebKitGTK 在有 Media Source Extensions 时由 hls.js 把 HLS 转成 fMP4。没有 MSE 或缺少解码插件时，窗口里会提示改用外部播放器。因为这一点，还没保存过播放器设置时，Windows 仍优先 PotPlayer、然后 mpv、最后内置；Linux 优先 mpv、然后内置。macOS 仍默认内置。已经保存的选择不会被改掉。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
 - 设置 → 播放里可以选「自定义播放器」，用系统文件对话框选择 macOS `.app`、Windows `.exe` 或 Linux 可执行文件，并可选附加参数。参数里的 `{url}` 会换成代理地址或连播 M3U；不写 `{url}` 时地址追加在参数末尾。程序以参数列表启动，不经过 shell。路径必须存在且能启动，否则保存和播放都会提示错误。
 - 所有外部播放器拿到的都是本地代理地址，请求头由代理加上。默认播放器只在还没保存过播放器设置时生效；已经保存过的设置不会被改动，SenPlayer 和自定义播放器也不会被自动选上。可在设置 → 播放里切换。
 
@@ -93,7 +93,7 @@ go tool mygo dev                                # 开发模式
 
 1. 打开 App → 设置 → 订阅，添加你自己的插件地址（可以添加多个）。
 2. 点左上角的订阅名切换订阅；左侧选站点，上方选分类；回车搜索。
-3. 点剧集播放。内置播放器放不了时，在设置 → 播放里换 mpv / IINA / SenPlayer，或指定自定义播放器。
+3. 点剧集播放。设置 → 播放里选「内置播放器（窗口内 HLS / MP4）」时，画面留在应用窗口里，可以用上一集、下一集和关闭。放不了时换 mpv / IINA / SenPlayer，或指定自定义播放器。选了外部播放器之后，仍然由那个程序打开，不会改回窗口内播放。
 4. 设置 → 日志 可查看插件进程输出；播放 → 持久化脱敏日志默认关闭，开启后写入应用数据目录 `logs/`。日志页只显示行时间戳在最近 7 天内的日志，启动和读取时清理过期行；4 MiB 容量上限可能导致更早淘汰。清除日志不影响 pin、播放记录或插件配置。
 
 数据目录：macOS `~/Library/Application Support/JSTV Player/`，Windows `%APPDATA%\JSTV Player\`，Linux `~/.config/JSTV Player/`（以 MyGo 的用户数据目录为准）。里面有 `settings.json`，以及每个订阅各自的 `subs/<id>/`（插件文件和插件数据）。

@@ -27,7 +27,7 @@ TOFU 无法保护首次下载免受恶意源站、受控 DNS 或首次下载链�
 
 ## 外部播放器
 
-内置播放器以外的程序只收到本地代理 URL 或连播 M3U。SenPlayer 通过 `open -b <bundle id>` 接收 `senplayer://x-callback-url/play?url=`，URL 是单个参数。自定义播放器是用户在设置里选定的本机程序：macOS `.app` 经 `open` 启动，其他平台直接执行该文件。附加参数按引号拆成 argv，`{url}` 替换成一个参数；不调用 shell，不展开变量、命令替换或通配符。保存和播放前会检查路径存在且可执行（Windows 为 `.exe`，macOS 应用程序包需含 `Contents/Info.plist`）。用户选择的程序以当前用户身份运行，应用不把它当作沙箱。
+内置播放器在本机窗口里加载页面，脚本和关闭请求只访问 loopback 上的剧集服务（`/hls.min.js`、`/ep/...`、`POST /player/close`）。`/player/close` 只关闭这个播放窗口。`?direct=1` 返回的是原先 302 会跳到的同一个本地代理地址。内置播放器以外的程序只收到本地代理 URL 或连播 M3U。SenPlayer 通过 `open -b <bundle id>` 接收 `senplayer://x-callback-url/play?url=`，URL 是单个参数。自定义播放器是用户在设置里选定的本机程序：macOS `.app` 经 `open` 启动，其他平台直接执行该文件。附加参数按引号拆成 argv，`{url}` 替换成一个参数；不调用 shell，不展开变量、命令替换或通配符。保存和播放前会检查路径存在且可执行（Windows 为 `.exe`，macOS 应用程序包需含 `Contents/Info.plist`）。用户选择的程序以当前用户身份运行，应用不把它当作沙箱。
 
 ## 本地播放代理
 

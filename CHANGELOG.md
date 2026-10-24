@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add a web deployment mode (`--web` or `JSTV_MODE=web`) with username/password login, session cookies, and in-browser HLS/MP4 playback. The desktop client does not require login and still launches the configured native player. Docker Compose publishes the HTTP port and keeps settings, subscriptions, and credentials in a data volume.
+- The desktop client can select the same built-in HTML5 video + hls.js player used in web mode, alongside mpv, SenPlayer, and a custom player. Episodes play in a window through the existing media proxy, with previous, next, and close. External player launch paths are unchanged. Linux packages depend on GStreamer plugins so WebKitGTK can decode that HLS.
 
 ## 0.3.5
 
