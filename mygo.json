@@ -14,5 +14,12 @@
       }
     }
   },
-  "copyright": "Copyright (c) 2026 freelxs. Released under the MIT License."
+  "copyright": "Copyright (c) 2026 freelxs. Released under the MIT License.",
+  "linux": {
+    "depends": [
+      "gstreamer1.0-plugins-good",
+      "gstreamer1.0-plugins-bad",
+      "gstreamer1.0-libav"
+    ]
+  }
 }
