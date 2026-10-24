@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +99,11 @@ type Player struct {
 	// webMode is set only by the HTTP deployment. Desktop leaves it false,
 	// so playback still opens native players and windows.
 	webMode atomic.Bool
+
+	// builtinWin is the in-window player, when one is open. The page asks
+	// the loopback episode server to close it; window.close() does not.
+	builtinMu  sync.Mutex
+	builtinWin *mygo.Window
 }
 
 func newPlayer(dir string) *Player {
@@ -728,9 +732,38 @@ func (p *Player) openBuiltin(title, page string) {
 	}
 	base := playbackPageBase(p.eps.base)
 	mygo.RunOnMain(func() {
+		p.builtinMu.Lock()
+		old := p.builtinWin
+		p.builtinWin = nil
+		p.builtinMu.Unlock()
+		if old != nil {
+			old.Close()
+		}
 		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})
+		w.OnClosed(func() {
+			p.builtinMu.Lock()
+			if p.builtinWin == w {
+				p.builtinWin = nil
+			}
+			p.builtinMu.Unlock()
+		})
+		p.builtinMu.Lock()
+		p.builtinWin = w
+		p.builtinMu.Unlock()
 		w.Page().LoadHTML(page, base)
 	})
+}
+
+// closeBuiltin closes the in-window player. It is safe to call when none
+// is open. Do not call it from a unit test: Window.Close waits on the UI
+// thread, and the test process is not running the GUI loop.
+func (p *Player) closeBuiltin() {
+	p.builtinMu.Lock()
+	w := p.builtinWin
+	p.builtinMu.Unlock()
+	if w != nil {
+		w.Close()
+	}
 }
 
 // launch opens u (a stream or an M3U playlist) in an external player.
@@ -822,9 +855,10 @@ func mpvArgs(u, title string) []string {
 	return append(args, "--", u)
 }
 
-// defaultPlayer: the macOS web view plays HLS itself; on Windows and Linux
-// the web views generally do not, so an installed external player is the
-// better default there: PotPlayer (Windows), then mpv, then built-in.
+// defaultPlayer prefers an installed external player on Windows and Linux.
+// The built-in player can play HLS there too (hls.js, when the web view has
+// Media Source Extensions and codecs), but mpv or PotPlayer does not depend
+// on that. macOS keeps the built-in player, which can play HLS natively.
 // SenPlayer and a custom player are opt-in. This runs only when no player
 // has been saved.
 func defaultPlayer() string {
@@ -893,13 +927,9 @@ func findExe(names ...string) string {
 	return ""
 }
 
-// playerPage is the built-in player: the macOS web view plays HLS (m3u8)
-// and MP4 natively, other platforms' web views mostly MP4 only; streams that need headers go through the local HeaderProxy.
+// playerPage is one already-resolved stream in the in-window player.
 func playerPage(u, title string) string {
-	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
-<style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%}#e{position:fixed;top:8px;left:8px;color:#f88;font:13px system-ui}</style></head>
-<body><video src="` + html.EscapeString(u) + `" controls autoplay playsinline></video><div id="e"></div>
-<script>document.querySelector('video').addEventListener('error',()=>{document.getElementById('e').textContent='` + builtinPlaybackHint() + `'})</script></body></html>`
+	return builtinPlayerPage([]builtinItem{{Title: title, URL: u}}, 0)
 }
 
 // builtinPlaybackHint names a player the current OS can actually launch.
