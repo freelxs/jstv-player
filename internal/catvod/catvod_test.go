@@ -1169,3 +1169,16 @@ func TestPreflightTimeoutDoesNotRevealURL(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRestrictedHostLookupIsCached(t *testing.T) {
+	host := fmt.Sprintf("no-such-%d.invalid", time.Now().UnixNano())
+	start := time.Now()
+	for i := 0; i < 40; i++ {
+		if restrictedNetworkURL("https://" + host + "/seg.ts") {
+			t.Fatal("unknown host treated as restricted")
+		}
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("repeated host checks took %s; DNS result was not reused", time.Since(start))
+	}
+}

@@ -330,6 +330,9 @@ func firstPlayable(streams []catvod.Stream) *catvod.Stream {
 // qualities to choose from, or a web page) the streams of that episode are
 // returned and the page continues with Open as before.
 func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int) ([]catvod.Stream, error) {
+	if p.webMode.Load() {
+		return nil, errors.New("网页模式请使用浏览器播放")
+	}
 	if start < 0 || start >= len(eps) {
 		return nil, errors.New("剧集不存在")
 	}

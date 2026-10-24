@@ -282,6 +282,9 @@ func customPlayerDialogOptions(goos string) mygo.OpenDialogOptions {
 // PickCustomPlayer shows the native file dialog and returns the chosen path,
 // or "" when the dialog is canceled.
 func (p *Player) PickCustomPlayer(ctx context.Context) (string, error) {
+	if p.webMode.Load() {
+		return "", errors.New("网页模式不能选择本机播放器")
+	}
 	opts := customPlayerDialogOptions(runtime.GOOS)
 	opts.Parent = mygo.CallerWindow(ctx)
 	if cur := strings.TrimSpace(p.GetSettings().CustomPlayer); cur != "" {

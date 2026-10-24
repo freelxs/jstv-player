@@ -1,0 +1,7 @@
+.git
+dist
+out
+test-logs
+*.dmg
+.mygo
+.env

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -95,6 +96,10 @@ type Player struct {
 	inited       map[string]bool
 	logs         []string
 	pendingTrust map[string]sourcePin
+
+	// webMode is set only by the HTTP deployment. Desktop leaves it false,
+	// so playback still opens native players and windows.
+	webMode atomic.Bool
 }
 
 func newPlayer(dir string) *Player {
@@ -522,6 +527,12 @@ func (p *Player) Search(api, wd string, page int) (catvod.M, error) {
 // SearchAll searches every searchable site at once, streaming each site's
 // answer to the page as it arrives.
 func (p *Player) SearchAll(ctx context.Context, wd string, out *mygo.Channel[SiteResults]) error {
+	return p.streamSearch(ctx, wd, func(r SiteResults) error { return out.Send(r) })
+}
+
+// streamSearch is SearchAll without a desktop channel, so the web server can
+// write each result as it arrives. Send errors cancel the rest.
+func (p *Player) streamSearch(ctx context.Context, wd string, send func(SiteResults) error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -577,7 +588,7 @@ func (p *Player) SearchAll(ctx context.Context, wd string, out *mygo.Channel[Sit
 			if sendErr != nil || ctx.Err() != nil {
 				return
 			}
-			if err := out.Send(r); err != nil {
+			if err := send(r); err != nil {
 				sendErr = err
 				cancel()
 			}
@@ -658,6 +669,9 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 
 // Open plays a stream with the configured player.
 func (p *Player) Open(st catvod.Stream, title string) error {
+	if p.webMode.Load() {
+		return errors.New("网页模式请使用浏览器播放")
+	}
 	player := p.GetSettings().Player
 	if st.Parse || catvod.IsWebPage(st.URL) {
 		// A web page that needs sniffing: show it in a window.
@@ -709,6 +723,9 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 }
 
 func (p *Player) openBuiltin(title, page string) {
+	if p.webMode.Load() {
+		return
+	}
 	base := playbackPageBase(p.eps.base)
 	mygo.RunOnMain(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})

@@ -1,0 +1,27 @@
+# Web deployment of JSTV Player. Desktop builds do not use this file.
+# Set JSTV_WEB_PASSWORD in the environment or a .env file (8–72 bytes).
+services:
+  jstv-player:
+    build: .
+    image: jstv-player:local
+    ports:
+      - "${JSTV_WEB_PORT:-8080}:8080"
+    environment:
+      JSTV_WEB_USER: ${JSTV_WEB_USER:-admin}
+      JSTV_WEB_PASSWORD: ${JSTV_WEB_PASSWORD:?Set JSTV_WEB_PASSWORD in the shell or a .env file}
+      JSTV_WEB_SECURE: ${JSTV_WEB_SECURE:-0}
+      JSTV_WEB_RESET_PASSWORD: ${JSTV_WEB_RESET_PASSWORD:-0}
+      JSTV_DATA_DIR: /data
+      JSTV_WEB_ADDR: ":8080"
+    volumes:
+      - jstv-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  jstv-data:

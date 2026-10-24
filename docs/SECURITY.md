@@ -41,6 +41,17 @@ HLS 主清单、variant、密钥及分片使用同一会话映射。允许公网
 
 “允许局域网访问”将插件 HTTP 服务绑定到所有网络接口，可能让其他设备调用插件 API 和其代理路由。此项默认关闭，与局域网媒体播放授权分开。变更设置时先同步停止旧进程，再由界面尝试按新绑定重载；重载失败不会保留旧的公网/LAN 监听。
 
+## 网页模式
+
+`--web` / `JSTV_MODE=web` 把同一套 Go 服务暴露给浏览器。桌面进程不启用这套登录。
+
+- 管理员密码只以 bcrypt 形式写在数据目录 `auth.json`（权限 0600）。`JSTV_WEB_PASSWORD` 只在第一次创建，或显式设置 `JSTV_WEB_RESET_PASSWORD=1` 时使用。
+- 会话 cookie 为 HttpOnly、`SameSite=Lax`。`JSTV_WEB_SECURE=1` 时附加 `Secure`，应与 HTTPS 一起使用。服务端会话记录只保存令牌的 SHA-256，默认 12 小时滑动、最长 7 天。
+- 除登录页、登录接口和仅返回 `ok` 的 `/healthz` 外，界面、JSON 接口、`/media` 播放和 `/poster` 海报都要带有效会话。播放清单里的地址改写成同源 `/media/...`，不把上游 URL 和请求头交给浏览器。
+- 修改类接口要求 `Content-Type: application/json` 和 `X-JSTV-Request: 1`，避免其他网站用表单带上 cookie。
+- 海报代理拒绝回环、私网和链路本地地址，只额外放行当前插件进程自己的 loopback 端口。不代理插件返回的 HTML 页面到本站源上。
+- 登录用户仍然可以让容器执行自己添加的 Node 插件。登录限制的是谁能操作界面，不是插件的权限。
+
 ## 验证范围
 
-自动化测试使用仓库 mock 插件和本地 `httptest` fixture；它们验证 HTTP 接口、opaque 授权、HLS 改写、Range、重定向和状态撤销，不代表真实 CDN、真实第三方插件或真实播放器端到端播放已经验证。浏览器 PNA/LNA 提示及平台防火墙行为仍取决于运行环境。
+自动化测试使用仓库 mock 插件和本地 `httptest` fixture；它们验证 HTTP 接口、opaque 授权、HLS 改写、Range、重定向和状态撤销，以及网页模式的登录、退出、未登录拒绝和播放地址改写。不代表真实 CDN、真实第三方插件或真实播放器端到端播放已经验证。浏览器 PNA/LNA 提示及平台防火墙行为仍取决于运行环境。

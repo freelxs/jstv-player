@@ -18,6 +18,12 @@ browseRequests.begin = () => { closeActiveSearch(); return beginBrowse(); };
 browseRequests.invalidate = () => { closeActiveSearch(); invalidateBrowse(); };
 
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
+// Web deployment loads posters through the authenticated image proxy. Desktop
+// keeps the original address because __JSTV_WEB__ is unset.
+function posterURL(url) {
+  if (!window.__JSTV_WEB__ || !url) return url;
+  return '/poster?u=' + encodeURIComponent(String(url));
+}
 
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
@@ -286,7 +292,7 @@ function cards(list, site) {
       const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
       img.onload = () => img.classList.add('loaded');
       img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
-      img.src = v.vod_pic; poster.append(img);
+      img.src = posterURL(v.vod_pic); poster.append(img);
     }
     if (v.vod_remarks) poster.append(el('span', { class: 'badge' }, v.vod_remarks));
     poster.append(el('span', { class: 'play' }, icon('play')));
@@ -368,7 +374,7 @@ async function openDetail(site, id) {
     const v = d.vod;
     const cover = el('div', { class: 'cover' });
     const bg = el('div', { class: 'bg' });
-    if (v.vod_pic) { cover.append(el('img', { src: v.vod_pic, referrerpolicy: 'no-referrer', alt: '' })); bg.style.backgroundImage = `url("${String(v.vod_pic).replace(/"/g, '%22')}")`; }
+    if (v.vod_pic) { const pic = posterURL(v.vod_pic); cover.append(el('img', { src: pic, referrerpolicy: 'no-referrer', alt: '' })); bg.style.backgroundImage = `url("${String(pic).replace(/"/g, '%22')}")`; }
     const meta = [v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).map((x) => el('span', {}, String(x)));
     const desc = String(v.vod_content || '').replace(/<[^>]+>/g, '').trim();
     const hero = el('div', { class: 'hero' }, bg, cover, el('div', { class: 'info' },

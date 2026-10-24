@@ -2,3 +2,4 @@ dist/
 build/
 .mygo/
 *.dmg
+.env

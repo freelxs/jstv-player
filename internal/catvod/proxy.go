@@ -55,6 +55,16 @@ const defaultMediaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWe
 const maxProxyResources = 16384
 const maxProxyGrants = 4096
 
+// BaseURL is the loopback origin this proxy listens on, without a trailing slash.
+// It is empty until Start succeeds. Web deployment rewrites it to a same-origin
+// path before a browser sees a playlist; desktop players keep using this origin.
+func (p *HeaderProxy) BaseURL() string {
+	if p == nil {
+		return ""
+	}
+	return p.base
+}
+
 // Start listens on 127.0.0.1 (random port).
 func (p *HeaderProxy) Start() error {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -345,7 +355,7 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if len(via) >= 10 {
 			return http.ErrUseLastResponse
 		}
-		if restrictedNetworkURL(next.URL.String()) && !resource.AllowLAN && !sameOrigin(&initial, next.URL) {
+		if !resource.AllowLAN && !sameOrigin(&initial, next.URL) && restrictedNetworkURL(next.URL.String()) {
 			return fmt.Errorf("redirect to local/LAN address blocked")
 		}
 		return nil
@@ -376,7 +386,9 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			blocked := false
 			body = RewritePlaylist(body, base, func(s string) string {
 				resolved, _ := url.Parse(s)
-				if restrictedNetworkURL(s) && !resource.AllowLAN && !sameOrigin(tu, resolved) {
+				// sameOrigin is checked first so a long VOD playlist does not
+				// DNS-lookup every segment that stays on the playlist host.
+				if !resource.AllowLAN && !sameOrigin(tu, resolved) && restrictedNetworkURL(s) {
 					blocked = true
 					return "about:invalid#blocked-lan-resource"
 				}
@@ -438,16 +450,48 @@ func restrictedNetworkURL(raw string) bool {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
+	return lookupRestrictedHost(host)
+}
+
+// lookupRestrictedHost caches DNS answers briefly. Rewriting one HLS
+// playlist otherwise looks the host up once per segment and can exceed the
+// playback preflight deadline on a long movie.
+type hostRestrict struct {
+	restricted bool
+	until      time.Time
+}
+
+var (
+	hostRestrictMu    sync.Mutex
+	hostRestrictCache = map[string]hostRestrict{}
+)
+
+func lookupRestrictedHost(host string) bool {
+	now := time.Now()
+	hostRestrictMu.Lock()
+	if entry, ok := hostRestrictCache[host]; ok && now.Before(entry.until) {
+		hostRestrictMu.Unlock()
+		return entry.restricted
+	}
+	hostRestrictMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return false
-	}
-	for _, candidate := range ips {
-		if restricted(candidate) {
-			return true
+	restrictedHost := false
+	if err == nil {
+		for _, candidate := range ips {
+			if candidate != nil && (candidate.IsLoopback() || candidate.IsPrivate() || candidate.IsLinkLocalUnicast() || candidate.IsLinkLocalMulticast()) {
+				restrictedHost = true
+				break
+			}
 		}
 	}
-	return false
+	hostRestrictMu.Lock()
+	if len(hostRestrictCache) > 512 {
+		hostRestrictCache = map[string]hostRestrict{}
+	}
+	hostRestrictCache[host] = hostRestrict{restricted: restrictedHost, until: time.Now().Add(30 * time.Second)}
+	hostRestrictMu.Unlock()
+	return restrictedHost
 }

@@ -120,20 +120,83 @@ go tool mygo dev                                # 开发模式
 
 0.1 版的单个 `sourceUrl` 会在启动时自动迁移成第一个订阅。
 
+## 网页部署
+
+桌面客户端的启动方式不变。网页模式是额外的运行方式：同一个 Go 程序加上 `--web`（或环境变量 `JSTV_MODE=web`）后，用 HTTP 提供现有界面，并要求登录。浏览器里不能启动 mpv、PotPlayer、IINA、SenPlayer 或自定义播放器，所以网页模式用页面内的 HTML5 `<video>` 和 [hls.js](https://github.com/video-dev/hls.js)（Apache-2.0，文件在 `webassets/`）播放。需要请求头的流仍走原来的本地代理，浏览器只拿到本站的 `/media/...` 地址。
+
+未登录时，页面、`/api/*` 和播放、海报地址都会被拒绝。`/healthz` 只返回 `ok`，给容器健康检查用，不包含订阅或播放数据。桌面模式不登录。
+
+登录是单个管理员账号。密码用 bcrypt 存在数据目录的 `auth.json`，不明文保存。会话是 HttpOnly、`SameSite=Lax` 的 cookie，服务端只存令牌的 SHA-256。改接口和退出登录还要带 `Content-Type: application/json` 和 `X-JSTV-Request: 1`。同一 IP 连续密码错误会暂时拒绝登录。
+
+| 变量 | 作用 |
+|---|---|
+| `JSTV_WEB_USER` | 初次创建管理员时的用户名，默认 `admin`。不能含空格、`/`、`\`、`:` |
+| `JSTV_WEB_PASSWORD` | 初次创建时必填，8–72 字节。数据目录里已经有 `auth.json` 时，单改这个变量不会改掉已保存的密码 |
+| `JSTV_WEB_RESET_PASSWORD` | 设为 `1` 时，用上面的用户名和密码覆盖 `auth.json`，并清掉现有会话 |
+| `JSTV_DATA_DIR` | 设置、订阅、插件、登录凭据和会话。容器里是 `/data` |
+| `JSTV_WEB_ADDR` | 监听地址，默认 `:8080` |
+| `JSTV_WEB_PORT` | 只用于 compose 映射到主机的端口，默认 `8080` |
+| `JSTV_WEB_SECURE` | 设为 `1` 时 session cookie 带 `Secure`。只在 HTTPS 反向代理后面打开 |
+
+播放地址和插件进程仍留在容器内的 loopback。不要把插件端口发布出去。设置里的「允许局域网访问」会让插件监听容器内所有网卡，同一 Docker 网络里的其他容器能够访问它，默认关闭。
+
+订阅脚本会在容器里以 Node 进程运行，和桌面版一样是用户提供的程序。网页模式只是把「谁能点界面」限制为登录用户，并不是插件沙箱。
+
+```sh
+# 在仓库根目录。密码不要提交进 git。
+export JSTV_WEB_USER=admin
+export JSTV_WEB_PASSWORD='replace-with-your-own-password'
+docker compose up -d --build
+```
+
+浏览器打开 `http://127.0.0.1:8080`（或 `JSTV_WEB_PORT` 指定的端口），登录后在设置里添加订阅。数据在 compose 的 `jstv-data` 卷；要改成目录挂载，把 `docker-compose.yml` 里的卷写成 `./data:/data`。
+
+查看状态和日志：
+
+```sh
+docker compose ps
+docker compose logs -f jstv-player
+```
+
+更换密码：
+
+```sh
+export JSTV_WEB_PASSWORD='another-long-password'
+export JSTV_WEB_RESET_PASSWORD=1
+docker compose up -d
+```
+
+成功登录后把 `JSTV_WEB_RESET_PASSWORD` 改回 `0`，避免每次重启都按环境变量重写密码。前面有 TLS 终结时设 `JSTV_WEB_SECURE=1`，并由反代转发到容器的 8080。反代需要把播放请求的 `Range` 原样转发，不要缓冲响应体。
+
+不用 compose 时：
+
+```sh
+export JSTV_WEB_PASSWORD='replace-with-your-own-password'
+export JSTV_DATA_DIR=/var/lib/jstv-player
+go build -o jstv-player .
+./jstv-player --web
+```
+
+镜像里带 Node.js 24，插件不需要再装 Node。镜像只提供网页模式，不包含桌面窗口。
+
 ## 目录
 
 ```
-main.go              App 入口（MyGo 窗口 + 嵌入前端）
+main.go              App 入口（默认 MyGo 桌面窗口；--web 时走网页服务）
 service.go           绑定给前端的 Player 服务、播放器调用
-subscriptions.go     多订阅的增删改、切换和旧设置迁移
+webserver.go         网页模式的 HTTP、登录和播放反代
+webassets/           网页模式的登录页、mygo 桥、浏览器播放器和 hls.js
+Dockerfile           网页模式镜像
+docker-compose.yml   网页模式的端口、密码和数据卷
 internal/catvod/     接口层：下载/md5、Node 宿主、HTTP 客户端、剧集解析、本地代理、可选播放桥（含单元测试与 mock 插件）
-web/                 前端（纯 HTML/JS，无构建步骤）
+web/                 前端（纯 HTML/JS，无构建步骤；桌面和网页共用）
 docs/PROTOCOL.md     接口说明
 ```
 
 ## 已知限制
 
-- 依赖本机 Node.js；没有内置 Node 运行时。
+- 桌面版依赖本机 Node.js；没有内置 Node 运行时。网页镜像自带 Node.js 24。
+- 网页模式只播放浏览器能播的 HLS / MP4。插件返回的本机网页、需要外部播放器的封装，或浏览器解不了的码流，需要换线路或改用桌面客户端。
 - 插件是用户提供的本机程序；Node 权限模型探测不提供沙箱。日志会对常见凭据格式做脱敏，但无法识别所有第三方插件自定义秘密格式。
 - 网页地址只会在新窗口打开，不做自动嗅探。
 - 筛选 UI 支持文档中的 `{key,label,options}` 和常见 CatVod `{key,name,value:[{n,v}]}` 单选格式。重复的选项值保留第一次出现的那项，不支持任意多选变体。收藏暂未实现；已记录最近播放的线路与集数，可从详情页继续播放。
