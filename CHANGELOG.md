@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add a web deployment mode (`--web` or `JSTV_MODE=web`) with username/password login, session cookies, and in-browser HLS/MP4 playback. The desktop client does not require login and still launches the configured native player. Docker Compose publishes the HTTP port and keeps settings, subscriptions, and credentials in a data volume.
+
 ## 0.3.5
 
 - macOS can use SenPlayer. Detection checks `/Applications/SenPlayer.app`,

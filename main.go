@@ -14,6 +14,12 @@ import (
 var webFS embed.FS
 
 func main() {
+	if webModeEnabled() {
+		if err := runWeb(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	web, _ := fs.Sub(webFS, "web")
 	mygo.SetFrontend(web)
 

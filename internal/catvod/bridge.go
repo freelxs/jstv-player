@@ -313,13 +313,39 @@ func LocalizePlayStreams(streams []Stream, sourceBase, bridgeAddr string, lan bo
 	}
 }
 
+// defaultPreflightClient talks to the loopback media proxy without going
+// through HTTP_PROXY. A proxy configured for plugin downloads must not be
+// applied to 127.0.0.1 playback checks.
+var defaultPreflightClient = newDefaultPreflightClient()
+
+func newDefaultPreflightClient() *http.Client {
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Timeout: 20 * time.Second}
+	}
+	cloned := tr.Clone()
+	cloned.Proxy = func(req *http.Request) (*url.URL, error) {
+		if req != nil && req.URL != nil {
+			host := strings.TrimSuffix(strings.ToLower(req.URL.Hostname()), ".")
+			if host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "::1" {
+				return nil, nil
+			}
+			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+				return nil, nil
+			}
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+	return &http.Client{Timeout: 20 * time.Second, Transport: cloned}
+}
+
 // Preflight fetches the first byte of a stream the way a player would and
 // reports HTTP errors (with the server's short message) before the player
 // shows a generic "invalid URL / cannot open" dialog. html is true when the
 // address is a web page (Content-Type text/html) rather than media.
 func Preflight(c *http.Client, u string, headers map[string]string) (html bool, err error) {
 	if c == nil {
-		c = &http.Client{Timeout: 20 * time.Second}
+		c = defaultPreflightClient
 	}
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
