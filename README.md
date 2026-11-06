@@ -1,5 +1,7 @@
 # JSTV Player
 
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/jstv-player)
+
 用 Go + [MyGo](https://github.com/egoist/mygo) 写的跨平台（macOS / Windows / Linux）桌面播放器外壳，实现 **CatPawOpen 兼容的 JS 插件接口**：加载用户自己提供的 JS 插件（`index.js`），浏览、搜索并播放插件返回的媒体地址。
 
 > ⚠️ **免责声明**
