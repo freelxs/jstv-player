@@ -120,7 +120,8 @@ async function loadSource(fn = () => call('LoadSource')) {
     if (r.trustRequired) {
       st.settings = await call('GetSettings');
       renderSwitcher();
-      $('#trustTitle').textContent = r.trustSHA256 ? '确认插件版本' : '插件更新需要确认';
+      const tvbox = /\.json(?:$|[?#])/i.test(r.subscription?.url || '') || /\.json(?:$|[?#])/i.test(r.trustURL || '');
+      $('#trustTitle').textContent = tvbox ? '确认 JSON 配置' : (r.trustSHA256 ? '确认插件版本' : '插件更新需要确认');
       $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\nSHA-256：${r.trustSHA256}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
       $('#sourceTrust').dataset.pending = '1';
       if (!$('#sourceTrust').open) $('#sourceTrust').showModal();
@@ -133,10 +134,12 @@ async function loadSource(fn = () => call('LoadSource')) {
     st.settings = reloadedSettings;
     renderSwitcher();
     st.sites = r.sites || [];
-    setDot('ok'); $('#status').textContent = `${st.sites.length}`;
+    const usable = st.sites.filter((s) => !s.unsupported);
+    setDot('ok'); $('#status').textContent = usable.length === st.sites.length ? `${st.sites.length}` : `${usable.length}/${st.sites.length}`;
     if (r.mismatch) toast('提示：index.js 与发布的 md5 不一致（文件可能已更新）');
     renderSites();
-    if (st.sites.length) selectSite(st.sites[0]);
+    if (usable.length) selectSite(usable[0]);
+    else if (st.sites.length) showUnsupported(st.sites[0]);
     else setView(stateBox({ title: '这个订阅没有站点', text: '插件的 /config 没有返回任何站点。' }));
   } catch (e) {
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
@@ -158,7 +161,7 @@ $('#trustApprove').onclick = async () => {
   } catch (e) { toast(errMsg(e), { err: true }); }
   finally { b.disabled = false; }
 };
-const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '订阅是一个插件地址（index.js 或 index.js.md5）。可以添加多个并随时切换。',
+const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '订阅可以是插件地址（index.js 或 index.js.md5），也可以是 JSON 配置（.json）。可以添加多个并随时切换。',
   actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
 const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
@@ -166,10 +169,23 @@ function renderSites() {
   const box = $('#sites'); box.replaceChildren();
   for (const s of st.sites) {
     const name = s.name || s.key;
-    box.append(el('button', { class: 'site' + (st.site && st.site.api === s.api ? ' active' : ''), title: name, onclick: () => selectSite(s) },
+    const off = !!s.unsupported;
+    const active = st.site && st.site.api === s.api;
+    box.append(el('button', {
+      class: 'site' + (active ? ' active' : '') + (off ? ' unsupported' : ''),
+      title: off ? `${name}\n${s.reason || '这个站点不能在这里运行'}` : name,
+      onclick: () => off ? showUnsupported(s) : selectSite(s),
+    },
       el('span', { class: 'av', style: `--h:${hue(name)}` }, [...name.replace(/[^\p{L}\p{N}]/gu, '')][0]?.toUpperCase() || '·'),
       el('span', { class: 'nm' }, name)));
   }
+}
+
+function showUnsupported(s) {
+  st.site = s; st.stack = []; st.tid = null; st.page = 1; st.filters = {};
+  $('#back').hidden = true; $('#classes').replaceChildren(); $('#filters').replaceChildren(); $('#filters').hidden = true;
+  renderSites();
+  setView(stateBox({ title: s.name || s.key || '不支持的站点', text: s.reason || '这个站点不能在桌面或网页模式运行。' }));
 }
 
 async function selectSite(s) {
@@ -319,6 +335,10 @@ async function search(wd) {
   const request = browseRequests.begin();
   setView(skeletonGrid(12));
   if ($('#onlySite').checked && st.site) {
+    if (st.site.unsupported) {
+      setView(stateBox({ title: st.site.name || '不支持的站点', text: st.site.reason || '这个站点不能搜索。' }));
+      return;
+    }
     try {
       const r = await call('Search', st.site.api, wd, 1);
       if (!browseRequests.current(request)) return;

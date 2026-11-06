@@ -16,6 +16,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/freelxs/jstv-player/internal/catvod"
+	"github.com/freelxs/jstv-player/internal/tvbox"
 )
 
 // Settings are kept in settings.json in the user data directory.
@@ -90,7 +91,7 @@ type Player struct {
 
 	mu           sync.Mutex
 	settings     Settings
-	host         *catvod.Host
+	host         sourceHost
 	sites        []catvod.Site
 	inited       map[string]bool
 	logs         []string
@@ -104,6 +105,12 @@ type Player struct {
 	// the loopback episode server to close it; window.close() does not.
 	builtinMu  sync.Mutex
 	builtinWin *mygo.Window
+}
+
+// sourceHost is the running subscription: a Node plugin or a TVBox adapter.
+type sourceHost interface {
+	Base() string
+	Stop()
 }
 
 func newPlayer(dir string) *Player {
@@ -322,8 +329,9 @@ func (p *Player) bridgeAddr() string {
 	return p.bridge.Addr()
 }
 
-// LoadSource downloads the active subscription's plugin, starts it and
-// lists its sites. Any previous plugin process is stopped first.
+// LoadSource downloads the active subscription and lists its sites.
+// A TVBox JSON address is recognized alongside a CatPawOpen index.js.
+// Any previous source is stopped first.
 func (p *Player) LoadSource() (*LoadResult, error) {
 	p.loadMu.Lock()
 	defer p.loadMu.Unlock()
@@ -333,45 +341,21 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 		p.StopSource()
 		return nil, errors.New("请先添加一个订阅")
 	}
-	// Each subscription keeps its own plugin copy and data files.
-	dir := filepath.Join(p.dir, "subs", sub.ID)
-	node, err := catvod.FindNode(s.NodePath)
-	if err != nil {
-		return nil, err
-	}
 	p.log("加载订阅「" + sub.Name + "」: " + sub.URL)
-	src, err := catvod.FetchWithOptions(nil, sub.URL, dir, s.StrictMD5)
-	if err != nil {
-		return nil, err
+	switch subscriptionShape(sub.URL) {
+	case "plugin":
+		return p.loadPlugin(s, sub)
+	case "tvbox":
+		return p.loadTVBox(s, sub)
+	default:
+		body, finalURL, err := tvbox.Fetch(nil, sub.URL, 8<<20)
+		if err == nil {
+			if _, perr := tvbox.Parse(body, finalURL); perr == nil {
+				return p.activateTVBox(s, sub, body, finalURL)
+			}
+		}
+		return p.loadPlugin(s, sub)
 	}
-	pinned, pinErr := readPin(dir)
-	if pinErr != nil && !errors.Is(pinErr, os.ErrNotExist) {
-		return nil, fmt.Errorf("读取插件 SHA-256 信任记录失败：%w", pinErr)
-	}
-	if pinErr != nil || pinned.URL != src.ScriptURL || !strings.EqualFold(pinned.SHA256, src.SHA256) {
-		p.StopSource()
-		p.mu.Lock()
-		p.pendingTrust[sub.ID] = sourcePin{URL: src.ScriptURL, SHA256: src.SHA256}
-		p.mu.Unlock()
-		return &LoadResult{Sub: sub, TrustRequired: true, TrustSHA256: src.SHA256, TrustURL: displaySourceURL(src.ScriptURL), MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node}, nil
-	}
-	if src.MD5Mismatch() {
-		p.log(fmt.Sprintf("md5 不一致: 文件 %s, 发布 %s", src.MD5, src.Expected))
-	}
-	p.StopSource()
-	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN, InheritEnv: s.InheritNodeEnv}
-	if err := h.Start(90 * time.Second); err != nil {
-		return nil, err
-	}
-	cfg, err := (&catvod.Client{Base: h.Base()}).Config()
-	if err != nil {
-		h.Stop()
-		return nil, err
-	}
-	p.mu.Lock()
-	p.host, p.sites, p.inited = h, cfg.Video.Sites, map[string]bool{}
-	p.mu.Unlock()
-	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node, Sub: sub}, nil
 }
 
 // ApproveSource records the exact currently active URL and hash presented by
@@ -388,8 +372,9 @@ func (p *Player) ApproveSource() error {
 	if !ok {
 		return errors.New("没有待确认的插件版本")
 	}
-	scriptURL, _ := catvod.ScriptURLs(sub.URL)
-	if scriptURL != pending.URL {
+	entered := strings.TrimSpace(sub.URL)
+	scriptURL, _ := catvod.ScriptURLs(entered)
+	if pending.URL != scriptURL && pending.URL != entered {
 		return errors.New("订阅地址已更改，请重新加载并确认新的版本")
 	}
 	if err := writePin(filepath.Join(p.dir, "subs", sub.ID), pending); err != nil {
@@ -413,6 +398,7 @@ func (p *Player) StopSource() {
 		h.Stop()
 	}
 	if p.proxy != nil {
+		p.proxy.SetUpstream(nil, nil)
 		p.proxy.Reset()
 	}
 }
@@ -468,7 +454,7 @@ func (p *Player) clientWithContext(ctx context.Context, api string) (*catvod.Cli
 	return c, nil
 }
 
-func (p *Player) initSite(api string, c *catvod.Client, expectedHost *catvod.Host) error {
+func (p *Player) initSite(api string, c *catvod.Client, expectedHost sourceHost) error {
 	p.initMu.Lock()
 	defer p.initMu.Unlock()
 	p.mu.Lock()

@@ -54,10 +54,19 @@ type Site struct {
 	Searchable  *int   `json:"searchable,omitempty"`
 	QuickSearch *int   `json:"quickSearch,omitempty"`
 	Filterable  *int   `json:"filterable,omitempty"`
+	// Unsupported sites are listed so a TVBox subscription can load even when
+	// some spiders cannot run here. Reason is the short explanation for the UI.
+	Unsupported bool   `json:"unsupported,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
-// CanSearch is true unless the site sets searchable:0.
-func (s Site) CanSearch() bool { return s.Searchable == nil || *s.Searchable != 0 }
+// CanSearch is true unless the site sets searchable:0 or cannot run.
+func (s Site) CanSearch() bool {
+	if s.Unsupported {
+		return false
+	}
+	return s.Searchable == nil || *s.Searchable != 0
+}
 
 // Config is GET /config.
 type Config struct {
