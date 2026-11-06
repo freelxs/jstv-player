@@ -679,10 +679,7 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	player := p.GetSettings().Player
 	if st.Parse || catvod.IsWebPage(st.URL) {
 		// A web page that needs sniffing: show it in a window.
-		mygo.RunOnMain(func() {
-			w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 700})
-			w.Page().LoadURL(st.URL)
-		})
+		p.openWebPage(title, st.URL)
 		return nil
 	}
 	// One path for every URL, local or remote: everything goes through the
@@ -713,10 +710,7 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	}
 	if html {
 		// Any HTML page (not media): show it in a window.
-		mygo.RunOnMain(func() {
-			w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 700})
-			w.Page().LoadURL(st.URL)
-		})
+		p.openWebPage(title, st.URL)
 		return nil
 	}
 	if player == "builtin" || player == "" {
