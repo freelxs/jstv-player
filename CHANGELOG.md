@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 点击名为「配置」的站点，或地址本身就是本机配置页的条目，会打开该页面。配置页上的方形码在列表和详情里完整显示；页面可以滚动，指向本机的新窗口留在应用内。
+
 ## 0.3.6
 
 - Add a web deployment mode (`--web` or `JSTV_MODE=web`) with username/password login, session cookies, and in-browser HLS/MP4 playback through hls.js. Docker Compose publishes the HTTP port and keeps settings, subscriptions, and credentials in a data volume. The desktop client does not require login.
