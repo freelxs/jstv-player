@@ -3,6 +3,7 @@
 ## Unreleased
 
 - 订阅可以填写 JSON 配置地址，和插件地址走同一个入口。相对路径按配置 URL 解析；带注释、BOM、尾逗号、字符串里的换行、base64、图片外壳和 `$#key#$` AES-CBC 的配置都能读入。type 0 XML 与 type 1/4 JSON 采集接口在 Go 里直接请求，JavaScript 模块用现有 Node 运行，远程规则先下载到本地再交给模块。JAR/DEX 与 Python 条目灰显并说明原因。直播列表进「直播」。播放仍走当前选择的播放器，并带上配置给出的请求头和 parse 标记。`hosts` 用于改写连接地址，简单的 `rules` 会从匹配主机的 HLS 播放列表里删掉对应片段。
+- 路径以 `.flv` 结尾的已登记媒体，在本机有 ffmpeg 时由播放代理转成 fragmented MP4。没有 ffmpeg 时这一路返回错误。
 
 ## 0.3.6
 

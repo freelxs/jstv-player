@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"path"
 	"regexp"
 	"strings"
@@ -29,6 +30,9 @@ type HeaderProxy struct {
 	mu        sync.Mutex
 	resources map[string]proxyResource
 	grants    map[string]proxyGrant
+	// playlistRewrite edits an HLS body before its URLs are proxied.
+	// host is the upstream hostname. Nil leaves the playlist unchanged.
+	playlistRewrite func(host string, body []byte) []byte
 }
 
 type proxyResource struct {
@@ -63,6 +67,25 @@ func (p *HeaderProxy) BaseURL() string {
 		return ""
 	}
 	return p.base
+}
+
+// SetUpstream selects the client used for media fetches and an optional HLS
+// rewrite. A nil client keeps http.DefaultClient. Safe to call while the
+// proxy is serving; the new values apply to the next request.
+func (p *HeaderProxy) SetUpstream(client *http.Client, rewrite func(host string, body []byte) []byte) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.Client = client
+	p.playlistRewrite = rewrite
+	p.mu.Unlock()
+}
+
+func (p *HeaderProxy) upstream() (*http.Client, func(string, []byte) []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.Client, p.playlistRewrite
 }
 
 // Start listens on 127.0.0.1 (random port).
@@ -326,6 +349,10 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad authorized target", 502)
 		return
 	}
+	if strings.HasSuffix(strings.ToLower(tu.Path), ".flv") {
+		p.serveFLVAsMP4(w, r, target, h)
+		return
+	}
 	req, _ := http.NewRequestWithContext(r.Context(), r.Method, target, nil)
 	for k, v := range h {
 		req.Header.Set(k, v)
@@ -340,7 +367,7 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rg := r.Header.Get("Range"); rg != "" && !looksM3U8 {
 		req.Header.Set("Range", rg)
 	}
-	c := p.Client
+	c, rewrite := p.upstream()
 	if c == nil {
 		c = http.DefaultClient
 	}
@@ -379,6 +406,11 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if playlistMagic(body) {
 			body = bytes.TrimPrefix(bytes.TrimSpace(body), []byte{0xEF, 0xBB, 0xBF})
+			if rewrite != nil {
+				if filtered := rewrite(tu.Hostname(), body); filtered != nil {
+					body = filtered
+				}
+			}
 			base := resp.Request.URL
 			if base == nil {
 				base = tu
@@ -417,6 +449,58 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, bodyReader)
+}
+
+// serveFLVAsMP4 remuxes an HTTP-FLV response into fragmented MP4.
+// The built-in player and the browser can play H.264/AAC in that form.
+// ffmpeg reads the upstream URL itself so request headers stay off the shell.
+func (p *HeaderProxy) serveFLVAsMP4(w http.ResponseWriter, r *http.Request, target string, headers map[string]string) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		http.Error(w, "播放 FLV 需要 ffmpeg", http.StatusBadGateway)
+		return
+	}
+	ua := defaultMediaUserAgent
+	var extra strings.Builder
+	for k, v := range headers {
+		if strings.EqualFold(k, "User-Agent") && strings.TrimSpace(v) != "" {
+			ua = v
+			continue
+		}
+		if strings.TrimSpace(k) == "" || strings.ContainsAny(k, "\r\n") || strings.ContainsAny(v, "\r\n") {
+			continue
+		}
+		extra.WriteString(k)
+		extra.WriteString(": ")
+		extra.WriteString(v)
+		extra.WriteString("\r\n")
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-user_agent", ua}
+	if extra.Len() > 0 {
+		args = append(args, "-headers", extra.String())
+	}
+	args = append(args, "-i", target, "-c", "copy", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1")
+	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+	cmd.Stderr = io.Discard
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		http.Error(w, "播放 FLV 失败", http.StatusBadGateway)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "播放 FLV 失败", http.StatusBadGateway)
+		return
+	}
+	defer func() {
+		_ = stdout.Close()
+		_ = cmd.Wait()
+	}()
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "private, no-store")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	_, _ = io.Copy(w, stdout)
 }
 
 // playlistMagic reports an HLS playlist, including a leading UTF-8 BOM.
