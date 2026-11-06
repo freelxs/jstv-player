@@ -25,6 +25,60 @@ function posterURL(url) {
   return '/poster?u=' + encodeURIComponent(String(url));
 }
 
+// A configuration page lives on the plugin's own /website/ route. Other http
+// addresses stay ordinary catalog ids.
+function websitePageURL(raw) {
+  try {
+    const u = new URL(String(raw));
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    const path = u.pathname.replace(/\/+$/, '') || '/';
+    if (path === '/website' || path === '/website/index.html') return u.href;
+  } catch (e) {
+    return '';
+  }
+  return '';
+}
+
+function isConfigImage(url) {
+  try {
+    const u = new URL(String(url), 'http://127.0.0.1');
+    return /\/website\/[^/]+\.(png|jpe?g|gif|webp)$/i.test(u.pathname);
+  } catch (e) {
+    return false;
+  }
+}
+
+function isConfigSite(s) {
+  return String(s?.name || s?.key || '').trim().startsWith('配置');
+}
+
+function configPageFromItem(v) {
+  const direct = websitePageURL(v && v.vod_id);
+  if (direct) return direct;
+  if (v && isConfigImage(v.vod_pic) && /配置/.test(String(v.vod_name || ''))) {
+    try {
+      const u = new URL(String(v.vod_pic));
+      u.pathname = '/website/index.html';
+      u.search = '';
+      u.hash = '';
+      return u.href;
+    } catch (e) {
+      return '';
+    }
+  }
+  return '';
+}
+
+function openWebPage(url, title) {
+  const name = title || '配置';
+  if (window.__JSTV_WEB__) {
+    const opened = window.open(url, '_blank', 'noopener');
+    if (!opened) toast('请允许弹出窗口以打开配置页面', { err: true });
+    return Promise.resolve();
+  }
+  return call('Open', { url, parse: true, name }, name);
+}
+
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -177,6 +231,14 @@ async function selectSite(s) {
   st.site = s; st.stack = []; st.tid = null; st.page = 1; st.filters = {}; $('#back').hidden = true; renderSites();
   $('#classes').replaceChildren(); $('#filters').replaceChildren(); $('#filters').hidden = true; setView(skeletonGrid());
   const seq = st.loadSeq;
+  if (isConfigSite(s)) {
+    call('OpenConfigPage', s.api).then((page) => {
+      if (window.__JSTV_WEB__ && page) {
+        const opened = window.open(page, '_blank', 'noopener');
+        if (!opened) toast('请允许弹出窗口以打开配置页面', { err: true });
+      }
+    }).catch((e) => toast(errMsg(e), { err: true }));
+  }
   try {
     const home = await call('Home', s.api);
     if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
@@ -287,7 +349,7 @@ async function openCategory(tid, page, selected = null) {
 function cards(list, site) {
   const g = el('div', { class: 'grid' });
   for (const v of list) {
-    const poster = el('div', { class: 'poster' + (v.vod_pic ? '' : ' noimg') });
+    const poster = el('div', { class: 'poster' + (v.vod_pic ? '' : ' noimg') + (isConfigImage(v.vod_pic) ? ' code' : '') });
     if (v.vod_pic) {
       const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
       img.onload = () => img.classList.add('loaded');
@@ -297,6 +359,11 @@ function cards(list, site) {
     if (v.vod_remarks) poster.append(el('span', { class: 'badge' }, v.vod_remarks));
     poster.append(el('span', { class: 'play' }, icon('play')));
     const open = () => {
+      const page = configPageFromItem(v);
+      if (page) {
+        openWebPage(page, v.vod_name || '配置').catch((e) => toast(errMsg(e), { err: true }));
+        return;
+      }
       if (String(v.vod_id).startsWith('msearch:')) {
         // These cards are search recommendations. Searching every site must
         // also clear the "current site only" hint, which a bare checked=false
@@ -372,7 +439,7 @@ async function openDetail(site, id) {
   if (hist) { const i = (d.lines || []).findIndex((l) => l.flag === hist.flag); if (i >= 0) lineIdx = i; }
   show(() => {
     const v = d.vod;
-    const cover = el('div', { class: 'cover' });
+    const cover = el('div', { class: 'cover' + (isConfigImage(v.vod_pic) ? ' code' : '') });
     const bg = el('div', { class: 'bg' });
     if (v.vod_pic) { const pic = posterURL(v.vod_pic); cover.append(el('img', { src: pic, referrerpolicy: 'no-referrer', alt: '' })); bg.style.backgroundImage = `url("${String(pic).replace(/"/g, '%22')}")`; }
     const meta = [v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).map((x) => el('span', {}, String(x)));
@@ -406,6 +473,17 @@ async function play(site, line, idx, vodId, title, btn) {
   const flag = line.flag, ep = line.episodes[idx];
   $$('.ep.busy').forEach((b) => b.classList.remove('busy'));
   btn?.classList.add('busy');
+  const page = websitePageURL(ep.id);
+  if (page) {
+    toast('正在打开配置页面…', { busy: true });
+    try {
+      await openWebPage(page, `${title} - ${ep.name}`);
+      hideToast();
+      btn?.classList.add('played');
+    } catch (e) { toast(errMsg(e), { err: true, ms: 6000 }); }
+    btn?.classList.remove('busy');
+    return;
+  }
   toast('解析播放地址…', { ms: 0, busy: true });
   try {
     // With 连播 the Go side opens the player with this and the following

@@ -57,7 +57,7 @@ function makeApp(callImpl = async () => ({})) {
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const startup = src.lastIndexOf('\n(async () => {');
   assert.ok(startup > 0, 'find application startup block');
-  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, filtersForCategory, cards };`;
+  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, play, filtersForCategory, cards };`;
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
@@ -289,4 +289,66 @@ test('search and detail ignore stale successes and failures', async () => {
     await pendingDetail;
     assert.ok(!app2.el('#view').textContent.includes('STALE DETAIL'));
   }
+});
+
+test('a configuration card opens its page and keeps the code image uncropped', async () => {
+  const calls = [];
+  const harness = makeApp(async (method, ...args) => { calls.push([method, args]); return {}; });
+  const owner = site('示例');
+  const grid = harness.app.cards([{
+    vod_id: 'http://127.0.0.1:9/website/index.html?mode=edit#qr',
+    vod_name: '配置',
+    vod_pic: 'http://127.0.0.1:9/website/qr.png',
+  }], owner);
+  const poster = grid.children[0].children[0];
+  assert.equal(poster.classList.contains('code'), true);
+  grid.children[0].listeners.click();
+  await settle();
+  assert.equal(calls.some((c) => c[0] === 'Detail'), false);
+  const opened = calls.find((c) => c[0] === 'Open');
+  assert.ok(opened, 'Open was not called');
+  assert.equal(opened[1][0].parse, true);
+  assert.equal(opened[1][0].url, 'http://127.0.0.1:9/website/index.html?mode=edit#qr');
+});
+
+test('an ordinary poster is not treated as a configuration code', () => {
+  const harness = makeApp(async () => ({}));
+  const grid = harness.app.cards([{ vod_id: 'item-1', vod_name: '示例', vod_pic: 'https://example.com/poster.jpg' }], site('示例'));
+  assert.equal(grid.children[0].children[0].classList.contains('code'), false);
+});
+
+test('a configuration code on the detail page is marked for full visibility', async () => {
+  const harness = makeApp(async (method) => {
+    if (method === 'Detail') return { vod: { vod_name: '配置', vod_pic: 'http://127.0.0.1:9/website/qr.png' }, lines: [] };
+    return null;
+  });
+  await harness.app.openDetail(site('配置', 'config'), 'cfg');
+  const hero = harness.el('#view').children[0];
+  const cover = hero.children.find((child) => String(child.className).includes('cover'));
+  assert.ok(cover, 'cover missing');
+  assert.equal(cover.classList.contains('code'), true);
+});
+
+test('clicking a site named 配置 opens the configuration page', async () => {
+  const calls = [];
+  const harness = makeApp(async (method) => {
+    calls.push(method);
+    if (method === 'Home') return { class: [] };
+    return 'http://127.0.0.1:9/website/index.html';
+  });
+  await harness.app.selectSite(site('配置', 'config'));
+  assert.ok(calls.includes('OpenConfigPage'));
+});
+
+test('an episode whose id is the configuration page opens that page', async () => {
+  const calls = [];
+  const harness = makeApp(async (method, ...args) => { calls.push([method, args]); return []; });
+  const owner = site('示例');
+  const line = { flag: '线路', episodes: [{ name: '配置', id: 'http://127.0.0.1:9/website/index.html?mode=edit#qr' }] };
+  await harness.app.play(owner, line, 0, 'item-1', '示例', null);
+  assert.equal(calls.some((c) => c[0] === 'PlayEpisodes'), false);
+  const opened = calls.find((c) => c[0] === 'Open');
+  assert.ok(opened, 'Open was not called');
+  assert.equal(opened[1][0].parse, true);
+  assert.match(opened[1][0].url, /\/website\/index\.html/);
 });
