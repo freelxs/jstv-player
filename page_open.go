@@ -53,18 +53,28 @@ const configPageFitJS = `(() => {
   s.textContent = css;
 })()`
 
+// configPageWindowOptions decides a popup from a configuration or sniffing
+// page. Loopback stays in another app window. A public http(s) address is
+// opened by the caller in the system browser. Anything else is ignored.
+// UserInitiated is not consulted: a script on the plugin page and a click
+// follow the same address rule, which is what the desktop client already did.
+func configPageWindowOptions(title string, req mygo.WindowOpenRequest) (inApp *mygo.WindowOptions, openExternal bool) {
+	if inAppNavigationURL(req.URL) {
+		return &mygo.WindowOptions{Title: title, Width: 1100, Height: 700}, false
+	}
+	return nil, externalNavigationURL(req.URL)
+}
+
 func (p *Player) openWebPage(title, pageURL string) {
 	mygo.RunOnMain(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 700})
 		page := w.Page()
 		page.SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOptions {
-			if inAppNavigationURL(req.URL) {
-				return &mygo.WindowOptions{Title: title, Width: 1100, Height: 700}
-			}
-			if externalNavigationURL(req.URL) {
+			opts, external := configPageWindowOptions(title, req)
+			if external {
 				go mygo.Shell.OpenExternal(req.URL)
 			}
-			return nil
+			return opts
 		})
 		page.OnDidFinishLoad(func() {
 			_, _ = page.Eval(configPageFitJS)

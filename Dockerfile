@@ -1,5 +1,5 @@
 # Web deployment image. The desktop client is unchanged and is not what this image runs.
-FROM golang:1.27.1-bookworm AS build
+FROM golang:1.27.3-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

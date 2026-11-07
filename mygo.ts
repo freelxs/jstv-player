@@ -119,6 +119,32 @@ export interface Subscription {
   url: string;
 }
 
+/**
+ * WebPlayback is what the browser player needs. URLs are same-origin /media
+ * paths. Upstream addresses and request headers stay on the server.
+ */
+export interface WebPlayback {
+  /** play, qualities, page */
+  action: string;
+  title: string;
+  url?: string;
+  /** hls or file */
+  media?: string;
+  pageUrl?: string;
+  message?: string;
+  qualities?: WebQuality[];
+  playlistId?: string;
+  index: number;
+  count: number;
+}
+
+/** WebQuality is one already-proxied rendition. */
+export interface WebQuality {
+  name: string;
+  url: string;
+  media: string;
+}
+
 // ---- Services ----
 
 /** Player is the service the page calls (window.mygo.call("Player.X", …)). */
@@ -175,6 +201,13 @@ export const Player = {
   /** Open plays a stream with the configured player. */
   open(st: Stream, title: string): Promise<void> {
     return call("Player.Open", st, title);
+  },
+  /**
+   * OpenConfigPage opens the loaded plugin's configuration page. In web mode
+   * the browser has to open the returned address itself.
+   */
+  openConfigPage(api: string): Promise<string> {
+    return call("Player.OpenConfigPage", api);
   },
   /**
    * PickCustomPlayer shows the native file dialog and returns the chosen path,
@@ -240,5 +273,13 @@ export const Player = {
   /** UpdateSubscription renames a subscription or changes its address. */
   updateSubscription(id: string, name: string, url: string): Promise<Settings> {
     return call("Player.UpdateSubscription", id, name, url);
+  },
+  /** WebAdvance resolves a later episode of a browser playlist. */
+  webAdvance(id: string, index: number): Promise<WebPlayback | null> {
+    return call("Player.WebAdvance", id, index);
+  },
+  /** WebPlay resolves an episode for the browser. It never opens a native player. */
+  webPlay(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<WebPlayback | null> {
+    return call("Player.WebPlay", api, vodID, show, flag, eps, start);
   },
 } as const;

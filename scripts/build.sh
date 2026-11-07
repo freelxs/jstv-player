@@ -31,7 +31,7 @@ if [[ -z "$GO_BIN" ]]; then
   elif [[ -x "$HOME/.lorca/workspaces/bot-d06858b1/tools/go1.27.1/go/bin/go" ]]; then
     GO_BIN="$HOME/.lorca/workspaces/bot-d06858b1/tools/go1.27.1/go/bin/go"
   else
-    echo "未找到 go。请安装 Go 1.27+ 或通过 GO_BIN 指定路径。" >&2
+    echo "未找到 go。请安装 Go 1.27.3+ 或通过 GO_BIN 指定路径。" >&2
     exit 1
   fi
 fi
