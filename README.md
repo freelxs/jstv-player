@@ -184,16 +184,21 @@ go build -o jstv-player .
 ## 目录
 
 ```
-main.go              App 入口（默认 MyGo 桌面窗口；--web 时走网页服务）
-service.go           绑定给前端的 Player 服务、播放器调用
-webserver.go         网页模式的 HTTP、登录和播放反代
-webassets/           网页模式的登录页、mygo 桥、浏览器播放器和 hls.js
-Dockerfile           网页模式镜像
-docker-compose.yml   网页模式的端口、密码和数据卷
-internal/catvod/     接口层：下载/md5、Node 宿主、HTTP 客户端、剧集解析、本地代理、可选播放桥（含单元测试与 mock 插件）
-web/                 前端（纯 HTML/JS，无构建步骤；桌面和网页共用）
-docs/PROTOCOL.md     接口说明
+main.go                 入口与静态资源嵌入（桌面 / --web）
+internal/app/           Player 绑定、应用状态、订阅、搜索、播放编排、历史与日志
+internal/webserver/     网页部署、HTTP 路由、认证、海报与媒体转发
+internal/externalplayer/ 外部播放器发现、参数构造与平台进程适配
+internal/catvod/        插件协议、Node 宿主、源下载、本地代理与播放桥
+web/                    桌面与网页共用的原生 HTML / JS 界面
+webassets/              网页桥接、登录、浏览器播放器与 hls.js
+resources/              图标与可选平台资源
+scripts/                构建、安装与发布辅助脚本
+Dockerfile              网页模式镜像
+docker-compose.yml     网页模式端口、密码与数据卷
+docs/                  协议、安全与架构说明
 ```
+
+包职责、依赖方向和测试约定见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 已知限制
 
