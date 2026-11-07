@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.9
+
+- 桌面框架从 MyGo v0.5.5 升级到 v0.8.1（https://github.com/egoist/mygo/releases/tag/v0.8.1）。Go 工具链和 Docker 构建镜像改为 1.27.3。
+- Linux 包名固定为 `jstv-player`。发布出去的安装包文件名仍由 CI 按原规则命名。
+- 配置页弹窗规则不变：本机地址留在应用窗口，公网 http(s) 交给系统浏览器，其它地址忽略。
+- 生成的 TypeScript 客户端补上已有的配置页和网页播放方法。页面仍通过 `window.mygo.call` 调用。
+
 ## 0.3.8
 
 - 目录里标成文件夹的条目会再请求一次分类并列出其中的内容。这类条目不再直接打开详情。

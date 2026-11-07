@@ -2,7 +2,7 @@
   "name": "JSTV Player",
   "slug": "jstv-player",
   "identifier": "com.freelxs.jstvplayer",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "frontendDist": "web",
   "macos": {
     "infoPlist": {
