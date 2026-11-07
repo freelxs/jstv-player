@@ -1,9 +1,11 @@
 package catvod
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -15,17 +17,26 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/freelxs/jstv-player/internal/atomicfile"
 )
 
 // Source is a downloaded plugin bundle.
 type Source struct {
-	URL        string // what the user entered
-	ScriptURL  string // the index.js actually fetched
-	Path       string // local copy
-	ConfigPath string // local index.config.js, if published
-	MD5        string // md5 of the local copy
-	SHA256     string // local SHA-256 for TOFU change detection
-	Expected   string // md5 published next to it (index.js.md5), if any
+	URL            string // what the user entered
+	ScriptURL      string // the index.js actually fetched
+	Path           string // local copy
+	ConfigPath     string // local index.config.js, if published
+	MD5            string // md5 of the local copy
+	SHA256         string // local SHA-256 for TOFU change detection
+	Expected       string // md5 published next to it (index.js.md5), if any
+	ConfigSHA256   string // empty only when configuration is absent
+	BundleSHA256   string // digest of the executable artifact manifest
+	VersionName    string // immutable directory, normally the manifest digest
+	ScriptETag     string
+	ScriptModified string
+	ConfigETag     string
+	ConfigModified string
 }
 
 // MD5Mismatch reports whether a published checksum exists and differs.
@@ -92,74 +103,200 @@ func trimSuffixFold(s, suffix string) string {
 	return s
 }
 
-// Fetch downloads the bundle into dir (cached under dir/source/index.js).
-// Basic-auth credentials in the URL (http://user:pass@host/…) are honored.
+// ConfigURL derives the optional sibling without changing query credentials.
+func ConfigURL(script string) (string, error) {
+	u, err := url.Parse(script)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", errors.New("订阅需要 HTTP(S) 地址")
+	}
+	u.Path = trimSuffixFold(u.Path, ".js") + ".config.js"
+	u.RawPath, u.Fragment = "", ""
+	return u.String(), nil
+}
+
+// Fetch stages a complete immutable executable version. It never changes the
+// last successfully started version; PublishSource commits that pointer later.
 func Fetch(client *http.Client, rawURL, dir string) (*Source, error) {
 	return FetchWithOptions(client, rawURL, dir, false)
 }
 
-// FetchWithOptions downloads into same-directory temporary files, enforces
-// byte limits, checks the publisher MD5 before publication when strictMD5 is
-// enabled, then atomically replaces each completed artifact.
 func FetchWithOptions(client *http.Client, rawURL, dir string, strictMD5 bool) (*Source, error) {
+	return FetchContext(context.Background(), client, rawURL, dir, strictMD5)
+}
+
+func FetchContext(ctx context.Context, client *http.Client, rawURL, dir string, strictMD5 bool) (*Source, error) {
+	return FetchRefreshContext(ctx, client, rawURL, dir, strictMD5, false)
+}
+
+// FetchRefreshContext conditionally refreshes both executable artifacts. A
+// force refresh ignores validators; cached bytes must still pass SHA-256.
+func FetchRefreshContext(ctx context.Context, client *http.Client, rawURL, dir string, strictMD5, force bool) (*Source, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 120 * time.Second}
 	}
 	script, sumURL := ScriptURLs(rawURL)
-	src := &Source{URL: rawURL, ScriptURL: script}
-	if b, err := get(client, sumURL, 1<<10); err == nil {
-		src.Expected = strings.ToLower(md5re.FindString(string(b)))
-	}
-	d := filepath.Join(dir, "source")
-	if err := os.MkdirAll(d, 0o755); err != nil {
+	configURL, err := ConfigURL(script)
+	if err != nil {
 		return nil, err
 	}
-	tmpScript, size, md5sum, sha256sum, err := downloadTemp(client, script, d, 256<<20, true)
+	src := &Source{URL: rawURL, ScriptURL: script}
+	scriptValidator, configValidator := &downloadValidator{}, &downloadValidator{}
+	if !force {
+		if cached, err := CachedSource(dir); err == nil && cached.ScriptURL == script {
+			scriptValidator = &downloadValidator{Path: cached.Path, SHA256: cached.SHA256, ETag: cached.ScriptETag, Modified: cached.ScriptModified}
+			configValidator = &downloadValidator{Path: cached.ConfigPath, SHA256: cached.ConfigSHA256, ETag: cached.ConfigETag, Modified: cached.ConfigModified}
+		}
+	}
+	if b, err := getContext(ctx, client, sumURL, 1<<10); err == nil {
+		src.Expected = strings.ToLower(md5re.FindString(string(b)))
+	}
+	versions := filepath.Join(dir, "source", "versions")
+	if err := os.MkdirAll(versions, 0o700); err != nil {
+		return nil, err
+	}
+	stage, err := os.MkdirTemp(versions, ".stage-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(stage)
+	tmpScript, size, md5sum, sha256sum, err := downloadTempContext(ctx, client, script, stage, 256<<20, true, scriptValidator)
 	if err != nil {
 		return nil, fmt.Errorf("下载 index.js 失败: %w", err)
 	}
-	defer os.Remove(tmpScript)
 	if size < 20 {
 		return nil, fmt.Errorf("index.js 内容异常（%d 字节）", size)
 	}
 	src.MD5, src.SHA256 = md5sum, sha256sum
-	if strictMD5 && src.Expected != "" && src.MD5Mismatch() {
+	src.ScriptETag, src.ScriptModified = scriptValidator.ETag, scriptValidator.Modified
+	if strictMD5 && src.MD5Mismatch() {
 		return nil, fmt.Errorf("md5 校验失败（文件 %s ≠ 发布 %s）", src.MD5, src.Expected)
 	}
-	src.Path = filepath.Join(d, "index.js")
-	cfgPath := filepath.Join(d, "index.config.js")
-	// Stage the optional config before replacing either published file.
-	configURL := strings.TrimSuffix(script, ".js") + ".config.js"
-	tmpConfig, cfgSize, _, _, cfgErr := downloadTemp(client, configURL, d, 64<<20, false)
-	removeConfig := false
+	tmpConfig, cfgSize, _, cfgHash, cfgErr := downloadTempContext(ctx, client, configURL, stage, 64<<20, true, configValidator)
 	if cfgErr != nil && !errors.Is(cfgErr, errNotFound) {
-		// Optional configuration retains the historical best-effort behavior for
-		// network/server failures; a size violation is never silently accepted.
-		if errors.Is(cfgErr, errTooLarge) {
-			return nil, cfgErr
-		}
-		// Do not destroy the previous cache if script publication later fails.
-		removeConfig = true
+		return nil, fmt.Errorf("下载 index.config.js 失败，保留原版本: %w", cfgErr)
 	}
+	// A 404 explicitly means no configuration. An empty successful response is
+	// invalid, not an instruction to silently delete executable configuration.
 	if cfgErr == nil {
-		defer os.Remove(tmpConfig)
-	}
-	if errors.Is(cfgErr, errNotFound) || (cfgErr == nil && cfgSize == 0) {
-		removeConfig = true
-	}
-	if err := replaceFile(tmpScript, src.Path); err != nil {
-		return nil, err
-	}
-	if cfgErr == nil && cfgSize > 0 {
-		if err := replaceFile(tmpConfig, cfgPath); err != nil {
+		if cfgSize == 0 {
+			return nil, errors.New("index.config.js 为空，保留原版本")
+		}
+		src.ConfigSHA256 = cfgHash
+		src.ConfigETag, src.ConfigModified = configValidator.ETag, configValidator.Modified
+		if err := os.Rename(tmpConfig, filepath.Join(stage, "index.config.js")); err != nil {
 			return nil, err
 		}
-		src.ConfigPath = cfgPath
-	} else if removeConfig {
-		_ = os.Remove(cfgPath)
 	}
-	_ = os.Remove(src.Path + ".mjs")
+	if err := os.Rename(tmpScript, filepath.Join(stage, "index.js")); err != nil {
+		return nil, err
+	}
+	src.BundleSHA256 = bundleDigest(src.SHA256, src.ConfigSHA256)
+	version := filepath.Join(versions, src.BundleSHA256)
+	if _, err := os.Stat(version); err == nil {
+		// Content-addressed directories are never overwritten while a host may be
+		// using them. Verify cached bytes before reusing the existing directory.
+		src.Path = filepath.Join(version, "index.js")
+		if src.ConfigSHA256 != "" {
+			src.ConfigPath = filepath.Join(version, "index.config.js")
+		}
+		if err := src.Verify(); err != nil {
+			// Repair into a different immutable directory. Never replace bytes that a
+			// separately running reader could have already opened from the old one.
+			version = filepath.Join(versions, src.BundleSHA256+"-"+strings.TrimPrefix(filepath.Base(stage), ".stage-"))
+			if err := os.Rename(stage, version); err != nil {
+				return nil, err
+			}
+			src.Path = filepath.Join(version, "index.js")
+			if src.ConfigSHA256 != "" {
+				src.ConfigPath = filepath.Join(version, "index.config.js")
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	} else {
+		if err := os.Rename(stage, version); err != nil {
+			return nil, err
+		}
+		src.Path = filepath.Join(version, "index.js")
+		if src.ConfigSHA256 != "" {
+			src.ConfigPath = filepath.Join(version, "index.config.js")
+		}
+	}
+	src.VersionName = filepath.Base(version)
 	return src, nil
+}
+
+func bundleDigest(script, config string) string {
+	// The explicit absence marker distinguishes no config from any byte content.
+	b := sha256.Sum256([]byte("jstv-bundle-v1\nindex.js:" + script + "\nindex.config.js:" + config + "\n"))
+	return hex.EncodeToString(b[:])
+}
+
+func (s *Source) Verify() error {
+	for _, artifact := range []struct{ path, sum string }{{s.Path, s.SHA256}, {s.ConfigPath, s.ConfigSHA256}} {
+		if artifact.path == "" && artifact.sum == "" {
+			continue
+		}
+		f, err := os.Open(artifact.path)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, f)
+		f.Close()
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), artifact.sum) {
+			return errors.New("插件缓存完整性校验失败，请重新下载")
+		}
+	}
+	if s.BundleSHA256 == "" || s.BundleSHA256 != bundleDigest(s.SHA256, s.ConfigSHA256) {
+		return errors.New("插件版本清单无效")
+	}
+	if s.ConfigPath == "" {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(s.Path), "index.config.js")); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("插件版本出现未记录的配置")
+		}
+	}
+	return nil
+}
+
+// PublishSource atomically commits a complete version only after it starts.
+func PublishSource(dir string, src *Source) error {
+	if err := src.Verify(); err != nil {
+		return err
+	}
+	return atomicfile.JSON(filepath.Join(dir, "source", "current.json"), src)
+}
+
+// CachedSource validates the complete on-disk version, including configuration.
+func CachedSource(dir string) (*Source, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "source", "current.json"))
+	if err != nil {
+		return nil, err
+	}
+	var src Source
+	if err := json.Unmarshal(b, &src); err != nil {
+		return nil, err
+	}
+	if len(src.BundleSHA256) != 64 || strings.ContainsAny(src.BundleSHA256, `/\\.`) {
+		return nil, errors.New("插件缓存版本无效")
+	}
+	name := src.VersionName
+	if name == "" {
+		name = src.BundleSHA256
+	}
+	if !strings.HasPrefix(name, src.BundleSHA256) || filepath.Base(name) != name || strings.ContainsAny(name, `/\\.`) {
+		return nil, errors.New("插件缓存路径无效")
+	}
+	version := filepath.Join(dir, "source", "versions", name)
+	src.Path = filepath.Join(version, "index.js")
+	src.ConfigPath = ""
+	if src.ConfigSHA256 != "" {
+		src.ConfigPath = filepath.Join(version, "index.config.js")
+	}
+	return &src, src.Verify()
 }
 
 var (
@@ -168,11 +305,28 @@ var (
 )
 
 func downloadTemp(c *http.Client, u, dir string, limit int64, digest bool) (string, int64, string, string, error) {
-	req, err := http.NewRequest("GET", u, nil)
+	return downloadTempContext(context.Background(), c, u, dir, limit, digest)
+}
+
+type downloadValidator struct{ Path, SHA256, ETag, Modified string }
+
+func downloadTempContext(ctx context.Context, c *http.Client, u, dir string, limit int64, digest bool, validators ...*downloadValidator) (string, int64, string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return "", 0, "", "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
+	var validator *downloadValidator
+	if len(validators) > 0 {
+		validator = validators[0]
+	}
+	if validator != nil && validator.Path != "" {
+		if validator.ETag != "" {
+			req.Header.Set("If-None-Match", validator.ETag)
+		} else if validator.Modified != "" {
+			req.Header.Set("If-Modified-Since", validator.Modified)
+		}
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", 0, "", "", err
@@ -181,8 +335,27 @@ func downloadTemp(c *http.Client, u, dir string, limit int64, digest bool) (stri
 	if resp.StatusCode == http.StatusNotFound {
 		return "", 0, "", "", errNotFound
 	}
-	if resp.StatusCode != http.StatusOK {
+	var body io.Reader = resp.Body
+	if resp.StatusCode == http.StatusNotModified {
+		if validator == nil || validator.Path == "" || !digest {
+			return "", 0, "", "", errors.New("服务器返回 304，但没有已验证的缓存")
+		}
+		cached, err := os.Open(validator.Path)
+		if err != nil {
+			return "", 0, "", "", err
+		}
+		defer cached.Close()
+		body = cached
+	} else if resp.StatusCode != http.StatusOK {
 		return "", 0, "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, u)
+	}
+	if validator != nil {
+		if etag := resp.Header.Get("ETag"); etag != "" || resp.StatusCode == 200 {
+			validator.ETag = etag
+		}
+		if modified := resp.Header.Get("Last-Modified"); modified != "" || resp.StatusCode == 200 {
+			validator.Modified = modified
+		}
 	}
 	tmp, err := os.CreateTemp(dir, ".download-*.tmp")
 	if err != nil {
@@ -203,7 +376,7 @@ func downloadTemp(c *http.Client, u, dir string, limit int64, digest bool) (stri
 		md, sh = md5.New(), sha256.New()
 		dst = io.MultiWriter(tmp, md, sh)
 	}
-	n, err := io.Copy(dst, io.LimitReader(resp.Body, limit+1))
+	n, err := io.Copy(dst, io.LimitReader(body, limit+1))
 	if err != nil {
 		tmp.Close()
 		return "", 0, "", "", err
@@ -219,17 +392,24 @@ func downloadTemp(c *http.Client, u, dir string, limit int64, digest bool) (stri
 	if err := tmp.Close(); err != nil {
 		return "", 0, "", "", err
 	}
-	cleanup = false
 	mdsum, shsum := "", ""
 	if digest {
 		m, s := md.Sum(nil), sh.Sum(nil)
 		mdsum, shsum = hex.EncodeToString(m), hex.EncodeToString(s)
 	}
+	if resp.StatusCode == http.StatusNotModified && validator.SHA256 != shsum {
+		return "", 0, "", "", errors.New("条件刷新期间缓存发生变化，请强制刷新")
+	}
+	cleanup = false
 	return name, n, mdsum, shsum, nil
 }
 
 func get(c *http.Client, u string, limit int64) ([]byte, error) {
-	req, err := http.NewRequest("GET", u, nil)
+	return getContext(context.Background(), c, u, limit)
+}
+
+func getContext(ctx context.Context, c *http.Client, u string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -242,5 +422,9 @@ func get(c *http.Client, u string, limit int64) ([]byte, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, u)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err == nil && int64(len(b)) > limit {
+		return nil, errTooLarge
+	}
+	return b, err
 }

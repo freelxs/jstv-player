@@ -71,7 +71,9 @@ type Client struct {
 	Base string
 	HTTP *http.Client
 	// Context aborts an in-flight protocol call. Nil uses the background context.
-	Context context.Context
+	Context       context.Context
+	SourceContext context.Context
+	LogFunc       func(string)
 	// LAN reports whether the plugin's server is reachable from other devices
 	// (user enabled LAN access); the configuration page URL is then kept on
 	// the machine's LAN address instead of loopback.
@@ -95,6 +97,13 @@ func (c *Client) do(method, path string, body any, out any) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if c.SourceContext != nil {
+		combined, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(c.SourceContext, cancel)
+		defer stop()
+		defer cancel()
+		ctx = combined
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, rd)
 	if err != nil {
 		return err
@@ -104,18 +113,42 @@ func (c *Client) do(method, path string, body any, out any) error {
 	}
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return c.protocolError("network", 0, fmt.Sprintf("%s %s: %v", method, path, err), err)
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxProtocolResponse+1))
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return c.protocolError("network", resp.StatusCode, fmt.Sprintf("%s: %v", path, err), err)
+	}
+	if len(b) > maxProtocolResponse {
+		return c.protocolError("size", resp.StatusCode, path+": response exceeded 32 MiB", errTooLarge)
 	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("%s %s: HTTP %d %s", method, path, resp.StatusCode, truncate(string(b), 300))
+		return c.protocolError("http", resp.StatusCode, fmt.Sprintf("%s %s: HTTP %d %s", method, path, resp.StatusCode, truncate(string(b), 4096)), nil)
 	}
 	if err := json.Unmarshal(b, out); err != nil {
-		return fmt.Errorf("%s: 返回不是 JSON: %s", path, truncate(string(b), 200))
+		return c.protocolError("json", 0, fmt.Sprintf("%s: 非 JSON: %s", path, truncate(string(b), 4096)), err)
+	}
+	var fields M
+	switch value := out.(type) {
+	case *M:
+		fields = *value
+	case *any:
+		fields, _ = (*value).(map[string]any)
+	}
+	if message, ok := fields["error"].(string); ok && message != "" {
+		return c.protocolError("business", 0, path+": "+truncate(message, 4096), nil)
+	}
+	if code, ok := fields["code"].(float64); ok && code < 0 {
+		if message, ok := fields["message"].(string); ok && message != "" {
+			return c.protocolError("business", 0, path+": "+truncate(message, 4096), nil)
+		}
 	}
 	return nil
 }
@@ -246,10 +279,13 @@ func ParseLines(from, urls string) []Line {
 
 // Stream is one playable URL.
 type Stream struct {
-	Name    string            `json:"name"`
-	URL     string            `json:"url"`
-	Parse   bool              `json:"parse"` // a web page that still needs sniffing
-	Headers map[string]string `json:"headers,omitempty"`
+	ProgressID string            `json:"progressId,omitempty"`
+	Position   float64           `json:"position,omitempty"`
+	Direct     bool              `json:"direct,omitempty"` // native media endpoints need not have a media suffix
+	Name       string            `json:"name"`
+	URL        string            `json:"url"`
+	Parse      bool              `json:"parse"` // a web page that still needs sniffing
+	Headers    map[string]string `json:"headers,omitempty"`
 }
 
 // IsHTTPMediaURL reports the URL forms currently accepted for proxy grants.

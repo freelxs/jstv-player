@@ -87,7 +87,7 @@ button{cursor:pointer;border:0;background:none;padding:0}
 .site .av{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;flex:none;background:hsl(var(--h),55%,52%)}
 .site .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .site-skel{height:36px;border-radius:var(--r-sm)}
-.sidebar-foot{display:flex;gap:4px;padding-top:8px;border-top:1px solid var(--line)}
+.sidebar-foot{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding-top:8px;border-top:1px solid var(--line)}
 .ghost{padding:7px 10px;border-radius:var(--r-sm);color:var(--text-2);transition:background .12s,color .12s}
 .ghost:hover{background:var(--hover);color:var(--text)}
 .icon-text{display:flex;align-items:center;gap:7px;flex:1;justify-content:center}
@@ -228,7 +228,7 @@ code{font:11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:1p
 .sub-list .url{font-size:11.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
 .sub-list .icon-btn{width:28px;height:28px}
 .sub-list .icon-btn.danger:hover{color:var(--danger)}
-.sub-form{display:grid;grid-template-columns:130px 1fr auto auto;gap:8px}
+.sub-form{display:grid;grid-template-columns:110px minmax(100px,1fr) auto auto auto;gap:8px}
 input:not([type=checkbox]),select{height:34px;padding:0 10px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--panel);outline:0;transition:border-color .15s,box-shadow .15s;min-width:0}
 input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
 .path-row{display:flex;gap:8px;align-items:center}
@@ -274,3 +274,5 @@ input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-
 .web-player-bar button:disabled{opacity:.35}
 .web-player-go{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--acc);color:#fff;border:0;border-radius:999px;padding:12px 22px;font-size:15px}
 @media (max-width:980px){.web-player{left:200px}}
+
+.sidebar-foot .icon-text{white-space:nowrap;justify-content:flex-start;padding:8px 4px;min-width:0}

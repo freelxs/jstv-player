@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"io/fs"
 	"sync"
 	"sync/atomic"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/freelxs/jstv-player/internal/catvod"
+	"github.com/freelxs/jstv-player/internal/live"
 )
 
 // Settings are kept in settings.json in the user data directory.
@@ -34,23 +36,27 @@ type Settings struct {
 	// AllowLAN binds the plugin's HTTP server to all interfaces so its
 	// configuration page is reachable from other devices. Off by default:
 	// the server listens on loopback only.
-	AllowLAN       bool `json:"allowLan"`
-	AllowLANMedia  bool `json:"allowLanMedia"`
-	InheritNodeEnv bool `json:"inheritNodeEnv"`
-	PersistLogs    bool `json:"persistLogs"`
+	AllowLAN        bool `json:"allowLan"`
+	AllowLANMedia   bool `json:"allowLanMedia"`
+	InheritProxyEnv bool `json:"inheritProxyEnv"`
+	InheritNodeEnv  bool `json:"inheritNodeEnv"`
+	PersistLogs     bool `json:"persistLogs"`
 }
 
 // LoadResult is what LoadSource reports to the page.
 type LoadResult struct {
-	Sites         []catvod.Site `json:"sites"`
-	MD5           string        `json:"md5"`
-	ExpectedMD5   string        `json:"expectedMd5"`
-	Mismatch      bool          `json:"mismatch"`
-	Node          string        `json:"node"`
-	Sub           Subscription  `json:"subscription"`
-	TrustRequired bool          `json:"trustRequired,omitempty"`
-	TrustSHA256   string        `json:"trustSHA256,omitempty"`
-	TrustURL      string        `json:"trustURL,omitempty"`
+	Sites             []catvod.Site `json:"sites"`
+	MD5               string        `json:"md5"`
+	ExpectedMD5       string        `json:"expectedMd5"`
+	Mismatch          bool          `json:"mismatch"`
+	Node              string        `json:"node"`
+	Warnings          []string      `json:"warnings,omitempty"`
+	Sub               Subscription  `json:"subscription"`
+	TrustRequired     bool          `json:"trustRequired,omitempty"`
+	TrustSHA256       string        `json:"trustSHA256,omitempty"`
+	TrustURL          string        `json:"trustURL,omitempty"`
+	TrustScriptSHA256 string        `json:"trustScriptSHA256,omitempty"`
+	TrustConfigSHA256 string        `json:"trustConfigSHA256,omitempty"`
 }
 
 // DetailResult is a vod with its play lines parsed.
@@ -73,17 +79,27 @@ type Player struct {
 	proxy  *catvod.HeaderProxy
 	bridge *catvod.Bridge
 
-	loadMu       sync.Mutex // serializes LoadSource / switching
-	initMu       sync.Mutex // serializes per-site init and permits retry after failure
-	settingsMu   sync.Mutex // serializes writers of the whole settings file
-	eps          episodeServer
-	histMu       sync.Mutex
-	logMu        sync.Mutex
-	logCleanupAt time.Time // guarded by logMu; bounds cleanup cost while appending
+	loadCancel       context.CancelFunc // guarded by mu
+	sourceContext    context.Context
+	catalogCache     map[string]catalogEntry // guarded by mu
+	catalogEpoch     uint64
+	searchHealth     map[string]siteHealth
+	sourceGeneration uint64     // guarded by mu; invalidates all source-owned work
+	loadMu           sync.Mutex // serializes LoadSource / switching
+	initMu           sync.Mutex // serializes per-site init and permits retry after failure
+	settingsMu       sync.Mutex // serializes writers of the whole settings file
+	eps              episodeServer
+	histMu           sync.Mutex
+	libraryMu        sync.Mutex
+	progress         map[string]progressSession // guarded by mu
+	logMu            sync.Mutex
+	logCleanupAt     time.Time // guarded by logMu; bounds cleanup cost while appending
 
 	mu           sync.Mutex
 	settings     Settings
 	host         *catvod.Host
+	liveCatalog  *live.Catalog
+	liveAPI      string
 	sites        []catvod.Site
 	inited       map[string]bool
 	logs         []string

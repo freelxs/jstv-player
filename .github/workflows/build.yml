@@ -95,8 +95,58 @@ jobs:
         if: runner.os == 'Linux'
         run: go test -race ./...
 
+  browser-test:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.source_sha }}
+      - name: Detect browser regression support in selected source
+        id: features
+        run: |
+          if test -f scripts/e2e-web.cjs; then echo "browser=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-go@v7
+        if: steps.features.outputs.browser == 'true'
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        if: steps.features.outputs.browser == 'true'
+        with:
+          node-version: 24
+      - name: Install isolated browser test tools
+        if: steps.features.outputs.browser == 'true'
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: .tmp/browsers
+        run: |
+          npm install --prefix .tmp/browser-tools --no-save --no-package-lock --no-audit --no-fund playwright@1.65.0
+          node .tmp/browser-tools/node_modules/playwright/cli.js install --with-deps chromium-headless-shell
+          CHROME_PATH="$(rg --files --hidden --no-ignore .tmp/browsers | rg '/chrome-headless-shell$')"
+          test -n "$CHROME_PATH"
+          echo "CHROME=$GITHUB_WORKSPACE/$CHROME_PATH" >> "$GITHUB_ENV"
+          echo "JSTV_PLAYWRIGHT_MODULE=$GITHUB_WORKSPACE/.tmp/browser-tools/node_modules/playwright" >> "$GITHUB_ENV"
+      - name: Configuration sandbox and layout regression
+        if: steps.features.outputs.browser == 'true'
+        run: |
+          go test ./internal/webserver -run TestConfiguration -count=1
+          node --test web/*.test.cjs
+      - name: Decode HLS, favorite channels and resume video
+        if: steps.features.outputs.browser == 'true'
+        run: |
+          go build -o .tmp/jstv-player .
+          node scripts/e2e-web.cjs .tmp/jstv-player .tmp/e2e-web
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.features.outputs.browser == 'true'
+        with:
+          name: browser-test-evidence
+          path: |
+            .tmp/e2e-web/*.png
+            .tmp/e2e-web/results.json
+            .tmp/e2e-web/server.log
+          if-no-files-found: ignore
+
   build:
-    needs: [test, resolve-release]
+    needs: [test, browser-test, resolve-release]
     strategy:
       fail-fast: false
       matrix:

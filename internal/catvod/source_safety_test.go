@@ -1,6 +1,7 @@
 package catvod
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -94,33 +95,173 @@ func TestFetchPublishesBothDigestsAndConfigAtomically(t *testing.T) {
 	}
 }
 
-func TestScriptPublishFailureDoesNotDeleteCachedConfig(t *testing.T) {
+func TestConfigFailureRetainsCompletePublishedVersion(t *testing.T) {
 	dir := t.TempDir()
-	sourceDir := filepath.Join(dir, "source")
-	if err := os.MkdirAll(filepath.Join(sourceDir, "index.js"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(sourceDir, "index.config.js")
-	if err := os.WriteFile(configPath, []byte("previous config"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	script := "module.exports = { start: function() {} };"
+	config := "module.exports = {version:1};"
+	fail := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/index.js.md5" {
+		switch r.URL.Path {
+		case "/index.js":
+			_, _ = w.Write([]byte(script))
+		case "/index.config.js":
+			if fail {
+				http.Error(w, "offline", 500)
+				return
+			}
+			_, _ = w.Write([]byte(config))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	old, err := Fetch(nil, server.URL+"/index.js", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishSource(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	script += "// new script"
+	fail = true
+	if _, err := Fetch(nil, server.URL+"/index.js", dir); err == nil {
+		t.Fatal("failed config download accepted")
+	}
+	cached, err := CachedSource(dir)
+	if err != nil || cached.BundleSHA256 != old.BundleSHA256 {
+		t.Fatalf("published version changed: %+v %v", cached, err)
+	}
+	b, err := os.ReadFile(cached.ConfigPath)
+	if err != nil || string(b) != config {
+		t.Fatalf("old configuration lost: %q %v", b, err)
+	}
+}
+
+func TestConfigURLPreservesQueryAndCaseInsensitiveExtension(t *testing.T) {
+	for _, path := range []string{"index.js", "Index.JS"} {
+		var got string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(strings.ToLower(r.URL.Path), ".config.js") {
+				got = r.URL.RequestURI()
+				_, _ = w.Write([]byte("module.exports={};"))
+				return
+			}
+			if strings.HasSuffix(strings.ToLower(r.URL.Path), ".js") {
+				_, _ = w.Write([]byte("module.exports={start:()=>{}};"))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		_, err := Fetch(nil, server.URL+"/"+path+"?token=a%2Bb&v=2", t.TempDir())
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := "/" + strings.TrimSuffix(strings.TrimSuffix(path, ".js"), ".JS") + ".config.js?token=a%2Bb&v=2"
+		if got != expected {
+			t.Fatalf("config path %q want %q", got, expected)
+		}
+	}
+}
+
+func TestCorruptCacheIsRejectedAndRefreshRepairsIntoNewVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index.js" {
+			w.Write([]byte("module.exports={start:function(){}};"))
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	src, err := Fetch(nil, server.URL+"/index.js", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishSource(dir, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src.Path, []byte("tampered cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CachedSource(dir); err == nil {
+		t.Fatal("tampered bytes accepted")
+	}
+	repaired, err := Fetch(nil, server.URL+"/index.js", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.Path == src.Path || repaired.BundleSHA256 != src.BundleSHA256 {
+		t.Fatal("refresh overwrote the immutable corrupt version")
+	}
+	if err := PublishSource(dir, repaired); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CachedSource(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConditionalRefreshChecksConfigAndForceBypassesValidators(t *testing.T) {
+	script := []byte("module.exports={start:function(){}};")
+	config := []byte("module.exports={version:1};")
+	configETag := "config-one"
+	fullScript, fullConfig, notModified := 0, 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body []byte
+		var tag string
+		switch r.URL.Path {
+		case "/index.js":
+			body, tag = script, "script-one"
+		case "/index.config.js":
+			body, tag = config, configETag
+		default:
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path == "/index.js" {
-			_, _ = w.Write([]byte("replacement script body is long enough"))
+		w.Header().Set("ETag", tag)
+		if r.Header.Get("If-None-Match") == tag {
+			notModified++
+			w.WriteHeader(304)
 			return
 		}
-		http.NotFound(w, r)
+		if r.URL.Path == "/index.js" {
+			fullScript++
+		} else {
+			fullConfig++
+		}
+		w.Write(body)
 	}))
 	defer server.Close()
-	if _, err := FetchWithOptions(nil, server.URL+"/index.js", dir, false); err == nil {
-		t.Fatal("expected script publication failure")
+	dir := t.TempDir()
+	address := server.URL + "/index.js"
+	first, err := Fetch(nil, address, dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	b, err := os.ReadFile(configPath)
-	if err != nil || string(b) != "previous config" {
-		t.Fatalf("cached config was removed before failed script publication: %q, %v", b, err)
+	if err := PublishSource(dir, first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Fetch(nil, address, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.BundleSHA256 != first.BundleSHA256 || fullScript != 1 || fullConfig != 1 || notModified != 2 {
+		t.Fatalf("conditional refresh: full=%d/%d unchanged=%d", fullScript, fullConfig, notModified)
+	}
+	config = []byte("module.exports={version:2};")
+	configETag = "config-two"
+	third, err := Fetch(nil, address, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.SHA256 != first.SHA256 || third.BundleSHA256 == first.BundleSHA256 || fullConfig != 2 {
+		t.Fatal("script 304 hid an executable config update")
+	}
+	if _, err := FetchRefreshContext(context.Background(), nil, address, dir, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if fullScript != 2 || fullConfig != 3 {
+		t.Fatal("force refresh still used validators")
 	}
 }

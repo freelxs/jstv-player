@@ -193,7 +193,7 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := d.Lines[0]
-	id := p.eps.add(&playlist{api: api, vodID: "v1", show: "Mock", flag: line.Flag, eps: line.Episodes, start: 0})
+	id := p.eps.add(&playlist{generation: p.generation(), api: api, vodID: "v1", show: "Mock", flag: line.Flag, eps: line.Episodes, start: 0})
 
 	resp, err := http.Get(p.eps.playlistURL(id))
 	if err != nil {

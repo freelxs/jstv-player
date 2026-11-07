@@ -17,11 +17,12 @@ func (p *Player) clientWithContext(ctx context.Context, api string) (*catvod.Cli
 	}
 	p.mu.Lock()
 	h := p.host
+	sourceCtx := p.sourceContext
 	p.mu.Unlock()
 	if h == nil || h.Base() == "" {
 		return nil, errors.New("源未加载")
 	}
-	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN, Context: ctx}
+	c := &catvod.Client{Base: h.Base(), LAN: p.GetSettings().AllowLAN, Context: ctx, SourceContext: sourceCtx, LogFunc: p.log}
 	if api != "" {
 		if err := p.initSite(api, c, h); err != nil {
 			return nil, err
@@ -59,15 +60,27 @@ func (p *Player) initSite(api string, c *catvod.Client, expectedHost *catvod.Hos
 
 // Home returns the site's categories and filters.
 func (p *Player) Home(api string) (catvod.M, error) {
+	if c, err, ok := p.nativeCatalog(api); ok {
+		if err != nil {
+			return nil, err
+		}
+		return liveHome(c), nil
+	}
 	c, err := p.client(api)
 	if err != nil {
 		return nil, err
 	}
-	return c.Home(api)
+	return p.cachedCatalog(api, "home", nil, func() (catvod.M, error) { return c.Home(api) })
 }
 
 // Category lists one page of a category.
 func (p *Player) Category(api, tid string, page int, filters map[string]string) (catvod.M, error) {
+	if c, err, ok := p.nativeCatalog(api); ok {
+		if err != nil {
+			return nil, err
+		}
+		return liveCategory(c, tid, "", page), nil
+	}
 	c, err := p.client(api)
 	if err != nil {
 		return nil, err
@@ -75,11 +88,17 @@ func (p *Player) Category(api, tid string, page int, filters map[string]string) 
 	if page < 1 {
 		page = 1
 	}
-	return c.Category(api, tid, page, filters)
+	return p.cachedCatalog(api, "category", []any{tid, page, filters}, func() (catvod.M, error) { return c.Category(api, tid, page, filters) })
 }
 
 // Search searches one site.
 func (p *Player) Search(api, wd string, page int) (catvod.M, error) {
+	if c, err, ok := p.nativeCatalog(api); ok {
+		if err != nil {
+			return nil, err
+		}
+		return liveCategory(c, "", wd, page), nil
+	}
 	c, err := p.client(api)
 	if err != nil {
 		return nil, err

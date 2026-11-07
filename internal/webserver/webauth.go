@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freelxs/jstv-player/internal/atomicfile"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -160,18 +161,7 @@ func (a *authStore) saveSessionsLocked() {
 	_ = writePrivateJSON(a.sessionsPath, file)
 }
 
-func writePrivateJSON(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
+func writePrivateJSON(path string, v any) error { return atomicfile.JSON(path, v) }
 
 func (a *authStore) login(ip, user, password string) (string, error) {
 	if a.limited(ip) {

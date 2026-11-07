@@ -3,3 +3,6 @@ build/
 .mygo/
 *.dmg
 .env
+
+# Local browser profiles, downloaded reference data and test tools
+.tmp/

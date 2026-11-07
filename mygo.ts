@@ -16,12 +16,23 @@ export interface Episode {
   id: string;
 }
 
+export interface Favorite {
+  subscription: string;
+  api: string;
+  id: string;
+  name: string;
+  picture?: string;
+  time: number;
+}
+
 /** HistoryEntry is the last episode played of a show. */
 export interface HistoryEntry {
   flag: string;
   index: number;
   name: string;
   time: number;
+  position?: number;
+  duration?: number;
 }
 
 /** Line is one play source (vod_play_from) with its episodes. */
@@ -37,10 +48,13 @@ export interface LoadResult {
   expectedMd5: string;
   mismatch: boolean;
   node: string;
+  warnings?: string[];
   subscription: Subscription;
   trustRequired?: boolean;
   trustSHA256?: string;
   trustURL?: string;
+  trustScriptSHA256?: string;
+  trustConfigSHA256?: string;
 }
 
 /** Settings are kept in settings.json in the user data directory. */
@@ -80,6 +94,7 @@ export interface Settings {
    */
   allowLan: boolean;
   allowLanMedia: boolean;
+  inheritProxyEnv: boolean;
   inheritNodeEnv: boolean;
   persistLogs: boolean;
 }
@@ -104,6 +119,10 @@ export interface SiteResults {
 
 /** Stream is one playable URL. */
 export interface Stream {
+  progressId?: string;
+  position?: number;
+  /** native media endpoints need not have a media suffix */
+  direct?: boolean;
   name: string;
   url: string;
   /** a web page that still needs sniffing */
@@ -114,6 +133,8 @@ export interface Stream {
 /** Subscription is one user-supplied plugin address. */
 export interface Subscription {
   id: string;
+  /** auto | plugin | live */
+  type?: string;
   name: string;
   /** index.js or index.js.md5 */
   url: string;
@@ -136,6 +157,8 @@ export interface WebPlayback {
   playlistId?: string;
   index: number;
   count: number;
+  progressId?: string;
+  position?: number;
 }
 
 /** WebQuality is one already-proxied rendition. */
@@ -152,6 +175,13 @@ export const Player = {
   /** AddSubscription adds a plugin address. The first one becomes active. */
   addSubscription(name: string, url: string): Promise<Settings> {
     return call("Player.AddSubscription", name, url);
+  },
+  /**
+   * AddSubscriptionWithType preserves the legacy AddSubscription RPC while
+   * allowing directory plugins and extensionless native feeds to be explicit.
+   */
+  addSubscriptionWithType(name: string, url: string, kind: string): Promise<Settings> {
+    return call("Player.AddSubscriptionWithType", name, url, kind);
   },
   /**
    * ApproveSource records the exact currently active URL and hash presented by
@@ -171,6 +201,12 @@ export const Player = {
   /** Detail returns a vod with its play lines. */
   detail(api: string, id: string): Promise<DetailResult | null> {
     return call("Player.Detail", api, id);
+  },
+  forceRefreshSource(): Promise<LoadResult | null> {
+    return call("Player.ForceRefreshSource");
+  },
+  getFavorites(): Promise<Favorite[]> {
+    return call("Player.GetFavorites");
   },
   /**
    * GetHistory returns the last episode played of a show in the active
@@ -245,6 +281,13 @@ export const Player = {
     return call("Player.RemoveSubscription", id);
   },
   /**
+   * ReportProgress coalesces normal updates to one disk write per ten seconds.
+   * Pausing, seeking, closing and ending may flush at most once per second.
+   */
+  reportProgress(token: string, position: number, duration: number, final: boolean): Promise<void> {
+    return call("Player.ReportProgress", token, position, duration, final);
+  },
+  /**
    * SaveSettings stores the general settings (player, node, md5, bridge).
    * Subscriptions are managed by the Subscription methods and kept as they are.
    */
@@ -262,7 +305,13 @@ export const Player = {
   searchAll(wd: string, out: Channel<SiteResults>): Promise<void> {
     return call("Player.SearchAll", wd, out);
   },
-  /** StopSource stops the running source process. */
+  /**
+   * StartCachedSource starts a verified, approved last working copy. Refreshing
+   * remains an explicit LoadSource operation and always checks configuration.
+   */
+  startCachedSource(): Promise<LoadResult | null> {
+    return call("Player.StartCachedSource");
+  },
   stopSource(): Promise<void> {
     return call("Player.StopSource");
   },
@@ -270,9 +319,15 @@ export const Player = {
   switchSubscription(id: string): Promise<LoadResult | null> {
     return call("Player.SwitchSubscription", id);
   },
+  toggleFavorite(api: string, id: string, name: string, picture: string): Promise<boolean> {
+    return call("Player.ToggleFavorite", api, id, name, picture);
+  },
   /** UpdateSubscription renames a subscription or changes its address. */
   updateSubscription(id: string, name: string, url: string): Promise<Settings> {
     return call("Player.UpdateSubscription", id, name, url);
+  },
+  updateSubscriptionWithType(id: string, name: string, url: string, kind: string): Promise<Settings> {
+    return call("Player.UpdateSubscriptionWithType", id, name, url, kind);
   },
   /** WebAdvance resolves a later episode of a browser playlist. */
   webAdvance(id: string, index: number): Promise<WebPlayback | null> {

@@ -28,3 +28,20 @@ func (r *Runtime) StreamSearch(ctx context.Context, word string, send func(SiteR
 
 // PosterHost returns the plugin host permitted for poster requests.
 func (r *Runtime) PosterHost() string { return r.Player.pluginPosterHost() }
+
+// ConfigurationTarget is infrastructure for the isolated configuration bridge,
+// never an arbitrary URL supplied through the Player RPC interface.
+func (r *Runtime) ConfigurationTarget() (string, uint64, context.Context) {
+	p := r.Player
+	p.mu.Lock()
+	h, g, ctx := p.host, p.sourceGeneration, p.sourceContext
+	p.mu.Unlock()
+	if h == nil {
+		return "", g, ctx
+	}
+	base := h.Base()
+	if !p.isGeneration(g) {
+		return "", g, ctx
+	}
+	return base, g, ctx
+}

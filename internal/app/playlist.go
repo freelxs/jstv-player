@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freelxs/jstv-player/internal/atomicfile"
 	"github.com/freelxs/jstv-player/internal/catvod"
 	"github.com/freelxs/jstv-player/internal/externalplayer"
 )
@@ -28,6 +29,7 @@ import (
 // the proxied stream, so headers and HLS rewriting work as for one episode.
 
 type playlist struct {
+	generation             uint64
 	api, vodID, show, flag string
 	subID                  string // subscription that owns this show; empty uses the active one
 	eps                    []catvod.Episode
@@ -52,10 +54,12 @@ const resolvedTTL = 10 * time.Minute
 
 // HistoryEntry is the last episode played of a show.
 type HistoryEntry struct {
-	Flag  string `json:"flag"`
-	Index int    `json:"index"`
-	Name  string `json:"name"`
-	Time  int64  `json:"time"`
+	Flag     string  `json:"flag"`
+	Index    int     `json:"index"`
+	Name     string  `json:"name"`
+	Time     int64   `json:"time"`
+	Position float64 `json:"position,omitempty"`
+	Duration float64 `json:"duration,omitempty"`
 }
 
 type episodeServer struct {
@@ -143,6 +147,8 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 	// page prefetches episode URLs. Let the player read those responses.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	switch {
+	case strings.HasPrefix(r.URL.Path, "/progress/"):
+		p.serveProgress(w, r)
 	case strings.HasPrefix(r.URL.Path, "/playlist/"):
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/playlist/"), ".m3u")
 		pl := p.eps.get(id)
@@ -195,7 +201,12 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 			// The video element follows this redirect unreliably, and hls.js
 			// needs the final proxy URL. External players keep the 302.
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			_ = json.NewEncoder(w).Encode(map[string]string{"url": u})
+			kind, err := catvod.InspectStream(nil, u, nil)
+			if err != nil {
+				kind = mediaKind(u)
+			}
+			progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name}, pl.generation)
+			_ = json.NewEncoder(w).Encode(map[string]any{"url": u, "media": kind, "progressId": progressID, "position": position})
 			return
 		}
 		http.Redirect(w, r, u, http.StatusFound)
@@ -217,10 +228,15 @@ func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
-	return p.wrapStream(st)
+	return p.wrapStream(pl, st)
 }
 
-func (p *Player) wrapStream(st *catvod.Stream) (string, error) {
+func (p *Player) wrapStream(pl *playlist, st *catvod.Stream) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pl.generation != p.sourceGeneration {
+		return "", errSourceChanged
+	}
 	if p.proxy == nil {
 		return "", errors.New("本地播放代理未启动")
 	}
@@ -231,6 +247,12 @@ func (p *Player) wrapStream(st *catvod.Stream) (string, error) {
 // player and a prefetch) share one plugin call. consume drops the answer
 // after use so a later replay resolves a fresh URL.
 func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Stream, error) {
+	if !p.isGeneration(pl.generation) {
+		return nil, errSourceChanged
+	}
+	if n < 0 || n >= len(pl.eps) {
+		return nil, errors.New("剧集不存在")
+	}
 	pl.mu.Lock()
 	if pl.pending == nil {
 		pl.pending = map[int]*resolved{}
@@ -258,7 +280,7 @@ func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Strea
 	}
 	pl.mu.Unlock()
 	if owner {
-		streams, err := p.Play(pl.api, pl.flag, pl.eps[n].ID)
+		streams, err := p.playAtGeneration(pl.api, pl.flag, pl.eps[n].ID, pl.generation)
 		if err == nil {
 			if r.st = firstPlayable(streams); r.st == nil {
 				err = errors.New("这一集没有可用于连播的 HTTP(S) 播放地址")
@@ -275,6 +297,9 @@ func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Strea
 		}
 		pl.mu.Unlock()
 	}
+	if !p.isGeneration(pl.generation) {
+		return nil, errSourceChanged
+	}
 	return r.st, r.err
 }
 
@@ -290,7 +315,7 @@ func (p *Player) prefetchEpisode(pl *playlist, n int) {
 		p.log(fmt.Sprintf("预取第 %d 项失败: %v", n+1, err))
 		return
 	}
-	u, err := p.wrapStream(st)
+	u, err := p.wrapStream(pl, st)
 	if err != nil {
 		p.log("预热失败: " + err.Error())
 		return
@@ -345,7 +370,7 @@ func firstPlayable(streams []catvod.Stream) *catvod.Stream {
 	for i := range streams {
 		// Player.Play grants only these URL forms to the proxy. Keep automatic
 		// episode selection within that same authorization boundary.
-		if !streams[i].Parse && !catvod.IsWebPage(streams[i].URL) && catvod.IsHTTPMediaURL(streams[i].URL) {
+		if !streams[i].Parse && (streams[i].Direct || !catvod.IsWebPage(streams[i].URL)) && catvod.IsHTTPMediaURL(streams[i].URL) {
 			return &streams[i]
 		}
 	}
@@ -364,23 +389,28 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	if start < 0 || start >= len(eps) {
 		return nil, errors.New("剧集不存在")
 	}
-	streams, err := p.Play(api, flag, eps[start].ID)
+	settings, generation := p.playbackState()
+	streams, err := p.playAtGeneration(api, flag, eps[start].ID, generation)
 	if err != nil {
 		return nil, err
 	}
-	s := p.GetSettings()
+	s := settings
 	subID := ""
 	if sub, ok := s.active(); ok {
 		subID = sub.ID
 	}
 	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
+	progressID, position := p.newProgressSession(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name}, generation)
+	for i := range streams {
+		streams[i].ProgressID, streams[i].Position = progressID, position
+	}
 	first := firstPlayable(streams)
 	if s.DisableContinuous || !externalplayer.PlayerUsesPlaylist(s.Player) || len(streams) != 1 || p.eps.base == "" {
 		return streams, nil
 	}
 	if first == nil {
 		for _, st := range streams {
-			if st.Parse || catvod.IsWebPage(st.URL) {
+			if st.Parse || (!st.Direct && catvod.IsWebPage(st.URL)) {
 				return streams, nil
 			}
 		}
@@ -396,15 +426,18 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 		return nil, err
 	}
 	var pre map[string]string
-	isHTML, err := catvod.Preflight(nil, u, pre)
+	kind, err := catvod.InspectStream(nil, u, pre)
 	if err != nil {
 		p.log("preflight: " + err.Error())
 		return nil, err
 	}
-	if isHTML {
+	if kind == "html" {
 		return streams, nil
 	}
-	id := p.eps.add(&playlist{api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
+	id, err := p.addPlaylist(&playlist{generation: generation, api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
+	if err != nil {
+		return nil, err
+	}
 	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
 	if s.Player == "builtin" || s.Player == "" {
 		// The clicked episode is already resolved. Hand that proxied URL to
@@ -412,6 +445,8 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 		// ?direct=1, because a video element follows the 302 unreliably and
 		// hls.js needs the final proxy URL. External players still get the M3U.
 		items := builtinEpisodeItems(show, eps, start, func(i int) string { return p.eps.epURL(id, i) }, u)
+		items[start].Media = kind
+		items[start].ProgressID, items[start].Position = progressID, position
 		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlayerPage(items, start))
 		return nil, nil
 	}
@@ -419,8 +454,11 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 }
 
 type builtinItem struct {
-	Title string `json:"t"`
-	URL   string `json:"u"`
+	Title      string  `json:"t"`
+	URL        string  `json:"u"`
+	Media      string  `json:"m,omitempty"`
+	ProgressID string  `json:"p,omitempty"`
+	Position   float64 `json:"s,omitempty"`
 }
 
 // builtinEpisodeItems lists the whole line. The clicked episode uses the
@@ -485,11 +523,16 @@ button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:42%}
 const L=` + payload + `;
 const START=` + strconv.Itoa(start) + `;
 const HINT=` + string(hint) + `;
-let i=-1, token=0, hls=null, pf=-1, suppress=false;
+let i=-1, token=0, hls=null, pf=-1, suppress=false, progressId='', progressAt=0, pendingSeek=0, progressReady=false;
 const v=document.querySelector('video');
 const err=document.getElementById('e');
 const goBtn=document.getElementById('go');
 function showErr(m){err.textContent=m||HINT;}
+function reportProgress(final=false){
+ if(!progressReady||!progressId||!Number.isFinite(v.duration)||v.duration<=0)return;
+ const now=Date.now();if(!final&&now-progressAt<10000)return;progressAt=now;
+ fetch('progress/'+encodeURIComponent(progressId),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:v.currentTime||0,duration:v.duration,final}),keepalive:final}).catch(()=>{});
+}
 function sync(){
   document.getElementById('p').disabled=i<=0;
   document.getElementById('n').disabled=i<0||i+1>=L.length;
@@ -514,15 +557,15 @@ function isEpisode(u){
 }
 function isHls(u){return /\.m3u8?(\?|#|$)/i.test(u);}
 async function mediaURL(u){
-  if(!isEpisode(u)) return u;
+  if(!isEpisode(u)) return {url:u};
   const sep=u.indexOf('?')>=0?'&':'?';
   const r=await fetch(u+sep+'direct=1',{headers:{Accept:'application/json'}});
   const body=await r.json().catch(function(){return {};});
   if(!r.ok||!body.url) throw new Error((body&&body.error)||'这一集解析失败');
-  return body.url;
+  return body;
 }
-function attach(url){
-  const hlsLike=isHls(url);
+function attach(url,media){
+  const hlsLike=media==='hls'||isHls(url);
   if(hlsLike&&v.canPlayType('application/vnd.apple.mpegurl')){suppress=false;v.src=url;tryPlay();return;}
   if(hlsLike&&window.Hls&&window.Hls.isSupported()){
     hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
@@ -538,25 +581,31 @@ function attach(url){
 }
 async function go(k){
   if(!L.length||k<0||k>=L.length)return;
+  reportProgress(true);progressId='';progressReady=false;
   const mine=++token;
   i=k;sync();err.textContent='';goBtn.hidden=true;
   destroyHls();
-  let url;
-  try{url=await mediaURL(L[i].u);}catch(e){if(mine===token)showErr((e&&e.message)||HINT);return;}
+  let result;const item=L[i];
+  try{result=await mediaURL(item.u);}catch(e){if(mine===token)showErr((e&&e.message)||HINT);return;}
   if(mine!==token)return;
-  attach(url);
+  progressId=item.p||result.progressId||'';pendingSeek=item.s||result.position||0;progressAt=0;
+  attach(result.url,item.m||result.media);
 }
+v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;});
+v.addEventListener('pause',()=>{if(!suppress)reportProgress(true);});
+window.addEventListener('pagehide',()=>reportProgress(true));
 v.addEventListener('timeupdate',function(){
+  reportProgress();
   if(i+1<L.length&&pf!==i+1&&v.duration&&isFinite(v.duration)&&v.duration-v.currentTime<60){
     pf=i+1;const u=L[i+1].u;
     if(isEpisode(u)) fetch(u+(u.indexOf('?')>=0?'&':'?')+'prefetch=1').catch(function(){});
   }
 });
-v.addEventListener('ended',function(){if(i+1<L.length)go(i+1);});
+v.addEventListener('ended',function(){reportProgress(true);if(i+1<L.length)go(i+1);});
 v.addEventListener('error',function(){if(suppress)return;if(!v.getAttribute('src')&&!hls)return;if(!err.textContent)showErr(HINT);});
 document.getElementById('p').onclick=function(){go(i-1);};
 document.getElementById('n').onclick=function(){go(i+1);};
-document.getElementById('c').onclick=function(){token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
+document.getElementById('c').onclick=function(){reportProgress(true);progressId='';token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
 goBtn.onclick=function(){tryPlay();};
 if(L.length) go(START); else showErr('没有可播放的地址');
 </script></body></html>`
@@ -565,7 +614,7 @@ if(L.length) go(START); else showErr('没有可播放的地址');
 // ---- watch history ----
 
 func historyKey(subID, api, vodID string) string {
-	return subID + "\x00" + api + "\x00" + vodID
+	return subID + "\x00" + persistentAPI(api) + "\x00" + vodID
 }
 
 func legacyHistoryParts(key string) (api, vodID string, ok bool) {
@@ -599,6 +648,13 @@ func (p *Player) recordHistory(subID, api, vodID string, e HistoryEntry) {
 	p.histMu.Lock()
 	defer p.histMu.Unlock()
 	h := p.loadHistoryLocked(subID)
+	if h == nil {
+		return
+	}
+	old := h[historyKey(subID, api, vodID)]
+	if old.Flag == e.Flag && old.Index == e.Index && e.Position == 0 && e.Duration == 0 {
+		e.Position, e.Duration = old.Position, old.Duration
+	}
 	h[historyKey(subID, api, vodID)] = e
 	if len(h) > 2000 {
 		var oldK string
@@ -610,15 +666,37 @@ func (p *Player) recordHistory(subID, api, vodID string, e HistoryEntry) {
 		}
 		delete(h, oldK)
 	}
-	b, _ := json.Marshal(h)
-	_ = os.WriteFile(filepath.Join(p.dir, "history.json"), b, 0o600)
+	if err := atomicfile.JSON(filepath.Join(p.dir, "history.json"), h); err != nil {
+		p.log("保存播放记录失败: " + err.Error())
+	}
 }
 
 func (p *Player) loadHistoryLocked(subID string) map[string]HistoryEntry {
 	h := map[string]HistoryEntry{}
 	path := filepath.Join(p.dir, "history.json")
 	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &h)
+		if err := json.Unmarshal(b, &h); err != nil || h == nil {
+			backup, backupErr := os.CreateTemp(p.dir, "history-corrupt-*.json")
+			if backupErr != nil {
+				p.log("无法备份损坏的播放记录: " + backupErr.Error())
+				return nil
+			}
+			name := backup.Name()
+			backup.Close()
+			if err := atomicfile.Write(name, b, 0o600); err != nil {
+				p.log("备份播放记录失败: " + err.Error())
+				return nil
+			}
+			h = map[string]HistoryEntry{}
+			if err := atomicfile.JSON(path, h); err != nil {
+				p.log("重建播放记录失败: " + err.Error())
+				return nil
+			}
+			p.log("损坏的播放记录已保留到 " + filepath.Base(name))
+		}
+	} else if !os.IsNotExist(err) {
+		p.log("读取播放记录失败: " + err.Error())
+		return nil
 	}
 	if subID == "" {
 		return h
@@ -637,8 +715,8 @@ func (p *Player) loadHistoryLocked(subID string) map[string]HistoryEntry {
 		changed = true
 	}
 	if changed {
-		if b, err := json.Marshal(h); err == nil {
-			_ = os.WriteFile(path, b, 0o600)
+		if err := atomicfile.JSON(path, h); err != nil {
+			p.log("迁移播放记录失败: " + err.Error())
 		}
 	}
 	return h
