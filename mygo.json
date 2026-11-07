@@ -1,5 +1,6 @@
 {
   "name": "JSTV Player",
+  "slug": "jstv-player",
   "identifier": "com.freelxs.jstvplayer",
   "version": "0.3.8",
   "frontendDist": "web",

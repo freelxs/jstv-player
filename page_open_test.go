@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo"
 )
 
 func TestInAppNavigationKeepsLoopbackConfigurationPages(t *testing.T) {
@@ -36,6 +38,32 @@ func TestConfigPageURLUsesTheLoadedSource(t *testing.T) {
 	}
 	if _, err := configPageURL("not a url"); err == nil {
 		t.Fatal("accepted a source that is not an http address")
+	}
+}
+
+func TestConfigPageWindowOpenKeepsTheExistingAddressRule(t *testing.T) {
+	for _, userInitiated := range []bool{true, false} {
+		inApp, external := configPageWindowOptions("配置", mygo.WindowOpenRequest{
+			URL:           "http://127.0.0.1:9/website/index.html?mode=edit#qr",
+			UserInitiated: userInitiated,
+		})
+		if external || inApp == nil || inApp.Title != "配置" || inApp.Width != 1100 || inApp.Height != 700 {
+			t.Fatalf("userInitiated=%v in-app=%+v external=%v", userInitiated, inApp, external)
+		}
+		inApp, external = configPageWindowOptions("配置", mygo.WindowOpenRequest{
+			URL:           "https://example.com/watch/1",
+			UserInitiated: userInitiated,
+		})
+		if inApp != nil || !external {
+			t.Fatalf("userInitiated=%v public page in-app=%+v external=%v", userInitiated, inApp, external)
+		}
+		inApp, external = configPageWindowOptions("配置", mygo.WindowOpenRequest{
+			URL:           "file:///tmp/local.html",
+			UserInitiated: userInitiated,
+		})
+		if inApp != nil || external {
+			t.Fatalf("userInitiated=%v non-http page in-app=%+v external=%v", userInitiated, inApp, external)
+		}
 	}
 }
 
