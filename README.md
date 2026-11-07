@@ -50,7 +50,7 @@
 | Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
 | 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
 
-推送到 `main` 后，CI 会对该次推送的 commit 运行测试和三平台构建；全部成功后，使用 `mygo.json` 中的版本创建 `v<版本>` Git 标签并发布 GitHub Release。每次新发布前先更新 `mygo.json` 的版本。若同版本标签已指向其他 commit，或该版本的 Release 已存在，工作流会失败并提示更新版本，不会移动标签或覆盖 Release 资产。Pull request 和其他分支推送不会自动发布。推送 `vMAJOR.MINOR.PATCH` 标签仍可从该标签源码构建并发布；也可在 Actions 手动运行工作流并填写已有标签，以恢复发布。
+推送到 `main` 后，CI 会对该次推送的 commit 运行测试和三平台构建；全部成功后，使用 `mygo.json` 中的版本创建 `v<版本>` Git 标签并发布 GitHub Release。功能或行为修改在合并进 `main` 之前必须先升应用版本，并让这三处保持一致：`mygo.json` 的 `version`、设置页关于标签（`web/index.html` 的 `appVersion`）和 `CHANGELOG.md`。发布自动化拒绝已存在的同版本标签或 Release，不会移动旧标签，也不会覆盖已发布资产；沿用已发布版本号合并到 `main` 会让这次发布失败。Pull request 和其他分支推送不会自动发布。推送 `vMAJOR.MINOR.PATCH` 标签仍可从该标签源码构建并发布；也可在 Actions 手动运行工作流并填写已有标签，以恢复发布。
 
 当前仓库未配置 Developer ID 代码签名或公证；本地构建的 app 可能带 ad-hoc 签名，但它不认证发布者。macOS 首次打开请右键 → 打开，或执行：
 
