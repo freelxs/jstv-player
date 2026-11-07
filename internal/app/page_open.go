@@ -86,7 +86,9 @@ func (p *Player) openWebPage(title, pageURL string) {
 // OpenConfigPage opens the loaded plugin's configuration page. In web mode
 // the browser has to open the returned address itself.
 func (p *Player) OpenConfigPage(api string) (string, error) {
-	c, err := p.client(api)
+	// Configuration repairs a site that may itself be failing to initialize.
+	// It belongs to the loaded bundle, not to one spider's init lifecycle.
+	c, err := p.client("")
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +97,7 @@ func (p *Player) OpenConfigPage(api string) (string, error) {
 		return "", err
 	}
 	if p.webMode.Load() {
-		return page, nil
+		return "/configuration/", nil
 	}
 	return page, p.Open(catvod.Stream{URL: page, Parse: true, Name: "配置"}, "配置")
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -40,23 +41,52 @@ func (p *Player) bridgeAddr() string {
 
 // LoadSource downloads the active subscription's plugin, starts it and
 // lists its sites. Any previous plugin process is stopped first.
-func (p *Player) LoadSource() (*LoadResult, error) {
+func (p *Player) LoadSource() (*LoadResult, error)         { return p.loadSource(false) }
+func (p *Player) ForceRefreshSource() (*LoadResult, error) { return p.loadSource(false, true) }
+
+// StartCachedSource starts a verified, approved last working copy. Refreshing
+// remains an explicit LoadSource operation and always checks configuration.
+func (p *Player) StartCachedSource() (*LoadResult, error) { return p.loadSource(true) }
+
+func (p *Player) loadSource(useCache bool, force ...bool) (*LoadResult, error) {
+	ctx, generation := p.beginSourceLoad()
 	p.loadMu.Lock()
 	defer p.loadMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s := p.GetSettings()
 	sub, ok := s.active()
 	if !ok {
-		p.StopSource()
 		return nil, errors.New("请先添加一个订阅")
 	}
 	// Each subscription keeps its own plugin copy and data files.
 	dir := filepath.Join(p.dir, "subs", sub.ID)
+	if isLiveSubscription(sub) {
+		return p.loadLive(ctx, sub, dir, generation, useCache)
+	}
 	node, err := catvod.FindNode(s.NodePath)
 	if err != nil {
 		return nil, err
 	}
 	p.log("加载订阅「" + sub.Name + "」: " + sub.URL)
-	src, err := catvod.FetchWithOptions(nil, sub.URL, dir, s.StrictMD5)
+	var src *catvod.Source
+	if useCache {
+		src, err = catvod.CachedSource(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			src = nil
+			err = nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if src != nil && src.URL != sub.URL {
+			src = nil
+		}
+	}
+	if src == nil {
+		src, err = catvod.FetchRefreshContext(ctx, nil, sub.URL, dir, s.StrictMD5, len(force) > 0 && force[0])
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -64,27 +94,45 @@ func (p *Player) LoadSource() (*LoadResult, error) {
 	if pinErr != nil && !errors.Is(pinErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("读取插件 SHA-256 信任记录失败：%w", pinErr)
 	}
-	if pinErr != nil || pinned.URL != src.ScriptURL || !strings.EqualFold(pinned.SHA256, src.SHA256) {
-		p.StopSource()
+	if s.StrictMD5 && src.MD5Mismatch() {
+		return nil, errors.New("md5 校验失败，缓存版本与发布摘要不一致")
+	}
+	if pinErr != nil || pinned.URL != src.ScriptURL || pinned.BundleSHA256 != src.BundleSHA256 {
 		p.mu.Lock()
-		p.pendingTrust[sub.ID] = sourcePin{URL: src.ScriptURL, SHA256: src.SHA256}
+		if generation != p.sourceGeneration || ctx.Err() != nil {
+			p.mu.Unlock()
+			return nil, context.Canceled
+		}
+		p.pendingTrust[sub.ID] = sourcePin{URL: src.ScriptURL, SHA256: src.SHA256, ConfigSHA256: src.ConfigSHA256, BundleSHA256: src.BundleSHA256}
 		p.mu.Unlock()
-		return &LoadResult{Sub: sub, TrustRequired: true, TrustSHA256: src.SHA256, TrustURL: displaySourceURL(src.ScriptURL), MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node}, nil
+		return &LoadResult{Sub: sub, TrustRequired: true, TrustSHA256: src.BundleSHA256, TrustScriptSHA256: src.SHA256, TrustConfigSHA256: src.ConfigSHA256, TrustURL: displaySourceURL(src.ScriptURL), MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node}, nil
 	}
 	if src.MD5Mismatch() {
 		p.log(fmt.Sprintf("md5 不一致: 文件 %s, 发布 %s", src.MD5, src.Expected))
 	}
-	p.StopSource()
-	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN, InheritEnv: s.InheritNodeEnv}
-	if err := h.Start(90 * time.Second); err != nil {
+	if err := src.Verify(); err != nil {
 		return nil, err
 	}
-	cfg, err := (&catvod.Client{Base: h.Base()}).Config()
+	h := &catvod.Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: src.Path, ConfigFile: src.ConfigPath, LogFunc: p.log, ListenLAN: s.AllowLAN, InheritEnv: s.InheritNodeEnv, InheritProxyEnv: s.InheritProxyEnv}
+	if err := h.StartContext(ctx, 90*time.Second); err != nil {
+		return nil, err
+	}
+	cfg, err := (&catvod.Client{Base: h.Base(), Context: ctx, LogFunc: p.log}).Config()
 	if err != nil {
 		h.Stop()
 		return nil, err
 	}
 	p.mu.Lock()
+	if generation != p.sourceGeneration || ctx.Err() != nil {
+		p.mu.Unlock()
+		h.Stop()
+		return nil, context.Canceled
+	}
+	if err := catvod.PublishSource(dir, src); err != nil {
+		p.mu.Unlock()
+		h.Stop()
+		return nil, err
+	}
 	p.host, p.sites, p.inited = h, cfg.Video.Sites, map[string]bool{}
 	p.mu.Unlock()
 	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node, Sub: sub}, nil
@@ -119,17 +167,50 @@ func (p *Player) ApproveSource() error {
 	return nil
 }
 
-// StopSource stops the running source process.
-func (p *Player) StopSource() {
+// beginSourceLoad invalidates old work before waiting for loadMu. Cancellation
+// reaches downloads and unpublished child processes as well as current hosts.
+func (p *Player) beginSourceLoad() (context.Context, uint64) {
 	p.mu.Lock()
-	h := p.host
-	p.host, p.sites, p.inited = nil, nil, map[string]bool{}
+	h := p.clearSourceLocked()
+	ctx, cancel := context.WithCancel(context.Background())
+	p.loadCancel = cancel
+	p.sourceContext = ctx
+	generation := p.sourceGeneration
 	p.mu.Unlock()
 	if h != nil {
 		h.Stop()
 	}
+	return ctx, generation
+}
+
+// clearSourceLocked and playback authorization commits use the same mutex, so
+// a stale play response cannot re-grant a resource after a stop has revoked it.
+func (p *Player) clearSourceLocked() *catvod.Host {
+	if p.loadCancel != nil {
+		p.loadCancel()
+		p.loadCancel = nil
+	}
+	p.sourceGeneration++
+	p.invalidateCatalogLocked()
+	h := p.host
+	p.host, p.sites, p.inited = nil, nil, map[string]bool{}
+	p.liveCatalog, p.liveAPI = nil, ""
+	p.progress = nil
+	p.eps.mu.Lock()
+	p.eps.lists, p.eps.order = nil, nil
+	p.eps.mu.Unlock()
 	if p.proxy != nil {
 		p.proxy.Reset()
+	}
+	return h
+}
+
+func (p *Player) StopSource() {
+	p.mu.Lock()
+	h := p.clearSourceLocked()
+	p.mu.Unlock()
+	if h != nil {
+		h.Stop()
 	}
 }
 
@@ -159,4 +240,24 @@ func nodePermissionFlags(help string) []string {
 		}
 	}
 	return flags
+}
+
+var errSourceChanged = errors.New("订阅已切换，请重新选择内容")
+
+func (p *Player) generation() uint64         { p.mu.Lock(); defer p.mu.Unlock(); return p.sourceGeneration }
+func (p *Player) isGeneration(g uint64) bool { return p.generation() == g }
+
+func (p *Player) addPlaylist(pl *playlist) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pl.generation != p.sourceGeneration {
+		return "", errSourceChanged
+	}
+	return p.eps.add(pl), nil
+}
+
+func (p *Player) playbackState() (Settings, uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.settings, p.sourceGeneration
 }

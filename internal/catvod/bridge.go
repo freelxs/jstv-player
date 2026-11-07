@@ -344,12 +344,19 @@ func newDefaultPreflightClient() *http.Client {
 // shows a generic "invalid URL / cannot open" dialog. html is true when the
 // address is a web page (Content-Type text/html) rather than media.
 func Preflight(c *http.Client, u string, headers map[string]string) (html bool, err error) {
+	kind, err := InspectStream(c, u, headers)
+	return kind == "html", err
+}
+
+// InspectStream uses response type and prefix, so extensionless live URLs can
+// use hls.js without guessing from a PHP or opaque proxy filename.
+func InspectStream(c *http.Client, u string, headers map[string]string) (kind string, err error) {
 	if c == nil {
 		c = defaultPreflightClient
 	}
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return false, fmt.Errorf("地址无效: %w", err)
+		return "", fmt.Errorf("地址无效: %w", err)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -361,14 +368,25 @@ func Preflight(c *http.Client, u string, headers map[string]string) (html bool, 
 		// toast, so keep the reason and drop the address.
 		var target *url.Error
 		if errors.As(err, &target) && target.Timeout() || errors.Is(err, context.DeadlineExceeded) {
-			return false, errors.New("无法连接播放地址：等待响应超时")
+			return "", errors.New("无法连接播放地址：等待响应超时")
 		}
-		return false, errors.New("无法连接播放地址")
+		return "", errors.New("无法连接播放地址")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-		return false, fmt.Errorf("该线路不可用（HTTP %d: %s），请换其他线路", resp.StatusCode, strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("该线路不可用（HTTP %d: %s），请换其他线路", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	return strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/html"), nil
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "text/html") {
+		return "html", nil
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(ct, "mpegurl") || playlistMagic(b) {
+		return "hls", nil
+	}
+	return "file", nil
 }

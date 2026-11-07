@@ -92,13 +92,14 @@ func filepathJoin(elem ...string) string {
 }
 
 type webServer struct {
-	player  *app.Player
-	runtime *app.Runtime
-	assets  fs.FS
-	auth    *authStore
-	media   *http.Client
-	posters *http.Client
-	methods map[string]reflect.Method
+	player        *app.Player
+	runtime       *app.Runtime
+	assets        fs.FS
+	auth          *authStore
+	media         *http.Client
+	posters       *http.Client
+	methods       map[string]reflect.Method
+	configuration configurationBridge
 }
 
 func newWebHandler(runtime *app.Runtime, auth *authStore, assets fs.FS) http.Handler {
@@ -122,6 +123,7 @@ func newWebHandler(runtime *app.Runtime, auth *authStore, assets fs.FS) http.Han
 		return nil
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/plugin-configuration/", s.servePluginConfiguration)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
@@ -136,6 +138,7 @@ func newWebHandler(runtime *app.Runtime, auth *authStore, assets fs.FS) http.Han
 	mux.HandleFunc("GET /login.css", s.serveAsset("webassets/login.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	protected := http.NewServeMux()
+	protected.HandleFunc("GET /configuration/", s.serveConfiguration)
 	protected.HandleFunc("POST /api/logout", s.handleLogout)
 	protected.HandleFunc("POST /api/call", s.handleCall)
 	protected.HandleFunc("POST /api/stream", s.handleStream)

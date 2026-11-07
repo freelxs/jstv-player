@@ -2,7 +2,7 @@
 
 [![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/jstv-player)
 
-用 Go + [MyGo](https://github.com/egoist/mygo) 写的跨平台（macOS / Windows / Linux）桌面播放器外壳，实现 **CatPawOpen 兼容的 JS 插件接口**：加载用户自己提供的 JS 插件（`index.js`），浏览、搜索并播放插件返回的媒体地址。
+用 Go + [MyGo](https://github.com/egoist/mygo) 写的跨平台（macOS / Windows / Linux）桌面播放器外壳，实现 **CatPawOpen 兼容的 JS 插件接口**：加载用户自己提供的 JS 插件（`index.js`），浏览、搜索并播放插件返回的媒体地址。也可直接导入 M3U/TXT 和 TVBox lives 直播订阅，无需 Node。
 
 > ⚠️ **免责声明**
 >
@@ -12,9 +12,12 @@
 
 ## 功能
 
-- **多订阅**：在设置里添加、重命名、删除多个插件地址（`.../index.js.md5` 或 `.../index.js`），左上角随时切换；切换时停止旧插件进程、启动新的。每个订阅的插件文件和数据分开存放
-- 自动下载 `index.js`、`index.config.js`，校验发布者提供的 md5（默认不一致时只提示）；本机保存 SHA-256 TOFU pin，首次使用或内容变化需用户确认后才运行
-- 站点列表、分类浏览与翻页、单站/全站搜索（结果逐站流式返回）
+- **直播订阅**：支持 M3U/TXT 分组、台标、UA/Referer、自带 headers、TVBox lives 与图片包装配置；不执行 TVBox 点播 spiders。直播只支持 HTTP(S) 媒体，EPG 和其他传输协议尚未实现
+- **多订阅**：在设置里添加、重命名、删除多个插件或直播地址（`.../index.js.md5` 或 `.../index.js`），左上角随时切换；切换时停止旧插件进程、启动新的。每个订阅的插件文件和数据分开存放
+- 自动下载 `index.js`、`index.config.js`，校验发布者提供的 md5（默认不一致时只提示）；本机保存包含脚本和可执行配置的 SHA-256 TOFU 清单，首次使用、脚本或配置变化均需用户确认后才运行；完整版本成功启动后才提交
+- 站点列表、分类浏览与翻页、单站/全站搜索（逐站返回成功/失败状态，近期失败站点后置）；Home/Category 有按订阅代际隔离的短期缓存
+- 节目和直播频道收藏；内置/网页播放器保存播放位置并续播（常规进度十秒合并一次，暂停/关闭时刷新）；外部播放器仅记录集数
+- “启动缓存”验证完整性和已批准清单后使用最后成功版本；“重新加载”对脚本与配置分别使用 ETag/Last-Modified 条件请求；“强制下载刷新”忽略服务器缓存标记。新版启动失败时，可显式确认并启动原缓存版本
 - 分类筛选 UI：支持 `home.filters` 中按分类 ID 提供的字符串选项格式；无效或缺失 metadata 时安全隐藏筛选控件
 - 详情页、多线路剧集列表、多清晰度选择
 - 播放：内置播放器（窗口里的 HTML5 `<video>` + hls.js，和网页模式同一套）、mpv（三个平台）、PotPlayer（仅 Windows）、IINA（仅 macOS）、SenPlayer（仅 macOS）、自定义播放器、系统默认；需要请求头的流经本地代理转发
@@ -24,14 +27,14 @@
 - 可选的播放桥（`/play?vid=`）：默认关闭，只有在设置里填写自己的 URL 模板后才启用
 - 插件进程默认只监听 `127.0.0.1`，随 App 退出；局域网插件服务和局域网媒体播放均需在设置中分别明确开启
 - 可选脱敏日志持久化：默认关闭；只显示近 7 天日志，最多 4 MiB（容量可能导致更早淘汰），可随时清除
-- 插件由系统 Node.js 运行。默认只传递运行所需的平台环境变量和证书路径变量；高级兼容模式可传入完整环境（可能包含代理凭据等秘密）。权限模型按钮仅检查当前 Node 帮助中列出的标志，不启用权限，也不构成安全沙箱
+- 插件由系统 Node.js 运行。默认只传递运行所需的平台环境变量和证书路径变量；独立的代理继承开关默认关闭，重载后生效；高级兼容模式可传入完整环境（可能包含代理凭据等秘密）。权限模型按钮仅检查当前 Node 帮助中列出的标志，不启用权限，也不构成安全沙箱
 
 接口细节见 [docs/PROTOCOL.md](docs/PROTOCOL.md)。
 
 ## 运行依赖
 
 - macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）。Linux 上用内置播放器看 HLS 时，WebKitGTK 还需要 GStreamer 解码插件：`gstreamer1.0-plugins-good`、`gstreamer1.0-plugins-bad`、`gstreamer1.0-libav`。Debian 包把这三项列为依赖。AC3 等专利编码另需 `gstreamer1.0-plugins-ugly`。Fedora 上对应包名是 `gstreamer1-plugins-good`、`gstreamer1-plugins-bad-free` 和 `gstreamer1-libav`。
-- Node.js 18+（插件本身是 Node.js 程序）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
+- Node.js 18+（仅 JS 插件需要；原生直播不需要）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io) 或 [SenPlayer](https://apps.apple.com/app/senplayer-media-player/id6443975850)。
 - 内置播放器在桌面窗口里播放，用的是和网页模式同一套 HTML5 `<video>` 与 hls.js。macOS 的 web view 能直接播 HLS，会走系统解码；Windows WebView2 和 Linux WebKitGTK 在有 Media Source Extensions 时由 hls.js 把 HLS 转成 fMP4。没有 MSE 或缺少解码插件时，窗口里会提示改用外部播放器。因为这一点，还没保存过播放器设置时，Windows 仍优先 PotPlayer、然后 mpv、最后内置；Linux 优先 mpv、然后内置。macOS 仍默认内置。已经保存的选择不会被改掉。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
 - 设置 → 播放里可以选「自定义播放器」，用系统文件对话框选择 macOS `.app`、Windows `.exe` 或 Linux 可执行文件，并可选附加参数。参数里的 `{url}` 会换成代理地址或连播 M3U；不写 `{url}` 时地址追加在参数末尾。程序以参数列表启动，不经过 shell。路径必须存在且能启动，否则保存和播放都会提示错误。
@@ -93,7 +96,7 @@ go tool mygo dev                                # 开发模式
 
 ## 使用
 
-1. 打开 App → 设置 → 订阅，添加你自己的插件地址（可以添加多个）。
+1. 打开 App → 设置 → 订阅，选择 JS 插件或 M3U/TXT/TVBox 直播，添加你自己的地址。自动模式将 JS/MD5 后缀识别为插件，其余按内容识别直播；目录形式的插件地址请选择“JS 插件”。
 2. 点左上角的订阅名切换订阅；左侧选站点，上方选分类；回车搜索。
 3. 点剧集播放。设置 → 播放里选「内置播放器（窗口内 HLS / MP4）」时，画面留在应用窗口里，可以用上一集、下一集和关闭。放不了时换 mpv / IINA / SenPlayer，或指定自定义播放器。选了外部播放器之后，仍然由那个程序打开，不会改回窗口内播放。
 4. 设置 → 日志 可查看插件进程输出；播放 → 持久化脱敏日志默认关闭，开启后写入应用数据目录 `logs/`。日志页只显示行时间戳在最近 7 天内的日志，启动和读取时清理过期行；4 MiB 容量上限可能导致更早淘汰。清除日志不影响 pin、播放记录或插件配置。
@@ -188,7 +191,9 @@ main.go                 入口与静态资源嵌入（桌面 / --web）
 internal/app/           Player 绑定、应用状态、订阅、搜索、播放编排、历史与日志
 internal/webserver/     网页部署、HTTP 路由、认证、海报与媒体转发
 internal/externalplayer/ 外部播放器发现、参数构造与平台进程适配
-internal/catvod/        插件协议、Node 宿主、源下载、本地代理与播放桥
+internal/catvod/        插件协议、Node 宿主、版本下载、本地代理与播放桥
+internal/live/          M3U/TXT、TVBox lives 与图片包装配置的数据解析
+internal/atomicfile/    共享原子文件写入与平台替换
 web/                    桌面与网页共用的原生 HTML / JS 界面
 webassets/              网页桥接、登录、浏览器播放器与 hls.js
 resources/              图标与可选平台资源
@@ -202,11 +207,11 @@ docs/                  协议、安全与架构说明
 
 ## 已知限制
 
-- 桌面版依赖本机 Node.js；没有内置 Node 运行时。网页镜像自带 Node.js 24。
+- 精简桌面包的 JS 插件依赖本机 Node.js；可选 with-node 包自带运行时。原生直播不依赖 Node，网页镜像自带 Node.js 24。
 - 网页模式只播放浏览器能播的 HLS / MP4。插件返回的本机网页、需要外部播放器的封装，或浏览器解不了的码流，需要换线路或改用桌面客户端。
 - 插件是用户提供的本机程序；Node 权限模型探测不提供沙箱。日志会对常见凭据格式做脱敏，但无法识别所有第三方插件自定义秘密格式。
 - 网页地址只会在新窗口打开，不做自动嗅探。
-- 筛选 UI 支持文档中的 `{key,label,options}` 和常见 CatVod `{key,name,value:[{n,v}]}` 单选格式。重复的选项值保留第一次出现的那项，不支持任意多选变体。收藏暂未实现；已记录最近播放的线路与集数，可从详情页继续播放。
+- 筛选 UI 支持文档中的 `{key,label,options}` 和常见 CatVod `{key,name,value:[{n,v}]}` 单选格式。重复的选项值保留第一次出现的那项，不支持任意多选变体。已支持节目/频道收藏与内置/网页位置续播；外部播放器暂不回传位置。
 
 ## 许可证
 

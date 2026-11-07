@@ -35,7 +35,7 @@ if (cfgFile && fs.existsSync(cfgFile)) {
   try {
     const c = require(path.resolve(cfgFile));
     config = Object.assign(config, (c && c.default) || c);
-  } catch (e) { console.error('index.config.js 加载失败', e); }
+  } catch (e) { console.error('JSTV_FATAL index.config.js 加载失败', e); process.exit(3); }
 }
 try {
   const extra = process.env.JSTV_CONFIG ? JSON.parse(process.env.JSTV_CONFIG) : null;

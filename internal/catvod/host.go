@@ -35,7 +35,8 @@ type Host struct {
 	ListenLAN bool
 	// InheritEnv is an explicit compatibility option. The default environment
 	// keeps only platform/runtime basics and CA variables, not proxy credentials.
-	InheritEnv bool
+	InheritEnv      bool
+	InheritProxyEnv bool
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -175,7 +176,7 @@ func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
 	port := 0
 	cmd := exec.Command(h.Node, boot, h.Script)
 	cmd.Dir = h.Dir
-	cmd.Env = append(nodeEnvironment(h.InheritEnv),
+	cmd.Env = append(nodeEnvironment(h.InheritEnv, h.InheritProxyEnv),
 		fmt.Sprintf("DEV_HTTP_PORT=%d", port),
 		"JSTV_LISTEN="+listenHost(h.ListenLAN),
 		"NODE_PATH="+h.Dir,
@@ -270,11 +271,14 @@ func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
 	}
 }
 
-func nodeEnvironment(inherit bool) []string {
+func nodeEnvironment(inherit bool, proxy ...bool) []string {
 	if inherit {
 		return os.Environ()
 	}
 	wanted := []string{"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "PATHEXT", "COMSPEC", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "LANG", "LC_ALL"}
+	if len(proxy) > 0 && proxy[0] {
+		wanted = append(wanted, "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+	}
 	values := make(map[string]string, len(wanted))
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")

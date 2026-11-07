@@ -21,6 +21,8 @@ type WebPlayback struct {
 	PlaylistID string       `json:"playlistId,omitempty"`
 	Index      int          `json:"index"`
 	Count      int          `json:"count"`
+	ProgressID string       `json:"progressId,omitempty"`
+	Position   float64      `json:"position,omitempty"`
 }
 
 // WebQuality is one already-proxied rendition.
@@ -38,24 +40,26 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 	if start < 0 || start >= len(eps) {
 		return nil, errors.New("剧集不存在")
 	}
-	streams, err := p.Play(api, flag, eps[start].ID)
+	settings, generation := p.playbackState()
+	streams, err := p.playAtGeneration(api, flag, eps[start].ID, generation)
 	if err != nil {
 		return nil, err
 	}
-	s := p.GetSettings()
+	s := settings
 	subID := ""
 	if sub, ok := s.active(); ok {
 		subID = sub.ID
 	}
 	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
 	title := entryTitle(show, eps[start].Name)
-	out := &WebPlayback{Title: title, Index: start, Count: len(eps)}
+	progressID, position := p.newProgressSession(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name}, generation)
+	out := &WebPlayback{Title: title, Index: start, Count: len(eps), ProgressID: progressID, Position: position}
 
 	var playable []catvod.Stream
 	var page *catvod.Stream
 	for i := range streams {
 		st := streams[i]
-		if st.Parse || catvod.IsWebPage(st.URL) {
+		if st.Parse || (!st.Direct && catvod.IsWebPage(st.URL)) {
 			if page == nil {
 				page = &streams[i]
 			}
@@ -127,10 +131,14 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 		return out, nil
 	}
 	first := chosen
-	id := p.eps.add(&playlist{
-		api: api, vodID: vodID, show: show, flag: flag, subID: subID,
+	id, err := p.addPlaylist(&playlist{
+		generation: generation,
+		api:        api, vodID: vodID, show: show, flag: flag, subID: subID,
 		eps: eps, start: start, first: &first,
 	})
+	if err != nil {
+		return nil, err
+	}
 	out.Action = "play"
 	out.URL = q.URL
 	out.Media = q.Media
@@ -156,11 +164,16 @@ func (p *Player) WebAdvance(id string, index int) (*WebPlayback, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &WebPlayback{
+	kind, err := catvod.InspectStream(nil, abs, nil)
+	if err != nil {
+		return nil, err
+	}
+	progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: index, Name: pl.eps[index].Name}, pl.generation)
+	return &WebPlayback{ProgressID: progressID, Position: position,
 		Action:     "play",
 		Title:      entryTitle(pl.show, pl.eps[index].Name),
 		URL:        pub,
-		Media:      mediaKind(abs),
+		Media:      kind,
 		PlaylistID: id,
 		Index:      index,
 		Count:      len(pl.eps),
@@ -175,12 +188,12 @@ func (p *Player) browserQuality(st catvod.Stream) (WebQuality, bool, error) {
 	if err != nil {
 		return WebQuality{}, false, err
 	}
-	html, err := catvod.Preflight(nil, abs, nil)
+	kind, err := catvod.InspectStream(nil, abs, nil)
 	if err != nil {
 		p.log("preflight: " + err.Error())
 		return WebQuality{}, false, err
 	}
-	if html {
+	if kind == "html" {
 		return WebQuality{}, true, nil
 	}
 	pub, err := p.toPublicMedia(abs)
@@ -191,7 +204,7 @@ func (p *Player) browserQuality(st catvod.Stream) (WebQuality, bool, error) {
 	if name == "" {
 		name = "播放"
 	}
-	return WebQuality{Name: name, URL: pub, Media: mediaKind(abs)}, false, nil
+	return WebQuality{Name: name, URL: pub, Media: kind}, false, nil
 }
 
 func (p *Player) toPublicMedia(abs string) (string, error) {

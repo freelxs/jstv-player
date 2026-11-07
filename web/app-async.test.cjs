@@ -67,6 +67,41 @@ function makeApp(callImpl = async () => ({})) {
 const site = (name, api = name) => ({ name, key: name, api });
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+test('empty plugin live site offers a configuration action and a refresh', async () => {
+  const calls = [];
+  const harness = makeApp(async (method, ...args) => {
+    calls.push([method, ...args]);
+    if (method === 'Home') return { class: [], list: [] };
+    return '';
+  });
+  const live = { key: 'nodejs_liveSource', name: '直播源', api: '/spider/live/3' };
+  harness.app.st.sites = [live];
+  await harness.app.selectSite(live);
+  assert.match(harness.el('#view').textContent, /暂无直播源/);
+  const descendants = (element) => [element, ...element.children.flatMap(descendants)];
+  const buttons = descendants(harness.el('#view')).filter((element) => element.tagName === 'BUTTON');
+  const configuration = buttons.find((element) => element.textContent === '配置直播源');
+  assert.ok(configuration);
+  assert.ok(buttons.some((element) => element.textContent === '刷新站点'));
+  await configuration.listeners.click();
+  assert.ok(calls.some(([method, api]) => method === 'OpenConfigPage' && api === live.api));
+});
+
+test('global search distinguishes all failures from a healthy empty station', async () => {
+  for (const healthyEmpty of [false, true]) {
+    const harness = makeApp(async (method, wd, channel) => {
+      if (method !== 'SearchAll') return {};
+      channel.onmessage({ site: site('one'), list: [], error: '站点请求失败 [诊断 1]' });
+      channel.onmessage({ site: site('two'), list: [], error: healthyEmpty ? '' : '站点请求失败 [诊断 2]' });
+    });
+    harness.app.st.sites = [site('one'), site('two')];
+    harness.el('#onlySite').checked = false;
+    await harness.app.search('fixture');
+    assert.equal(harness.el('#view').textContent.includes('所有站点搜索失败'), !healthyEmpty);
+    assert.match(harness.el('#view').textContent, /诊断 1/);
+  }
+});
+
 test('recommendation card searches every site and resets the search hint', async () => {
   const harness = makeApp(async () => ({}));
   harness.app.st.sites = [site('豆瓣')];

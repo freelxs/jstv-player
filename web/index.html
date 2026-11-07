@@ -22,6 +22,8 @@
   <nav id="sites" class="sites"></nav>
 
   <div class="sidebar-foot">
+    <button id="btnFavorites" class="ghost icon-text">我的收藏</button>
+    <button id="btnStartCached" class="ghost icon-text" title="启动上次成功的缓存版本">启动缓存</button>
     <button id="btnReload" class="ghost icon-text" title="重新加载当前订阅"><i class="i i-reload"></i>重新加载</button>
     <button id="btnSettings" class="ghost icon-text" title="设置"><i class="i i-gear"></i>设置</button>
   </div>
@@ -54,15 +56,18 @@
   </div>
 
   <div class="pane" data-pane="subs">
-    <p class="hint">每个订阅是一个插件地址（<code>index.js</code> 或 <code>index.js.md5</code>）。可以添加多个，在左上角随时切换。</p>
+    <p class="hint">支持 JS 插件、M3U/TXT 直播和含 lives 的 TVBox 配置。直播列表不需要 Node.js。</p>
     <ul id="subList" class="sub-list"></ul>
     <form id="subForm" class="sub-form">
       <input id="subFormId" type="hidden">
       <input id="subFormName" placeholder="名称（可选）" maxlength="40">
-      <input id="subFormURL" placeholder="https://example.com/path/index.js.md5" required>
+      <input id="subFormURL" placeholder="插件或直播订阅的 HTTP(S) 地址" required>
+      <select id="subFormType" aria-label="订阅类型"><option value="auto">自动识别</option><option value="plugin">JS 插件</option><option value="live">M3U / TXT / TVBox 直播</option></select>
       <button class="primary" id="subFormBtn">添加</button>
       <button type="button" class="ghost" id="subFormCancel" hidden>取消</button>
     </form>
+    <button type="button" class="btn" id="btnForceReload">强制下载刷新当前订阅</button>
+    <p class="hint small">启动缓存不查询远端；重新加载使用服务器缓存标记；强制刷新会重新下载文件。</p>
     <p class="hint small">插件由你自行提供并负责，本应用不内置任何插件或地址。</p>
   </div>
 
@@ -95,11 +100,12 @@
     <label class="check"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
     <label class="check"><input type="checkbox" id="sAllowLan"> 允许局域网访问：将插件 API 绑定到所有网络接口，局域网设备可调用插件并访问其上游代理。仅在可信网络开启；启动失败会停止旧服务。</label>
     <label class="check"><input type="checkbox" id="sAllowLanMedia"> 允许播放插件返回的局域网媒体地址（默认关闭）</label>
+    <label class="check"><input type="checkbox" id="sInheritProxyEnv"> 继承系统代理变量（重载后生效；可能含代理凭据，是否生效取决于插件客户端）</label>
     <label class="check"><input type="checkbox" id="sInheritNodeEnv"> 高级兼容模式：将完整环境变量传给 Node，以兼容代理、自定义证书等环境（可能包含代理凭据或其他秘密）</label>
     <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；只显示近 7 天，最多 4 MiB）</label>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
-    <p id="appVersion" class="hint small">JSTV Player 0.3.9</p>
+    <p id="appVersion" class="hint small">JSTV Player 0.4.0</p>
   </form>
 
   <div class="pane" data-pane="logs" hidden>

@@ -160,7 +160,7 @@ func TestSwitchReloadsPlugin(t *testing.T) {
 		resp.Body.Close()
 		t.Fatal("old plugin process still answering")
 	}
-	if _, err := os.Stat(filepath.Join(p.dir, "subs", b, "source", "index.js")); err != nil {
+	if _, err := catvod.CachedSource(filepath.Join(p.dir, "subs", b)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.Home(r2.Sites[0].API); err != nil {

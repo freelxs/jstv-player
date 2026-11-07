@@ -24,27 +24,34 @@ import (
 // webview's <video>. HLS playlists are rewritten so that segments and keys
 // go through the proxy too.
 type HeaderProxy struct {
-	Client    *http.Client
-	base      string
-	mu        sync.Mutex
-	resources map[string]proxyResource
-	grants    map[string]proxyGrant
+	resourceKeys map[string]string
+	Client       *http.Client
+	base         string
+	mu           sync.Mutex
+	resources    map[string]proxyResource
+	grants       map[string]proxyGrant
+	sessions     map[string]time.Time
+	generation   uint64
 }
 
 type proxyResource struct {
-	URL      string
-	Headers  map[string]string
-	Session  string
-	Name     string
-	AllowLAN bool
-	Expires  time.Time
+	key       string
+	Renewable bool
+	URL       string
+	Headers   map[string]string
+	Session   string
+	Name      string
+	AllowLAN  bool
+	Expires   time.Time
 }
 
 type proxyGrant struct {
-	URL      string
-	Headers  map[string]string
-	AllowLAN bool
-	Expires  time.Time
+	Renewable  bool
+	Generation uint64
+	URL        string
+	Headers    map[string]string
+	AllowLAN   bool
+	Expires    time.Time
 }
 
 const proxyResourceTTL = 2 * time.Hour
@@ -105,6 +112,15 @@ func (p *HeaderProxy) WrapAlwaysWithLAN(u string, h map[string]string, allowLAN 
 
 // Grant records a plugin play result after the application validates it.
 func (p *HeaderProxy) Grant(u string, h map[string]string, allowLAN bool) error {
+	return p.grant(u, h, allowLAN, false)
+}
+
+// GrantLive grants a renewable idle lease, revoked immediately by Reset.
+func (p *HeaderProxy) GrantLive(u string, h map[string]string, allowLAN bool) error {
+	return p.grant(u, h, allowLAN, true)
+}
+
+func (p *HeaderProxy) grant(u string, h map[string]string, allowLAN, renewable bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.grants == nil {
@@ -120,7 +136,7 @@ func (p *HeaderProxy) Grant(u string, h map[string]string, allowLAN bool) error 
 	if _, exists := p.grants[key]; !exists && len(p.grants) >= maxProxyGrants {
 		return fmt.Errorf("too many active playback grants")
 	}
-	p.grants[key] = proxyGrant{URL: u, Headers: cloneHeaders(h), AllowLAN: allowLAN, Expires: now.Add(proxyResourceTTL)}
+	p.grants[key] = proxyGrant{Generation: p.generation, Renewable: renewable, URL: u, Headers: cloneHeaders(h), AllowLAN: allowLAN, Expires: now.Add(proxyResourceTTL)}
 	return nil
 }
 
@@ -136,7 +152,7 @@ func (p *HeaderProxy) WrapGranted(u string, h map[string]string) (string, error)
 	if !ok {
 		return "", fmt.Errorf("播放地址未获应用授权")
 	}
-	wrapped := p.wrapSessionAuthorized(g.URL, g.Headers, p.newSession(), proxyName(g.URL), g.AllowLAN)
+	wrapped := p.wrapSessionAuthorized(g.URL, g.Headers, p.newSessionAt(&g.Generation), proxyName(g.URL), g.AllowLAN, g.Renewable)
 	if wrapped == "" {
 		return "", fmt.Errorf("无法创建播放授权")
 	}
@@ -167,12 +183,33 @@ func grantKey(u string, h map[string]string) string {
 // NewSession starts an opaque authorization scope for one playback.
 func (p *HeaderProxy) NewSession() string { return p.newSession() }
 
-func (p *HeaderProxy) newSession() string {
+func (p *HeaderProxy) newSession() string { return p.newSessionAt(nil) }
+
+func (p *HeaderProxy) newSessionAt(generation *uint64) string {
 	var b [24]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return ""
 	}
-	return hex.EncodeToString(b[:])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if generation != nil && *generation != p.generation {
+		return ""
+	}
+	if p.sessions == nil {
+		p.sessions = map[string]time.Time{}
+	}
+	now := time.Now()
+	for id, expires := range p.sessions {
+		if now.After(expires) {
+			delete(p.sessions, id)
+		}
+	}
+	if len(p.sessions) >= maxProxyResources {
+		return ""
+	}
+	session := hex.EncodeToString(b[:])
+	p.sessions[session] = now.Add(proxyResourceTTL)
+	return session
 }
 
 // WrapSession registers a URL and headers server-side and returns only an
@@ -185,7 +222,7 @@ func (p *HeaderProxy) wrapSessionNamed(u string, h map[string]string, session, n
 	return p.wrapSessionAuthorized(u, h, session, name, false)
 }
 
-func (p *HeaderProxy) wrapSessionAuthorized(u string, h map[string]string, session, name string, allowLAN bool) string {
+func (p *HeaderProxy) wrapSessionAuthorized(u string, h map[string]string, session, name string, allowLAN bool, renewable ...bool) string {
 	if p.base == "" || session == "" {
 		return ""
 	}
@@ -199,6 +236,10 @@ func (p *HeaderProxy) wrapSessionAuthorized(u string, h map[string]string, sessi
 		copyHeaders[k] = v
 	}
 	p.mu.Lock()
+	if expires, ok := p.sessions[session]; !ok || time.Now().After(expires) {
+		p.mu.Unlock()
+		return ""
+	}
 	if p.resources == nil {
 		p.resources = map[string]proxyResource{}
 	}
@@ -206,13 +247,30 @@ func (p *HeaderProxy) wrapSessionAuthorized(u string, h map[string]string, sessi
 	for oldID, old := range p.resources {
 		if now.After(old.Expires) {
 			delete(p.resources, oldID)
+			delete(p.resourceKeys, old.key)
+		}
+	}
+	key := session + "\x00" + grantKey(u, h) + "\x00" + name
+	if p.resourceKeys == nil {
+		p.resourceKeys = map[string]string{}
+	}
+	if existing := p.resourceKeys[key]; existing != "" {
+		if resource, ok := p.resources[existing]; ok {
+			if len(renewable) > 0 && renewable[0] {
+				resource.Expires = now.Add(proxyResourceTTL)
+				p.resources[existing] = resource
+			}
+			p.mu.Unlock()
+			return p.base + "/p/" + existing + "/" + name
 		}
 	}
 	if len(p.resources) >= maxProxyResources {
 		p.mu.Unlock()
 		return ""
 	}
-	p.resources[id] = proxyResource{URL: u, Headers: copyHeaders, Session: session, Name: name, AllowLAN: allowLAN, Expires: now.Add(proxyResourceTTL)}
+	renew := len(renewable) > 0 && renewable[0]
+	p.resourceKeys[key] = id
+	p.resources[id] = proxyResource{key: key, Renewable: renew, URL: u, Headers: copyHeaders, Session: session, Name: name, AllowLAN: allowLAN, Expires: now.Add(proxyResourceTTL)}
 	p.mu.Unlock()
 	return p.base + "/p/" + id + "/" + name
 }
@@ -220,8 +278,11 @@ func (p *HeaderProxy) wrapSessionAuthorized(u string, h map[string]string, sessi
 // Reset revokes all outstanding playback IDs, e.g. when changing source.
 func (p *HeaderProxy) Reset() {
 	p.mu.Lock()
+	p.generation++
 	p.resources = map[string]proxyResource{}
 	p.grants = map[string]proxyGrant{}
+	p.sessions = map[string]time.Time{}
+	p.resourceKeys = nil
 	p.mu.Unlock()
 }
 
@@ -231,7 +292,13 @@ func (p *HeaderProxy) resource(id string) (proxyResource, bool) {
 	r, ok := p.resources[id]
 	if ok && time.Now().After(r.Expires) {
 		delete(p.resources, id)
+		delete(p.resourceKeys, r.key)
 		ok = false
+	}
+	if ok && r.Renewable {
+		r.Expires = time.Now().Add(proxyResourceTTL)
+		p.resources[id] = r
+		p.sessions[r.Session] = r.Expires
 	}
 	return r, ok
 }
@@ -392,7 +459,7 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					blocked = true
 					return "about:invalid#blocked-lan-resource"
 				}
-				wrapped := p.wrapSessionAuthorized(s, h, resource.Session, segName(s), resource.AllowLAN)
+				wrapped := p.wrapSessionAuthorized(s, h, resource.Session, segName(s), resource.AllowLAN, resource.Renewable)
 				if wrapped == "" {
 					blocked = true
 				}
@@ -495,3 +562,7 @@ func lookupRestrictedHost(host string) bool {
 	hostRestrictMu.Unlock()
 	return restrictedHost
 }
+
+// IsLocalNetworkURL includes loopback as well as private and link-local hosts.
+// Native playlists do not inherit the plugin's special loopback authorization.
+func IsLocalNetworkURL(raw string) bool { return restrictedNetworkURL(raw) }

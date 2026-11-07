@@ -17,7 +17,7 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		return errors.New("网页模式请使用浏览器播放")
 	}
 	player := p.GetSettings().Player
-	if st.Parse || catvod.IsWebPage(st.URL) {
+	if st.Parse || (!st.Direct && catvod.IsWebPage(st.URL)) {
 		// A web page that needs sniffing: show it in a window.
 		p.openWebPage(title, st.URL)
 		return nil
@@ -43,18 +43,18 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	if u == st.URL {
 		pre = st.Headers
 	}
-	html, err := catvod.Preflight(nil, u, pre)
+	kind, err := catvod.InspectStream(nil, u, pre)
 	if err != nil {
 		p.log("preflight: " + err.Error())
 		return err
 	}
-	if html {
+	if kind == "html" {
 		// Any HTML page (not media): show it in a window.
 		p.openWebPage(title, st.URL)
 		return nil
 	}
 	if player == "builtin" || player == "" {
-		p.openBuiltin(title, playerPage(u, title))
+		p.openBuiltin(title, builtinPlayerPage([]builtinItem{{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position}}, 0))
 		return nil
 	}
 	return p.launch(player, u, title)

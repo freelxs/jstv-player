@@ -5,6 +5,7 @@ const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
 const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0 };
 const browseRequests = BrowseRequestToken();
 let activeSearch = null;
+let trustReload = null;
 function closeActiveSearch() {
   const ch = activeSearch;
   activeSearch = null;
@@ -70,6 +71,7 @@ function configPageFromItem(v) {
 }
 
 function openWebPage(url, title) {
+  if (window.__JSTV_WEB__ && websitePageURL(url)) url='/configuration/';
   const name = title || '配置';
   if (window.__JSTV_WEB__) {
     const opened = window.open(url, '_blank', 'noopener');
@@ -172,16 +174,18 @@ async function loadSource(fn = () => call('LoadSource')) {
     const r = await fn();
     if (!browseRequests.current(request) || seq !== st.loadSeq) return; // a newer navigation or switch won
     if (r.trustRequired) {
+      trustReload = fn;
       st.settings = await call('GetSettings');
       renderSwitcher();
       $('#trustTitle').textContent = r.trustSHA256 ? '确认插件版本' : '插件更新需要确认';
-      $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\nSHA-256：${r.trustSHA256}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
+      $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\n版本清单 SHA-256：${r.trustSHA256}${r.trustScriptSHA256 ? `\n主脚本：${r.trustScriptSHA256}\n配置脚本：${r.trustConfigSHA256 || "无"}` : ""}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
       $('#sourceTrust').dataset.pending = '1';
       if (!$('#sourceTrust').open) $('#sourceTrust').showModal();
       setDot(''); $('#status').textContent = '等待确认';
       setView(stateBox({ title: '插件尚未启动', text: '首次使用或检测到内容变化。请确认 SHA-256 后再运行。' }));
       return;
     }
+    if (r.warnings && r.warnings.length) toast(`部分直播源未加载：${r.warnings.join('；')}`, { err: true, ms: 8000 });
     const reloadedSettings = await call('GetSettings');
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
     st.settings = reloadedSettings;
@@ -200,6 +204,7 @@ async function loadSource(fn = () => call('LoadSource')) {
   }
 }
 $('#trustReject').onclick = () => {
+  trustReload = null;
   $('#sourceTrust').close(); delete $('#sourceTrust').dataset.pending;
   toast('未批准此版本；新插件没有运行', { err: true });
 };
@@ -208,11 +213,12 @@ $('#trustApprove').onclick = async () => {
   try {
     await call('ApproveSource');
     $('#sourceTrust').close(); delete $('#sourceTrust').dataset.pending;
-    await loadSource();
+    const retry = trustReload; trustReload = null;
+    await loadSource(retry || undefined);
   } catch (e) { toast(errMsg(e), { err: true }); }
   finally { b.disabled = false; }
 };
-const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '订阅是一个插件地址（index.js 或 index.js.md5）。可以添加多个并随时切换。',
+const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '支持 JS 插件、M3U/TXT 直播和 TVBox lives，可添加多个并随时切换。',
   actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
 const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
@@ -233,9 +239,11 @@ async function selectSite(s) {
   const seq = st.loadSeq;
   if (isConfigSite(s)) {
     call('OpenConfigPage', s.api).then((page) => {
+      if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
       if (window.__JSTV_WEB__ && page) {
+        $('#classes').append(el('a', {class:'btn',href:page,target:'_blank',rel:'noopener noreferrer'}, '打开插件配置'));
         const opened = window.open(page, '_blank', 'noopener');
-        if (!opened) toast('请允许弹出窗口以打开配置页面', { err: true });
+        if (!opened) toast('请点击配置卡片打开，或允许弹出窗口', { err: true });
       }
     }).catch((e) => toast(errMsg(e), { err: true }));
   }
@@ -259,6 +267,8 @@ async function selectSite(s) {
         }
       }
       openCategory(cls[0].type_id, 1);
+    } else if (/liveSource/i.test(s.key || '') || /直播/.test(s.name || '')) {
+      setView(stateBox({ico:'search',title:'暂无直播源',text:'请在插件配置页添加直播源，然后刷新站点。也可在订阅管理中直接添加 M3U/TXT。',actions:[el('button',{class:'btn',onclick:()=>call('OpenConfigPage',s.api).then((u)=>{if(window.__JSTV_WEB__)openWebPage(u,'直播配置');}).catch((e)=>toast(errMsg(e),{err:true}))},'配置直播源'),el('button',{class:'btn',onclick:()=>selectSite(s)},'刷新站点')]}));
     } else setView(youtubeLoginHint(s), stateBox({ ico: 'search', title: '这个站点没有分类', text: '可以在上方直接搜索。' }));
   } catch (e) { if (browseRequests.current(request) && seq === st.loadSeq && st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
@@ -433,6 +443,7 @@ async function search(wd) {
       kids.push(r.error ? el('p', { class: 'hint' }, r.error) : cards(r.list, r.site));
     }
     if (!done) kids.push(results.length ? el('div', { class: 'section-h' }, el('span', { class: 'n' }, '其余站点搜索中…')) : skeletonGrid(12));
+    else if (results.length && results.every((r) => r.error)) kids.unshift(stateBox({ ico: 'alert', title: '所有站点搜索失败', text: '请检查网络或稍后重试。各站点的诊断信息如下。', error: true }));
     else if (!results.length) kids.push(stateBox({ ico: 'search', title: '没有找到结果', text: `所有站点都没有“${wd}”的结果。` }));
     const v = $('#view'), top = v.scrollTop; v.replaceChildren(...kids); v.scrollTop = top;
   };
@@ -463,6 +474,9 @@ async function openDetail(site, id) {
   try { d = await call('Detail', site.api, String(id)); if (!browseRequests.current(request)) return; } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => openDetail(site, id))); return; }
   let lineIdx = 0;
   const vodId = String(id);
+  let favorite = false;
+  try { const entries = await call('GetFavorites'); favorite = Array.isArray(entries) && entries.some((x) => x.api === site.api && x.id === vodId); } catch (e) {}
+  if (!browseRequests.current(request)) return;
   let hist = null;
   try { hist = await call('GetHistory', site.api, vodId); } catch (e) {}
   if (!browseRequests.current(request)) return;
@@ -479,6 +493,7 @@ async function openDetail(site, id) {
       v.vod_actor ? el('p', { class: 'cast' }, '主演：' + v.vod_actor) : null,
       v.vod_director ? el('p', { class: 'cast' }, '导演：' + v.vod_director) : null,
       desc ? el('p', { class: 'desc', title: desc }, desc) : null,
+      el('button',{class:'btn',onclick:async(e)=>{const button=e.currentTarget;try{favorite=await call('ToggleFavorite',site.api,vodId,String(v.vod_name||vodId),String(v.vod_pic||''));button.textContent=favorite?'取消收藏':'收藏';}catch(error){toast(errMsg(error),{err:true});}}},favorite?'取消收藏':'收藏'),
       resumeButton()));
     function resumeButton() {
       const l = (d.lines || []).find((x) => hist && x.flag === hist.flag);
@@ -573,6 +588,7 @@ function renderSubList() {
 }
 function editSub(s) {
   $('#subFormId').value = s ? s.id : ''; $('#subFormName').value = s ? s.name : ''; $('#subFormURL').value = s ? s.url : '';
+  $('#subFormType').value = (s && s.type) || 'auto';
   $('#subFormBtn').textContent = s ? '保存' : '添加'; $('#subFormCancel').hidden = !s;
   if (s) $('#subFormURL').focus();
 }
@@ -595,7 +611,7 @@ $('#subForm').addEventListener('submit', async (e) => {
   const id = $('#subFormId').value, name = $('#subFormName').value, url = $('#subFormURL').value;
   const first = !(st.settings.subscriptions || []).length;
   try {
-    st.settings = id ? await call('UpdateSubscription', id, name, url) : await call('AddSubscription', name, url);
+    st.settings = id ? await call('UpdateSubscriptionWithType', id, name, url, $('#subFormType').value || 'auto') : await call('AddSubscriptionWithType', name, url, $('#subFormType').value || 'auto');
     editSub(null); renderSubList(); renderSwitcher();
     if (first || id === st.settings.active) { $('#settings').close(); loadSource(); }
     else toast(id ? '已保存' : '已添加，可在左上角切换');
@@ -619,19 +635,31 @@ async function openSettings(tab = 'subs') {
   $('#sAllowLan').checked = !!s.allowLan;
   $('#sAllowLanMedia').checked = !!s.allowLanMedia;
   $('#sInheritNodeEnv').checked = !!s.inheritNodeEnv;
+  $('#sInheritProxyEnv').checked = !!s.inheritProxyEnv;
   $('#sPersistLogs').checked = !!s.persistLogs;
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
+}
+function confirmLAN() {
+  return new Promise((resolve) => {
+    const dialog = el('dialog', {}, el('h3', {}, '确认开放局域网访问'), el('p', {}, '这会把插件管理后台开放给整个局域网，其他设备可能修改配置和执行插件操作。'),
+      el('button', {class:'btn',onclick:()=>finish(false)}, '取消'), el('button', {class:'primary',onclick:()=>finish(true)}, '确认开启'));
+    const finish = (allowed) => { dialog.close(); dialog.remove(); resolve(allowed); };
+    dialog.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });
+    document.body.append(dialog); dialog.showModal();
+  });
 }
 $('#prefs').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     const oldAllowLAN = !!st.settings?.allowLan;
+    const oldAllowLANMedia = !!st.settings?.allowLanMedia;
     const nextAllowLAN = $('#sAllowLan').checked;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
+    if (!oldAllowLAN && nextAllowLAN && !(await confirmLAN())) return;
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
-    if (oldAllowLAN !== nextAllowLAN && st.settings.active) {
+    if ((oldAllowLAN !== nextAllowLAN || oldAllowLANMedia !== !!st.settings.allowLanMedia) && st.settings.active) {
       $('#settings').close();
       await loadSource();
     }
@@ -655,7 +683,21 @@ $('#probeNodePermissions').onclick = async () => {
 };
 
 $('#btnSettings').onclick = () => openSettings('subs');
+$('#btnFavorites').onclick = async () => {
+  const request=browseRequests.begin();
+  try {
+    const entries=await call('GetFavorites');if(!browseRequests.current(request))return;
+    st.stack=[];$('#classes').replaceChildren();$('#filters').hidden=true;
+    show(()=>{
+      if(!Array.isArray(entries)||!entries.length){setView(stateBox({title:'还没有收藏',text:'在节目或直播频道详情中点击“收藏”。'}));return;}
+      const groups=new Map();for(const item of entries){if(!groups.has(item.api))groups.set(item.api,[]);groups.get(item.api).push({vod_id:item.id,vod_name:item.name,vod_pic:item.picture});}
+      const elements=[];for(const [api,items] of groups){const site=st.sites.find((x)=>x.api===api)||{api,name:'收藏'};elements.push(el('div',{class:'section-h'},site.name),cards(items,site));}setView(...elements);
+    });
+  } catch(e){if(browseRequests.current(request))setView(errorState(e));}
+};
+$('#btnForceReload').onclick = () => { $('#settings').close(); loadSource(() => call('ForceRefreshSource')); };
 $('#btnReload').onclick = () => loadSource();
+$('#btnStartCached').onclick = () => loadSource(() => call('StartCachedSource'));
 $('#back').onclick = back;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(e.target.value.trim()); });
 function setSiteOnlySearch(on) {
@@ -666,5 +708,5 @@ $('#onlySite').addEventListener('change', (e) => setSiteOnlySearch(e.target.chec
 
 (async () => {
   st.settings = await call('GetSettings'); renderSwitcher();
-  if (activeSub()) loadSource(); else { setView(noSubState()); openSettings('subs'); }
+  if (activeSub()) loadSource(() => call('StartCachedSource')); else { setView(noSubState()); openSettings('subs'); }
 })();

@@ -85,7 +85,7 @@
         const playback = await rpc('WebPlay', args);
         if (!playback) return [];
         if (playback.action === 'qualities') {
-          return (playback.qualities || []).map((item) => ({ name: item.name || '播放', url: item.url, parse: false, media: item.media }));
+          return (playback.qualities || []).map((item) => ({ name: item.name || '播放', url: item.url, parse: false, media: item.media, progressId:playback.progressId, position:playback.position }));
         }
         if (playback.action === 'page') {
           if (!playback.pageUrl) throw new Error(playback.message || '无法在浏览器打开该网页');
@@ -112,6 +112,7 @@
             media: stream.media || (/\.m3u8(\?|$)/i.test(stream.url) ? 'hls' : 'file'),
             index: 0,
             count: 1,
+            progressId: stream.progressId, position: stream.position,
           });
         }
         return null;

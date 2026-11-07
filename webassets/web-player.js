@@ -16,6 +16,7 @@
   let hls = null;
   let hlsPromise = null;
   let current = null;
+  let lastProgressAt = 0, pendingSeek = 0, progressReady = false;
   let token = 0;
   let suppressVideoError = false;
 
@@ -118,8 +119,19 @@
     return data.result;
   }
 
+  function reportProgress(final = false) {
+    if (!progressReady || !current?.progressId || !Number.isFinite(video.duration) || video.duration <= 0) return;
+    const now = Date.now();
+    if (!final && now - lastProgressAt < 10000) return;
+    lastProgressAt = now;
+    rpc('ReportProgress', [current.progressId, video.currentTime || 0, video.duration, final]).catch(() => {});
+  }
+
   function show(playback) {
+    reportProgress(true);
+    progressReady = false;
     current = playback;
+    lastProgressAt = 0; pendingSeek = playback.position || 0;
     titleEl.textContent = playback.title || '正在播放';
     root.hidden = false;
     syncButtons();
@@ -139,13 +151,22 @@
   prevBtn.onclick = () => { if (current) go(current.index - 1); };
   nextBtn.onclick = () => { if (current) go(current.index + 1); };
   root.querySelector('[data-act="close"]').onclick = () => {
+    reportProgress(true); progressReady = false;
     token++;
     destroyHls();
     root.hidden = true;
     current = null;
   };
   goBtn.onclick = () => tryPlay();
+  video.addEventListener('loadedmetadata', () => {
+    if (pendingSeek > 0 && Number.isFinite(video.duration) && pendingSeek < video.duration - 3) video.currentTime = pendingSeek;
+    pendingSeek = 0; progressReady = true;
+  });
+  video.addEventListener('timeupdate', () => reportProgress());
+  video.addEventListener('pause', () => reportProgress(true));
+  window.addEventListener('pagehide', () => reportProgress(true));
   video.addEventListener('ended', () => {
+    reportProgress(true);
     if (!current || !current.playlistId || current.index + 1 >= current.count) return;
     go(current.index + 1);
   });

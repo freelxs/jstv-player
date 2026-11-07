@@ -11,6 +11,7 @@ import (
 // Subscription is one user-supplied plugin address.
 type Subscription struct {
 	ID   string `json:"id"`
+	Type string `json:"type,omitempty"` // auto | plugin | live
 	Name string `json:"name"`
 	URL  string `json:"url"` // index.js or index.js.md5
 }
@@ -29,6 +30,13 @@ func newSubID() string {
 // migrate turns the old single sourceUrl setting into a subscription and
 // makes sure Active points at an existing entry.
 func (s *Settings) migrate() {
+	// Existing subscriptions predate native data feeds and were all plugins.
+	// Preserve directory-style legacy addresses instead of reclassifying them.
+	for i := range s.Subscriptions {
+		if s.Subscriptions[i].Type == "" {
+			s.Subscriptions[i].Type = "plugin"
+		}
+	}
 	if u := strings.TrimSpace(s.SourceURL); u != "" {
 		found := false
 		for _, x := range s.Subscriptions {
@@ -40,7 +48,7 @@ func (s *Settings) migrate() {
 			}
 		}
 		if !found {
-			sub := Subscription{ID: newSubID(), Name: "订阅 1", URL: u}
+			sub := Subscription{ID: newSubID(), Name: "订阅 1", URL: u, Type: "plugin"}
 			s.Subscriptions = append(s.Subscriptions, sub)
 			if s.Active == "" {
 				s.Active = sub.ID

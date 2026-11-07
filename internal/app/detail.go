@@ -2,12 +2,19 @@ package app
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
 
 // Detail returns a vod with its play lines.
 func (p *Player) Detail(api, id string) (*DetailResult, error) {
+	if c, err, ok := p.nativeCatalog(api); ok {
+		if err != nil {
+			return nil, err
+		}
+		return liveDetail(c, id)
+	}
 	c, err := p.client(api)
 	if err != nil {
 		return nil, err
@@ -28,9 +35,22 @@ func (p *Player) Detail(api, id string) (*DetailResult, error) {
 
 // Play resolves an episode to streams.
 func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
+	return p.playAtGeneration(api, flag, id, p.generation())
+}
+
+func (p *Player) playAtGeneration(api, flag, id string, generation uint64) ([]catvod.Stream, error) {
+	if !p.isGeneration(generation) {
+		return nil, errSourceChanged
+	}
+	if strings.HasPrefix(api, "live:") {
+		return p.playLive(api, id, generation)
+	}
 	c, err := p.client(api)
 	if err != nil {
 		return nil, err
+	}
+	if !p.isGeneration(generation) {
+		return nil, errSourceChanged
 	}
 	m, err := c.Play(api, flag, id)
 	if err != nil {
@@ -39,7 +59,8 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 	s := catvod.NormalizePlay(m)
 	if len(s) == 0 {
 		if e, ok := m["error"].(string); ok && e != "" {
-			return nil, errors.New("源返回错误：" + e)
+			p.log("源返回错误: " + e)
+			return nil, errors.New("站点解析失败，请稍后重试或查看日志")
 		}
 		return nil, errors.New("没有可播放的地址")
 	}
@@ -60,10 +81,15 @@ func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
 			}
 		}
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if generation != p.sourceGeneration {
+		return nil, errSourceChanged
+	}
 	if p.proxy != nil {
 		for _, st := range s {
 			if !st.Parse && catvod.IsHTTPMediaURL(st.URL) {
-				if err := p.proxy.Grant(st.URL, st.Headers, p.GetSettings().AllowLANMedia); err != nil {
+				if err := p.proxy.Grant(st.URL, st.Headers, p.settings.AllowLANMedia); err != nil {
 					return nil, err
 				}
 			}

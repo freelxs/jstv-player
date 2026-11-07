@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/url"
@@ -10,8 +11,10 @@ import (
 )
 
 type sourcePin struct {
-	URL    string `json:"url"`
-	SHA256 string `json:"sha256"`
+	URL          string `json:"url"`
+	SHA256       string `json:"sha256"`
+	ConfigSHA256 string `json:"configSHA256,omitempty"`
+	BundleSHA256 string `json:"bundleSHA256,omitempty"`
 }
 
 func pinPath(dir string) string { return filepath.Join(dir, "source", "pin.json") }
@@ -22,8 +25,24 @@ func readPin(dir string) (sourcePin, error) {
 	if err != nil {
 		return p, err
 	}
-	err = json.Unmarshal(b, &p)
-	return p, err
+	if err := json.Unmarshal(b, &p); err != nil {
+		return p, err
+	}
+	if p.URL == "" {
+		return p, errors.New("插件信任记录缺少来源")
+	}
+	for _, sum := range []string{p.SHA256, p.ConfigSHA256, p.BundleSHA256} {
+		if sum == "" {
+			continue
+		}
+		if b, err := hex.DecodeString(sum); err != nil || len(b) != 32 {
+			return p, errors.New("插件信任记录摘要无效")
+		}
+	}
+	if p.SHA256 == "" {
+		return p, errors.New("插件信任记录缺少摘要")
+	}
+	return p, nil
 }
 
 func writePin(dir string, p sourcePin) error {
