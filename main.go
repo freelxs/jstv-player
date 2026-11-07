@@ -8,14 +8,16 @@ import (
 	"os"
 
 	"github.com/egoist/mygo"
+	"github.com/freelxs/jstv-player/internal/app"
+	"github.com/freelxs/jstv-player/internal/webserver"
 )
 
-//go:embed all:web
+//go:embed all:web webassets
 var webFS embed.FS
 
 func main() {
-	if webModeEnabled() {
-		if err := runWeb(); err != nil {
+	if webserver.Enabled() {
+		if err := webserver.Run(webFS); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -28,7 +30,7 @@ func main() {
 		log.Fatal(err)
 	}
 	_ = os.MkdirAll(dir, 0o755)
-	p := newPlayer(dir)
+	p := app.New(dir, webFS, false).Player
 	mygo.Bind(p)
 
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { p.StopSource() })
