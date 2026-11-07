@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestReadersSeeOnlyCompleteVersions(t *testing.T) {
@@ -20,6 +22,7 @@ func TestReadersSeeOnlyCompleteVersions(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		transient := 0
 		for {
 			select {
 			case <-done:
@@ -27,7 +30,23 @@ func TestReadersSeeOnlyCompleteVersions(t *testing.T) {
 			default:
 			}
 			data, err := os.ReadFile(path)
-			if err != nil || (!bytes.Equal(data, a) && !bytes.Equal(data, b)) {
+			if err != nil {
+				// MoveFileEx replacement can briefly make the destination
+				// unavailable to readers on Windows. Tolerate a short run of
+				// open failures there; keep content validation strict everywhere.
+				if runtime.GOOS == "windows" && transient < 200 {
+					transient++
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				select {
+				case fail <- "reader saw missing or partial data":
+				default:
+				}
+				return
+			}
+			transient = 0
+			if !bytes.Equal(data, a) && !bytes.Equal(data, b) {
 				select {
 				case fail <- "reader saw missing or partial data":
 				default:
