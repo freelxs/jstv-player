@@ -346,6 +346,32 @@ async function openCategory(tid, page, selected = null) {
   } catch (e) { if (browseRequests.current(request) && st.site === site) setView(errorState(e, () => openCategory(tid, page))); }
 }
 
+function isFolderItem(v) {
+  return String(v?.vod_tag || '').trim().toLowerCase() === 'folder' && String(v?.vod_id || '') !== '';
+}
+
+// Some sources mark a row as a folder. The next page of items is category(id),
+// not detail(id). Calling detail on that id is defined to come back empty.
+async function openFolder(site, vod) {
+  const request = browseRequests.begin();
+  const id = String(vod.vod_id);
+  const title = vod.vod_name || '';
+  setView(skeletonGrid());
+  try {
+    const r = await call('Category', site.api, id, 1, {});
+    if (!browseRequests.current(request) || st.site !== site) return;
+    show(() => {
+      const list = r.list || [];
+      setView(
+        title ? el('div', { class: 'section-h' }, title) : null,
+        list.length ? cards(list, site) : stateBox({ title: '这里还没有内容', text: '这个文件夹没有可打开的条目。' }),
+      );
+    });
+  } catch (e) {
+    if (browseRequests.current(request) && st.site === site) setView(errorState(e, () => openFolder(site, vod)));
+  }
+}
+
 function cards(list, site) {
   const g = el('div', { class: 'grid' });
   for (const v of list) {
@@ -362,6 +388,10 @@ function cards(list, site) {
       const page = configPageFromItem(v);
       if (page) {
         openWebPage(page, v.vod_name || '配置').catch((e) => toast(errMsg(e), { err: true }));
+        return;
+      }
+      if (isFolderItem(v)) {
+        openFolder(site, v);
         return;
       }
       if (String(v.vod_id).startsWith('msearch:')) {
