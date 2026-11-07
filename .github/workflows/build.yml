@@ -119,6 +119,7 @@ jobs:
         env:
           PLAYWRIGHT_BROWSERS_PATH: .tmp/browsers
         run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
           npm install --prefix .tmp/browser-tools --no-save --no-package-lock --no-audit --no-fund playwright@1.65.0
           node .tmp/browser-tools/node_modules/playwright/cli.js install --with-deps chromium-headless-shell
           CHROME_PATH="$(rg --files --hidden --no-ignore .tmp/browsers | rg '/chrome-headless-shell$')"
