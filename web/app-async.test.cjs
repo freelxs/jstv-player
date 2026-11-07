@@ -352,3 +352,43 @@ test('an episode whose id is the configuration page opens that page', async () =
   assert.equal(opened[1][0].parse, true);
   assert.match(opened[1][0].url, /\/website\/index\.html/);
 });
+
+test('a folder item is opened with category, not detail', async () => {
+  const calls = [];
+  const harness = makeApp(async (method, ...args) => {
+    calls.push([method, args]);
+    if (method === 'Category') return { page: 1, pagecount: 1, list: [{ vod_id: 'child', vod_name: '条目甲' }] };
+    if (method === 'Detail') return { vod: { vod_name: '不应打开' }, lines: [] };
+    return null;
+  });
+  const owner = site('示例', 'demo');
+  harness.app.st.site = owner;
+  harness.app.st.stack = [() => {}];
+  const grid = harness.app.cards([{ vod_id: 'folder-1', vod_name: '分组甲', vod_tag: 'folder' }], owner);
+  grid.children[0].listeners.click();
+  await settle();
+  assert.equal(calls.some((c) => c[0] === 'Detail'), false);
+  const cat = calls.find((c) => c[0] === 'Category');
+  assert.ok(cat, 'Category was not called');
+  assert.deepEqual(cat[1].slice(0, 3), ['demo', 'folder-1', 1]);
+  assert.equal(harness.app.st.stack.length, 2);
+  assert.equal(harness.el('#back').hidden, false);
+  assert.match(harness.el('#view').textContent, /条目甲/);
+});
+
+test('file and ordinary items still open detail', async () => {
+  for (const vod of [
+    { vod_id: 'file-1', vod_name: '文件甲', vod_tag: 'file' },
+    { vod_id: 'item-1', vod_name: '条目乙' },
+  ]) {
+    const calls = [];
+    const harness = makeApp(async (method, ...args) => { calls.push([method, args]); return { vod: {}, lines: [] }; });
+    const owner = site('示例', 'demo');
+    harness.app.st.site = owner;
+    const grid = harness.app.cards([vod], owner);
+    grid.children[0].listeners.click();
+    await settle();
+    assert.equal(calls.some((c) => c[0] === 'Category'), false, vod.vod_id);
+    assert.equal(calls.some((c) => c[0] === 'Detail' && c[1][1] === vod.vod_id), true, vod.vod_id);
+  }
+});

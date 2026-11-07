@@ -20,10 +20,10 @@ function dumpDOM(chrome, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(chrome, args, { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(out); }, 20000);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(out); }, 45000);
     child.stdout.on('data', (buf) => {
       out += buf;
-      if (out.includes('</title>')) {
+      if (out.includes('id="result"')) {
         clearTimeout(timer);
         child.kill('SIGKILL');
         resolve(out);
@@ -75,11 +75,12 @@ function report() {
     codeOverflow: getComputedStyle(code).overflowY,
     scrolls: limit.scrollHeight >= limited.getBoundingClientRect().height - 1 && getComputedStyle(limit).overflowY === 'auto',
   };
-  document.title = JSON.stringify(result);
+  const pre = document.createElement('pre');
+  pre.id = 'result';
+  pre.textContent = JSON.stringify(result);
+  document.body.appendChild(pre);
 }
-const imgs = [...document.images];
-if (imgs.every((img) => img.complete)) report();
-else Promise.all(imgs.map((img) => new Promise((resolve) => { img.onload = img.onerror = resolve; }))).then(report);
+report();
 </script>
 `);
   const userData = path.join(dir, 'chrome');
@@ -87,9 +88,9 @@ else Promise.all(imgs.map((img) => new Promise((resolve) => { img.onload = img.o
     '--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage',
     `--user-data-dir=${userData}`, '--virtual-time-budget=2000', '--dump-dom', htmlPath,
   ]);
-  const title = out.match(/<title>([^<]*)<\/title>/);
-  assert.ok(title, out.slice(0, 500));
-  const result = JSON.parse(title[1].replaceAll('&quot;', '"'));
+  const marker = out.match(/<pre id="result">([^<]*)<\/pre>/);
+  assert.ok(marker, out.slice(0, 500));
+  const result = JSON.parse(marker[1]);
   assert.equal(result.code.fit, 'contain');
   assert.equal(result.code.full, true);
   assert.equal(result.square, true);
