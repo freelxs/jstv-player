@@ -68,7 +68,7 @@ Windows 可能弹出 SmartScreen 提示，选“更多信息 → 仍要运行”
 
 ## 从源码构建
 
-需要 Go 1.27+（MyGo 要求）：
+需要 Go 1.27.3+（MyGo v0.8.1 要求；`go.mod` 与构建脚本的 `GOTOOLCHAIN=local` 使用这个版本）：
 
 ```sh
 go vet ./... && go test ./...
@@ -81,7 +81,7 @@ go vet ./... && go test ./...
 ./scripts/build.sh all --with-node               # 两个平台的包内置 Node 变体
 go tool mygo build -platform darwin/universal   # 直接构建仍输出到 dist/，不会自动清理
 go tool mygo build -platform windows/amd64      # dist/windows-amd64/（装有 NSIS 时还会生成安装包）
-go tool mygo build -platform linux/amd64        # dist/linux-amd64/（可执行文件、.deb、.tar.gz）
+go tool mygo build -platform linux/amd64        # dist/linux-amd64/（可执行文件、.deb、.tar.gz、PKGBUILD）
 go tool mygo dev                                # 开发模式
 ```
 

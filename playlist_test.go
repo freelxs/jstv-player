@@ -100,6 +100,11 @@ func TestBuiltinPlaylistPage(t *testing.T) {
 	if !strings.Contains(page, "hls.min.js") || !strings.Contains(page, "enableWorker:false") || !strings.Contains(page, "direct=1") || !strings.Contains(page, "player/close") {
 		t.Fatal("built-in page is missing the hls.js player")
 	}
+	for _, control := range []string{">上一集<", ">下一集<", ">关闭<"} {
+		if !strings.Contains(page, control) {
+			t.Fatalf("built-in page is missing %s", control)
+		}
+	}
 	if !strings.Contains(page, "const START=0") {
 		t.Fatal("playlist page should start at the first item")
 	}
