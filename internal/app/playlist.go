@@ -34,6 +34,7 @@ type playlist struct {
 	subID                  string // subscription that owns this show; empty uses the active one
 	eps                    []catvod.Episode
 	start                  int
+	quality                string         // rendition name to prefer; empty uses the first playable URL
 	first                  *catvod.Stream // already resolved start episode
 
 	mu      sync.Mutex
@@ -282,7 +283,7 @@ func (p *Player) episodeStream(pl *playlist, n int, consume bool) (*catvod.Strea
 	if owner {
 		streams, err := p.playAtGeneration(pl.api, pl.flag, pl.eps[n].ID, pl.generation)
 		if err == nil {
-			if r.st = firstPlayable(streams); r.st == nil {
+			if r.st = selectPlayable(streams, pl.quality); r.st == nil {
 				err = errors.New("这一集没有可用于连播的 HTTP(S) 播放地址")
 			}
 		}
@@ -366,23 +367,65 @@ func warmStream(u string) {
 	}
 }
 
+func continuousCandidate(st catvod.Stream) bool {
+	// Player.Play grants only these URL forms to the proxy. Keep automatic
+	// episode selection within that same authorization boundary.
+	return !st.Parse && (st.Direct || !catvod.IsWebPage(st.URL)) && catvod.IsHTTPMediaURL(st.URL)
+}
+
 func firstPlayable(streams []catvod.Stream) *catvod.Stream {
 	for i := range streams {
-		// Player.Play grants only these URL forms to the proxy. Keep automatic
-		// episode selection within that same authorization boundary.
-		if !streams[i].Parse && (streams[i].Direct || !catvod.IsWebPage(streams[i].URL)) && catvod.IsHTTPMediaURL(streams[i].URL) {
+		if continuousCandidate(streams[i]) {
 			return &streams[i]
 		}
 	}
 	return nil
 }
 
-// PlayEpisodes plays episode start of a line. With 连播 on and a player
-// that takes playlists, the rest of the line follows automatically and nil
-// is returned. Otherwise (连播 off, the system player, SenPlayer, several
-// qualities to choose from, or a web page) the streams of that episode are
-// returned and the page continues with Open as before.
-func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int) ([]catvod.Stream, error) {
+// selectPlayable prefers the rendition the user already chose. A later
+// episode that does not offer that name still plays its first usable URL.
+func selectPlayable(streams []catvod.Stream, quality string) *catvod.Stream {
+	if quality = strings.TrimSpace(quality); quality != "" {
+		for i := range streams {
+			if streams[i].Name == quality && continuousCandidate(streams[i]) {
+				return &streams[i]
+			}
+		}
+	}
+	return firstPlayable(streams)
+}
+
+// narrowToQuality keeps one named rendition when the caller has chosen it.
+// An unknown name leaves the full list so the page can ask again.
+func narrowToQuality(streams []catvod.Stream, quality string) []catvod.Stream {
+	if strings.TrimSpace(quality) == "" {
+		return streams
+	}
+	for i := range streams {
+		if streams[i].Name == quality && continuousCandidate(streams[i]) {
+			return []catvod.Stream{streams[i]}
+		}
+	}
+	return streams
+}
+
+func preferredQuality(requested string, first *catvod.Stream) string {
+	if q := strings.TrimSpace(requested); q != "" {
+		return q
+	}
+	if first != nil {
+		return first.Name
+	}
+	return ""
+}
+
+// PlayEpisodes plays episode start of a line. quality names one rendition
+// when play() returned several. With 连播 on and a player that takes
+// playlists, the rest of the line follows automatically and nil is returned.
+// Otherwise (连播 off, the system player, SenPlayer, several qualities still
+// to choose from, or a web page) the streams of that episode are returned
+// and the page continues with Open, or asks for a quality and calls again.
+func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) ([]catvod.Stream, error) {
 	if p.webMode.Load() {
 		return nil, errors.New("网页模式请使用浏览器播放")
 	}
@@ -394,6 +437,7 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	if err != nil {
 		return nil, err
 	}
+	streams = narrowToQuality(streams, quality)
 	s := settings
 	subID := ""
 	if sub, ok := s.active(); ok {
@@ -434,11 +478,12 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 	if kind == "html" {
 		return streams, nil
 	}
-	id, err := p.addPlaylist(&playlist{generation: generation, api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, first: first})
+	id, err := p.addPlaylist(&playlist{generation: generation, api: api, vodID: vodID, show: show, flag: flag, subID: subID, eps: eps, start: start, quality: preferredQuality(quality, first), first: first})
 	if err != nil {
 		return nil, err
 	}
 	p.log(fmt.Sprintf("连播(%s): %s 从第 %d 项起，共 %d 项", s.Player, p.eps.playlistURL(id), start+1, len(eps)-start))
+	title := entryTitle(show, eps[start].Name)
 	if s.Player == "builtin" || s.Player == "" {
 		// The clicked episode is already resolved. Hand that proxied URL to
 		// the page; other episodes stay as /ep/ links and are resolved with
@@ -447,10 +492,19 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 		items := builtinEpisodeItems(show, eps, start, func(i int) string { return p.eps.epURL(id, i) }, u)
 		items[start].Media = kind
 		items[start].ProgressID, items[start].Position = progressID, position
-		p.openBuiltin(entryTitle(show, eps[start].Name), builtinPlayerPage(items, start))
-		return nil, nil
+		return nil, startContinuousPlayback(p, s.Player, "", title, builtinPlayerPage(items, start))
 	}
-	return nil, p.launch(s.Player, p.eps.playlistURL(id), "")
+	return nil, startContinuousPlayback(p, s.Player, p.eps.playlistURL(id), "", "")
+}
+
+// startContinuousPlayback opens the queued episodes. Tests replace it so they
+// can observe the queue without a window or an installed player.
+var startContinuousPlayback = func(p *Player, player, media, title, page string) error {
+	if player == "builtin" || player == "" {
+		p.openBuiltin(title, page)
+		return nil
+	}
+	return p.launch(player, media, title)
 }
 
 type builtinItem struct {

@@ -514,7 +514,7 @@ async function openDetail(site, id) {
   });
 }
 
-async function play(site, line, idx, vodId, title, btn) {
+async function play(site, line, idx, vodId, title, btn, quality) {
   const flag = line.flag, ep = line.episodes[idx];
   $$('.ep.busy').forEach((b) => b.classList.remove('busy'));
   btn?.classList.add('busy');
@@ -533,7 +533,7 @@ async function play(site, line, idx, vodId, title, btn) {
   try {
     // With 连播 the Go side opens the player with this and the following
     // episodes and returns nothing; otherwise it returns this episode's streams.
-    const streams = (await call('PlayEpisodes', site.api, vodId, title, flag, line.episodes, idx)) || [];
+    const streams = (await call('PlayEpisodes', site.api, vodId, title, flag, line.episodes, idx, quality || '')) || [];
     const name = `${title} - ${ep.name}`;
     $('.quality')?.remove();
     $$('.ep.last').forEach((b) => b.classList.remove('last'));
@@ -548,7 +548,7 @@ async function play(site, line, idx, vodId, title, btn) {
       hideToast();
       // Several qualities: let the user pick.
       const box = el('div', { class: 'quality' }, el('h4', {}, `选择清晰度 · ${ep.name}`),
-        el('div', { class: 'eps' }, streams.map((s) => el('button', { class: 'ep', onclick: () => call('Open', s, name).catch((e) => toast(errMsg(e), { err: true, ms: 6000 })) }, s.name || '播放'))));
+        el('div', { class: 'eps' }, streams.map((s) => el('button', { class: 'ep', onclick: () => { box.remove(); play(site, line, idx, vodId, title, btn, s.name || '').catch((e) => toast(errMsg(e), { err: true, ms: 6000 })); } }, s.name || '播放'))));
       $('#lines').prepend(box); box.scrollIntoView({ block: 'nearest' });
     }
     btn?.classList.add('played');

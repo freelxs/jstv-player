@@ -427,3 +427,36 @@ test('file and ordinary items still open detail', async () => {
     assert.equal(calls.some((c) => c[0] === 'Detail' && c[1][1] === vod.vod_id), true, vod.vod_id);
   }
 });
+
+test('choosing a quality replays the whole line instead of opening one url', async () => {
+  const calls = [];
+  const harness = makeApp(async (method, ...args) => {
+    calls.push([method, args]);
+    if (method === 'PlayEpisodes' && !args[6]) {
+      return [
+        { name: '代理', url: 'http://127.0.0.1/a.bin', parse: false },
+        { name: '原画', url: 'https://cdn.example/a', parse: false },
+      ];
+    }
+    return [];
+  });
+  const line = { flag: '线路', episodes: [{ name: '第1集', id: 'e1' }, { name: '第2集', id: 'e2' }] };
+  await harness.app.play(site('示例'), line, 0, 'v1', '节目', null);
+  const buttons = [];
+  const walk = (node) => {
+    if (!node || node.tagName !== 'BUTTON' && !node.children) return;
+    if (node.tagName === 'BUTTON') buttons.push(node);
+    for (const child of node.children || []) walk(child);
+  };
+  walk(harness.el('#lines'));
+  const proxy = buttons.find((button) => button.textContent === '代理');
+  assert.ok(proxy, 'quality button missing');
+  proxy.listeners.click();
+  await settle();
+  const plays = calls.filter((c) => c[0] === 'PlayEpisodes');
+  assert.equal(plays.length, 2);
+  assert.equal(plays[1][1][4].length, 2);
+  assert.equal(plays[1][1][5], 0);
+  assert.equal(plays[1][1][6], '代理');
+  assert.equal(calls.some((c) => c[0] === 'Open'), false);
+});

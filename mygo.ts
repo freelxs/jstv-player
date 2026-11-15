@@ -257,14 +257,15 @@ export const Player = {
     return call("Player.Play", api, flag, id);
   },
   /**
-   * PlayEpisodes plays episode start of a line. With 连播 on and a player
-   * that takes playlists, the rest of the line follows automatically and nil
-   * is returned. Otherwise (连播 off, the system player, SenPlayer, several
-   * qualities to choose from, or a web page) the streams of that episode are
-   * returned and the page continues with Open as before.
+   * PlayEpisodes plays episode start of a line. quality selects one rendition
+   * when the plugin returned several. With 连播 on and a player that takes
+   * playlists, the rest of the line follows automatically and nil is returned.
+   * Otherwise (连播 off, the system player, SenPlayer, several qualities still
+   * to choose from, or a web page) the streams of that episode are returned
+   * and the page continues with Open, or asks for a quality and calls again.
    */
-  playEpisodes(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<Stream[]> {
-    return call("Player.PlayEpisodes", api, vodID, show, flag, eps, start);
+  playEpisodes(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number, quality: string): Promise<Stream[]> {
+    return call("Player.PlayEpisodes", api, vodID, show, flag, eps, start, quality);
   },
   /**
    * ProbeNodePermissions reports which permission-related flags are advertised
@@ -333,8 +334,8 @@ export const Player = {
   webAdvance(id: string, index: number): Promise<WebPlayback | null> {
     return call("Player.WebAdvance", id, index);
   },
-  /** WebPlay resolves an episode for the browser. It never opens a native player. */
-  webPlay(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number): Promise<WebPlayback | null> {
-    return call("Player.WebPlay", api, vodID, show, flag, eps, start);
+  /** WebPlay resolves an episode for the browser. quality selects one rendition. It never opens a native player. */
+  webPlay(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number, quality: string): Promise<WebPlayback | null> {
+    return call("Player.WebPlay", api, vodID, show, flag, eps, start, quality);
   },
 } as const;
