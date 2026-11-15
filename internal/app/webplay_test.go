@@ -28,11 +28,11 @@ func TestWebModeDoesNotOpenDesktopPlayer(t *testing.T) {
 	if err := p.Open(catvod.Stream{URL: "https://example.com/a.mp4"}, "t"); err == nil || !strings.Contains(err.Error(), "网页") {
 		t.Fatal(err)
 	}
-	if _, err := p.PlayEpisodes("/api", "v", "show", "line", []catvod.Episode{{Name: "1", ID: "e"}}, 0); err == nil {
+	if _, err := p.PlayEpisodes("/api", "v", "show", "line", []catvod.Episode{{Name: "1", ID: "e"}}, 0, ""); err == nil {
 		t.Fatal("PlayEpisodes launched from web mode")
 	}
 	p.webMode.Store(false)
-	if _, err := p.WebPlay("/api", "v", "show", "line", []catvod.Episode{{Name: "1", ID: "e"}}, 0); err == nil || !strings.Contains(err.Error(), "仅网页") {
+	if _, err := p.WebPlay("/api", "v", "show", "line", []catvod.Episode{{Name: "1", ID: "e"}}, 0, ""); err == nil || !strings.Contains(err.Error(), "仅网页") {
 		t.Fatal(err)
 	}
 }

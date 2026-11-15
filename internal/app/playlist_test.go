@@ -414,3 +414,261 @@ func TestLegacyHistoryMigratesToActiveSubscription(t *testing.T) {
 		t.Fatalf("migrated history still visible on another subscription: %+v", h)
 	}
 }
+
+// A cloud-drive plugin often answers play() with several renditions of the
+// same episode (a refreshing proxy plus a direct URL). Choosing one rendition
+// must still queue the rest of the line and resolve later episodes lazily,
+// preferring that rendition and falling back when it is absent.
+func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
+	p, api := loadQualityPlugin(t)
+	d, err := p.Detail(api, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := d.Lines[0]
+	if len(line.Episodes) != 3 {
+		t.Fatalf("episodes: %+v", line.Episodes)
+	}
+	if err := p.SaveSettings(Settings{Player: "builtin"}); err != nil {
+		t.Fatal(err)
+	}
+	var page string
+	restorePlayback(t, func(_ *Player, player, media, title, builtinPage string) error {
+		if player != "builtin" || media != "" || title == "" || !strings.Contains(builtinPage, "第2集") || !strings.Contains(builtinPage, "第3集") {
+			t.Fatalf("continuous page player=%s media=%s title=%s", player, media, title)
+		}
+		page = builtinPage
+		return nil
+	})
+	streams, err := p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) != 2 || streams[0].Name != "代理" || streams[1].Name != "原画" || page != "" {
+		t.Fatalf("expected a quality choice, got %+v page=%t", streamNames(streams), page != "")
+	}
+	streams, err = p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) != 0 || page == "" {
+		t.Fatalf("chosen quality did not start continuous playback: %d page=%t", len(streams), page != "")
+	}
+	if !strings.Contains(page, "addEventListener('ended'") || !strings.Contains(page, ">上一集<") || !strings.Contains(page, ">下一集<") {
+		t.Fatal("built-in page lost auto-advance or prev/next")
+	}
+	id := playlistIDFromPage(t, page)
+	body := readProxiedEpisode(t, p, id, 1)
+	if body != "proxy-e2" {
+		t.Fatalf("episode 2 resolved %q", body)
+	}
+	// This episode has no proxy rendition. Continuous play must fall back.
+	body = readProxiedEpisode(t, p, id, 2)
+	if body != "raw-e3" {
+		t.Fatalf("episode 3 fallback resolved %q", body)
+	}
+
+	var playlistURL string
+	startContinuousPlayback = func(_ *Player, player, media, _, builtinPage string) error {
+		if player != "mpv" || !strings.HasSuffix(media, ".m3u") || builtinPage != "" {
+			t.Fatalf("mpv playlist: player=%s media=%s page=%t", player, media, builtinPage != "")
+		}
+		playlistURL = media
+		return nil
+	}
+	if err := p.SaveSettings(Settings{Player: "mpv"}); err != nil {
+		t.Fatal(err)
+	}
+	streams, err = p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 1, "代理")
+	if err != nil || len(streams) != 0 || playlistURL == "" {
+		t.Fatalf("mpv did not receive a playlist: streams=%d url=%s err=%v", len(streams), playlistURL, err)
+	}
+	m3u, err := http.Get(playlistURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m3uBody, _ := io.ReadAll(m3u.Body)
+	m3u.Body.Close()
+	if strings.Count(string(m3uBody), "#EXTINF") != 2 || !strings.Contains(string(m3uBody), "/ep/") {
+		t.Fatalf("mpv playlist should continue from the clicked episode: %s", m3uBody)
+	}
+
+	p.webMode.Store(true)
+	offered, err := p.WebPlay(api, "show", "演示", line.Flag, line.Episodes, 1, "")
+	if err != nil || offered.Action != "qualities" || len(offered.Qualities) != 2 || offered.PlaylistID != "" {
+		t.Fatalf("web offer: %+v %v", offered, err)
+	}
+	web, err := p.WebPlay(api, "show", "演示", line.Flag, line.Episodes, 1, "原画")
+	if err != nil || web.Action != "play" || web.PlaylistID == "" || web.Count != 3 || web.Index != 1 {
+		t.Fatalf("web continuous: %+v %v", web, err)
+	}
+	next, err := p.WebAdvance(web.PlaylistID, 0)
+	if err != nil || next.PlaylistID != web.PlaylistID || next.Index != 0 || next.Count != 3 {
+		t.Fatalf("web prev: %+v %v", next, err)
+	}
+	if got := readPublicMedia(t, p, next.URL); got != "raw-e1" {
+		t.Fatalf("web kept the chosen rendition, got %q", got)
+	}
+	// SenPlayer can only be handed one URL.
+	p.webMode.Store(false)
+	if err := p.SaveSettings(Settings{Player: "senplayer"}); err != nil {
+		t.Fatal(err)
+	}
+	page = ""
+	one, err := p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
+	if err != nil || len(one) != 1 || one[0].Name != "代理" || page != "" {
+		t.Fatalf("senplayer should stay single-url: %+v page=%t err=%v", one, page != "", err)
+	}
+}
+
+func streamNames(streams []catvod.Stream) []string {
+	out := make([]string, len(streams))
+	for i := range streams {
+		out[i] = streams[i].Name
+	}
+	return out
+}
+
+func restorePlayback(t *testing.T, fn func(*Player, string, string, string, string) error) {
+	t.Helper()
+	prev := startContinuousPlayback
+	startContinuousPlayback = fn
+	t.Cleanup(func() { startContinuousPlayback = prev })
+}
+
+func playlistIDFromPage(t *testing.T, page string) string {
+	t.Helper()
+	const marker = `/ep/`
+	i := strings.Index(page, marker)
+	if i < 0 {
+		t.Fatalf("page has no episode url")
+	}
+	rest := page[i+len(marker):]
+	id, _, ok := strings.Cut(rest, `/`)
+	if !ok || id == "" {
+		t.Fatal(rest)
+	}
+	return id
+}
+
+func readProxiedEpisode(t *testing.T, p *Player, id string, n int) string {
+	t.Helper()
+	resp, err := http.Get(p.eps.epURL(id, n) + "?direct=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("direct %d %s", resp.StatusCode, raw)
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.URL == "" {
+		t.Fatalf("%v %s", err, raw)
+	}
+	media, err := http.Get(body.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(media.Body)
+	media.Body.Close()
+	if media.StatusCode != http.StatusOK && media.StatusCode != http.StatusPartialContent {
+		t.Fatalf("media %d %s", media.StatusCode, got)
+	}
+	return string(got)
+}
+
+func readPublicMedia(t *testing.T, p *Player, publicPath string) string {
+	t.Helper()
+	base := ""
+	if p.proxy != nil {
+		base = p.proxy.BaseURL()
+	}
+	if !strings.HasPrefix(publicPath, "/media/") {
+		t.Fatal(publicPath)
+	}
+	resp, err := http.Get(base + strings.TrimPrefix(publicPath, "/media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("public media %d %s", resp.StatusCode, got)
+	}
+	return string(got)
+}
+
+func loadQualityPlugin(t *testing.T) (*Player, string) {
+	t.Helper()
+	if _, err := catvod.FindNode(""); err != nil {
+		t.Skip(err)
+	}
+	script := []byte(`
+const sites = [{ key: 'q', name: 'Q', type: 3, api: '/spider/q/3' }];
+let server;
+function body(req) {
+  return new Promise((r) => { let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => r(d ? JSON.parse(d) : {})); });
+}
+async function start() {
+  server = globalThis.catServerFactory(async (req, res) => {
+    const send = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
+    const b = req.method === 'POST' ? await body(req) : {};
+    const path = req.url.split('?')[0];
+    const host = 'http://' + req.headers.host;
+    if (path.startsWith('/media/')) {
+      res.setHeader('content-type', 'video/mp4');
+      const kind = path.includes('/raw/') ? 'raw' : 'proxy';
+      const id = path.split('/').pop();
+      res.end(kind + '-' + id);
+      return;
+    }
+    if (path === '/config') return send({ video: { sites } });
+    if (path === '/spider/q/3/init') return send({});
+    if (path === '/spider/q/3/detail') return send({ list: [{ vod_id: b.id, vod_play_from: '线路', vod_play_url: '第1集$e1#第2集$e2#第3集$e3' }] });
+    if (path === '/spider/q/3/play') {
+      const raw = host + '/media/raw/' + b.id;
+      const proxy = host + '/media/proxy/' + b.id;
+      const url = b.id === 'e3' ? ['原画', raw] : ['代理', proxy, '原画', raw];
+      return send({ parse: 0, url, header: { Referer: 'https://example.com/' } });
+    }
+    res.statusCode = 404; res.end('missing');
+  });
+  server.listen(Number(process.env.DEV_HTTP_PORT), '127.0.0.1');
+}
+async function stop() { if (server) server.close(); }
+module.exports = { start, stop };
+`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/index.js") {
+			w.Write(script)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	p := newPlayer(t.TempDir())
+	t.Cleanup(func() { p.StopSource() })
+	if _, err := p.AddSubscription("A", srv.URL+"/a/index.js"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.LoadSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TrustRequired {
+		if err := p.ApproveSource(); err != nil {
+			t.Fatal(err)
+		}
+		res, err = p.LoadSource()
+		if err != nil || res.TrustRequired {
+			t.Fatalf("load after approval: %+v %v", res, err)
+		}
+	}
+	if len(res.Sites) == 0 {
+		t.Fatal("no sites")
+	}
+	return p, res.Sites[0].API
+}

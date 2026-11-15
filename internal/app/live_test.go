@@ -66,7 +66,7 @@ func TestNativeLiveNeedsNoNodeAndPlaysHLSWithHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	playback, err := p.WebPlay(api, id, "频道一", "直播", detail.Lines[0].Episodes, 0)
+	playback, err := p.WebPlay(api, id, "频道一", "直播", detail.Lines[0].Episodes, 0, "")
 	if err != nil || playback.Media != "hls" || !strings.HasPrefix(playback.URL, "/media/") {
 		t.Fatalf("native playback: %+v %v", playback, err)
 	}
@@ -157,7 +157,7 @@ func TestNativeLiveExternalPlayerLaunchAndActualDecode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	streams, err := p.PlayEpisodes(result.Sites[0].API, channel.ID, channel.Name, "直播", detail.Lines[0].Episodes, 0)
+	streams, err := p.PlayEpisodes(result.Sites[0].API, channel.ID, channel.Name, "直播", detail.Lines[0].Episodes, 0, "")
 	if err != nil || len(streams) != 1 {
 		t.Fatalf("external stream selection: %+v %v", streams, err)
 	}
