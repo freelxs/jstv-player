@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,27 +196,31 @@ func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
 		return err
 	}
 	h.cmd, h.in, h.port, h.done, h.started = cmd, in, port, make(chan struct{}), true
-	var lastErr string
+	var lastErr, lastLine string
 	var lmu sync.Mutex
+	snapshot := func() (line, fatal string) {
+		lmu.Lock()
+		defer lmu.Unlock()
+		return lastLine, lastErr
+	}
 	ready := make(chan int, 1)
 	go func() {
 		rd := bufio.NewReaderSize(pr, 64<<10)
 		for {
 			line, err := readPluginLogLine(rd, 1<<20)
 			if line != "" {
-				if strings.HasPrefix(line, "JSTV_READY ") {
-					if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "JSTV_READY "))); err == nil && n > 0 {
-						select {
-						case ready <- n:
-						default:
-						}
+				if n, ok := pluginReadyPort(line); ok {
+					select {
+					case ready <- n:
+					default:
 					}
 				}
+				lmu.Lock()
+				lastLine = trimStartupLog(line)
 				if strings.Contains(line, "JSTV_FATAL") || strings.Contains(line, "Error") {
-					lmu.Lock()
-					lastErr = line
-					lmu.Unlock()
+					lastErr = lastLine
 				}
+				lmu.Unlock()
 				if h.LogFunc != nil {
 					h.LogFunc(line)
 				}
@@ -229,46 +235,128 @@ func (h *Host) StartContext(ctx context.Context, timeout time.Duration) error {
 	select {
 	case h.port = <-ready:
 	case <-done:
-		lmu.Lock()
-		err := fmt.Errorf("源进程已退出: %s", lastErr)
-		lmu.Unlock()
+		_, fatal := snapshot()
 		h.stopLocked()
-		return err
+		return fmt.Errorf("源进程已退出: %s", fatal)
 	case <-ctx.Done():
+		line, _ := snapshot()
 		h.stopLocked()
-		return ctx.Err()
+		return startupFailure(ctx.Err(), line, 0)
 	}
 
-	c := &http.Client{Timeout: 3 * time.Second}
+	// No Client.Timeout. The request uses the startup context, so a slow
+	// /config is allowed to finish instead of being aborted and retried
+	// every 3 seconds. A dial failure still retries; the process is already
+	// listening when its log reports the port.
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	client := &http.Client{Transport: &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if req != nil && req.URL != nil {
+				switch strings.TrimSuffix(strings.ToLower(req.URL.Hostname()), ".") {
+				case "localhost", "127.0.0.1", "::1":
+					return nil, nil
+				}
+			}
+			return http.ProxyFromEnvironment(req)
+		},
+		DialContext: dialer.DialContext,
+	}}
 	for {
 		if err := ctx.Err(); err != nil {
+			line, _ := snapshot()
 			h.stopLocked()
-			return err
+			return startupFailure(err, line, h.port)
 		}
 		select {
 		case <-done:
-			lmu.Lock()
-			err := fmt.Errorf("源进程已退出: %s", lastErr)
-			lmu.Unlock()
+			_, fatal := snapshot()
 			h.stopLocked()
-			return err
+			return fmt.Errorf("源进程已退出: %s", fatal)
 		default:
 		}
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.baseLocked()+"/config", nil)
-		resp, err := c.Do(req)
-		if err == nil {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, h.baseLocked()+"/config", nil)
+		if reqErr != nil {
+			h.stopLocked()
+			return reqErr
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				line, _ := snapshot()
+				h.stopLocked()
+				return startupFailure(ctx.Err(), line, h.port)
+			}
+		} else {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
-			if resp.StatusCode == 200 {
+			// 200 is the configured bundle. Any other HTTP status still
+			// proves this port is the plugin; keep asking until the routes
+			// answer or the startup deadline arrives.
+			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
 		}
 		select {
 		case <-ctx.Done():
+			line, _ := snapshot()
 			h.stopLocked()
-			return ctx.Err()
+			return startupFailure(ctx.Err(), line, h.port)
+		case <-done:
+			_, fatal := snapshot()
+			h.stopLocked()
+			return fmt.Errorf("源进程已退出: %s", fatal)
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
+}
+
+// pluginReadyPort reads the port the plugin is serving. Bundles that use
+// catServerFactory print "JSTV_READY <port>". Fastify bundles instead log
+// "Server listening at http://host:port", including inside a JSON line, and
+// do not print JSTV_READY.
+func pluginReadyPort(line string) (int, bool) {
+	line = strings.TrimSpace(strings.ReplaceAll(line, `\/`, `/`))
+	if strings.HasPrefix(line, "JSTV_READY ") {
+		n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "JSTV_READY ")))
+		return n, err == nil && n > 0
+	}
+	const marker = "Server listening at "
+	i := strings.Index(line, marker)
+	if i < 0 {
+		return 0, false
+	}
+	raw := line[i+len(marker):]
+	if cut := strings.IndexAny(raw, "\" \t"); cut >= 0 {
+		raw = raw[:cut]
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(u.Port())
+	return n, err == nil && n > 0
+}
+
+func trimStartupLog(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) > 400 {
+		return line[:400] + "…"
+	}
+	return line
+}
+
+func startupFailure(err error, lastLine string, port int) error {
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	msg := "插件启动超时：没有收到监听端口"
+	if port > 0 {
+		msg = fmt.Sprintf("插件启动超时：已监听到端口 %d，但 /config 没有在时限内完成", port)
+	}
+	if lastLine != "" {
+		msg += "。最后日志：" + lastLine
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 func nodeEnvironment(inherit bool, proxy ...bool) []string {
