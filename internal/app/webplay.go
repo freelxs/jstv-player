@@ -33,7 +33,7 @@ type WebQuality struct {
 }
 
 // WebPlay resolves an episode for the browser. It never opens a native player.
-func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, start int) (*WebPlayback, error) {
+func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) (*WebPlayback, error) {
 	if !p.webMode.Load() {
 		return nil, errors.New("仅网页模式可用")
 	}
@@ -45,6 +45,7 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 	if err != nil {
 		return nil, err
 	}
+	streams = narrowToQuality(streams, quality)
 	s := settings
 	subID := ""
 	if sub, ok := s.active(); ok {
@@ -134,7 +135,7 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 	id, err := p.addPlaylist(&playlist{
 		generation: generation,
 		api:        api, vodID: vodID, show: show, flag: flag, subID: subID,
-		eps: eps, start: start, first: &first,
+		eps: eps, start: start, quality: preferredQuality(quality, &first), first: &first,
 	})
 	if err != nil {
 		return nil, err
