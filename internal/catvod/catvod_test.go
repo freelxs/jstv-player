@@ -265,6 +265,103 @@ func TestHostStartContextCancellationStopsChild(t *testing.T) {
 	}
 }
 
+// Plugins such as current CatPaw bundles log Fastify's "Server listening at"
+// line and never print JSTV_READY. /config can also take longer than the old
+// 3s client timeout; aborting that request restarts the work and the overall
+// deadline expires with a bare context error.
+func TestHostReadyFromListeningLogAndSlowConfig(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "slow.js")
+	code := `const http = require('http');
+module.exports = {
+  start() {
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url.split('?')[0] !== '/config') { res.statusCode = 404; res.end('no'); return; }
+      const slow = calls++ === 0;
+      let finished = false;
+      const timer = setTimeout(() => {
+        finished = true;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ video: { sites: [{ key: 'slow', name: 'Slow', type: 3, api: '/spider/slow/3' }] } }));
+      }, slow ? 4000 : 0);
+      res.on('close', () => { if (!finished) clearTimeout(timer); });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      console.log(JSON.stringify({ level: 30, msg: 'Server listening at http://127.0.0.1:' + port }));
+      console.log('Server listening at http://192.168.1.20:' + port);
+    });
+  },
+  stop() {}
+};`
+	if err := os.WriteFile(script, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script}
+	start := time.Now()
+	if err := h.Start(12 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop()
+	elapsed := time.Since(start)
+	if elapsed < 3500*time.Millisecond || elapsed > 8*time.Second {
+		t.Fatalf("startup should wait out one slow /config, took %s", elapsed)
+	}
+	cfg, err := (&Client{Base: h.Base()}).Config()
+	if err != nil || len(cfg.Video.Sites) != 1 || cfg.Video.Sites[0].Key != "slow" {
+		t.Fatalf("%+v %v", cfg, err)
+	}
+}
+
+func TestPluginReadyPort(t *testing.T) {
+	cases := []struct {
+		line string
+		port int
+		ok   bool
+	}{
+		{"JSTV_READY 54500", 54500, true},
+		{"JSTV_READY 0", 0, false},
+		{`{"level":30,"msg":"Server listening at http://127.0.0.1:54500"}`, 54500, true},
+		{"Server listening at http://192.168.1.20:54500", 54500, true},
+		{"Server listening at http://[::1]:54500", 54500, true},
+		{`Server listening at http:\/\/127.0.0.1:54500`, 54500, true},
+		{"Server listening at not-a-url", 0, false},
+		{"plugin booting", 0, false},
+	}
+	for _, tc := range cases {
+		got, ok := pluginReadyPort(tc.line)
+		if ok != tc.ok || got != tc.port {
+			t.Errorf("%q: got %d %v", tc.line, got, ok)
+		}
+	}
+}
+
+func TestHostStartupTimeoutReportsLastLogLine(t *testing.T) {
+	node, err := FindNode("")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "silent.js")
+	code := `module.exports = { start() { console.log("LAST_PLUGIN_LINE unique-marker"); return new Promise(() => {}); }, stop() {} };`
+	if err := os.WriteFile(script, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &Host{Node: node, Dir: filepath.Join(dir, "runtime"), Script: script}
+	err = h.Start(1200 * time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "LAST_PLUGIN_LINE") || !strings.Contains(err.Error(), "unique-marker") {
+		t.Fatalf("timeout error should include the last plugin log line: %v", err)
+	}
+	if h.Base() != "" || h.cmd != nil {
+		t.Fatal("timed out start left a live host")
+	}
+}
+
 func TestHostKeepsReadingAfterOversizedLogLine(t *testing.T) {
 	node, err := FindNode("")
 	if err != nil {
