@@ -140,7 +140,7 @@ func (p *Player) SwitchSubscription(id string) (*LoadResult, error) {
 // AddSubscriptionWithType preserves the legacy AddSubscription RPC while
 // allowing directory plugins and extensionless native feeds to be explicit.
 func (p *Player) AddSubscriptionWithType(name, url, kind string) (Settings, error) {
-	if kind != "auto" && kind != "plugin" && kind != "live" {
+	if !validSubType(kind) {
 		return Settings{}, errors.New("订阅类型无效")
 	}
 	return p.editSubs(func(s *Settings) error {
@@ -154,7 +154,7 @@ func (p *Player) AddSubscriptionWithType(name, url, kind string) (Settings, erro
 }
 
 func (p *Player) UpdateSubscriptionWithType(id, name, url, kind string) (Settings, error) {
-	if kind != "auto" && kind != "plugin" && kind != "live" {
+	if !validSubType(kind) {
 		return Settings{}, errors.New("订阅类型无效")
 	}
 	return p.editSubs(func(s *Settings) error {

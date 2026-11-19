@@ -18,9 +18,11 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 	}
 	player := p.GetSettings().Player
 	if st.Parse || (!st.Direct && catvod.IsWebPage(st.URL)) {
-		// A web page that needs sniffing: show it in a window.
-		p.openWebPage(title, st.URL)
-		return nil
+		next, err := p.sniffInto(st)
+		if err != nil {
+			return err
+		}
+		st = next
 	}
 	// One path for every URL, local or remote: everything goes through the
 	// local proxy, which adds the stream's headers and rewrites HLS
@@ -49,12 +51,32 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		return err
 	}
 	if kind == "html" {
-		// Any HTML page (not media): show it in a window.
-		p.openWebPage(title, st.URL)
-		return nil
+		next, err := p.sniffInto(st)
+		if err != nil {
+			return err
+		}
+		st = next
+		u = st.URL
+		if player != "system" {
+			if p.proxy == nil {
+				return errors.New("本地播放代理未启动")
+			}
+			u, err = p.proxy.WrapGranted(u, st.Headers)
+			if err != nil {
+				return err
+			}
+		}
+		kind, err = catvod.InspectStream(nil, u, nil)
+		if err != nil {
+			return err
+		}
+		if kind == "html" {
+			return errors.New("播放页在时限内没有出现可播放的视频")
+		}
 	}
 	if player == "builtin" || player == "" {
-		p.openBuiltin(title, builtinPlayerPage([]builtinItem{{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position}}, 0))
+		item := builtinItem{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position, Fallbacks: p.proxiedFallbacks(st.Fallbacks)}
+		p.openBuiltin(title, builtinPlayerPage([]builtinItem{item}, 0))
 		return nil
 	}
 	return p.launch(player, u, title)

@@ -1,0 +1,30 @@
+{
+  "spider": "./jar/bundle.txt;md5;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "logo": "https://example.com/logo.png",
+  "wallpaper": "https://example.org/wallpaper.png",
+  "sites": [
+    {"key": "script-a", "name": "脚本甲", "type": 3, "api": "./engine/engine.min.js", "ext": "./engine/rule-a.js"},
+    {"key": "script-b", "name": "脚本乙", "type": 3, "api": "./engine/engine.min.js", "ext": {"json": "../data/list.json"}},
+    {"key": "script-c", "name": "脚本丙", "type": 3, "api": "https://example.com/engine/engine.min.js", "ext": "./engine/rule-c.js"},
+    {"key": "jar-a", "name": "站点甲", "type": 3, "api": "csp_Alpha", "searchable": 0},
+    {"key": "jar-b", "name": "站点乙", "type": 3, "api": "csp_Beta", "searchable": 1},
+    {"key": "jar-c", "name": "站点丙", "type": 3, "api": "csp_Gamma", "ext": "https://example.org/ext.json"},
+    {"key": "jar-d", "name": "站点丁", "type": 3, "api": "csp_Delta"},
+    {"key": "jar-e", "name": "站点戊", "type": 3, "api": "csp_Epsilon", "ext": {"json": "https://example.net/list.json"}}
+  ],
+  "lives": [
+    {"name": "示例列表", "type": 0, "url": "https://example.com/live/list.m3u", "playerType": 1},
+    {"name": "本机列表", "url": "http://127.0.0.1:9978/proxy?do=live"},
+    {"name": "相对列表", "url": "./live.txt"}
+  ],
+  "parses": [
+    {"name": "解析甲", "type": 0, "url": "https://example.com/parse"}
+  ],
+  "flags": ["线路"],
+  "hosts": [
+    "img.example.net=cdn.example.org"
+  ],
+  "rules": [
+    {"name": "示例规则", "hosts": ["cdn.example.net"], "regex": ["ad\\.ts\\n"]}
+  ]
+}

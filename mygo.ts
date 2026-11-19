@@ -55,6 +55,15 @@ export interface LoadResult {
   trustURL?: string;
   trustScriptSHA256?: string;
   trustConfigSHA256?: string;
+  /** RepoPick asks the UI to choose one line from a multi-repository config. */
+  repoPick?: boolean;
+  repoLines?: RepoLine[];
+}
+
+/** RepoLine is one address inside a multi-repository config. */
+export interface RepoLine {
+  name: string;
+  url: string;
 }
 
 /** Settings are kept in settings.json in the user data directory. */
@@ -108,6 +117,9 @@ export interface Site {
   searchable?: number;
   quickSearch?: number;
   filterable?: number;
+  /** Unsupported sites are listed so a TVBox subscription can load even when some spiders cannot run here. */
+  unsupported?: boolean;
+  reason?: string;
 }
 
 /** SiteResults is one site's search answer. */
@@ -133,11 +145,13 @@ export interface Stream {
 /** Subscription is one user-supplied plugin address. */
 export interface Subscription {
   id: string;
-  /** auto | plugin | live */
+  /** auto | plugin | live | tvbox */
   type?: string;
   name: string;
-  /** index.js or index.js.md5 */
+  /** index.js, a live list, or a TVBox JSON config */
   url: string;
+  /** chosen path through a multi-repository config */
+  line?: string;
 }
 
 /**
@@ -315,6 +329,10 @@ export const Player = {
   },
   stopSource(): Promise<void> {
     return call("Player.StopSource");
+  },
+  /** SelectRepoLine appends one repository line and reloads. An empty name clears the path. */
+  selectRepoLine(name: string): Promise<LoadResult | null> {
+    return call("Player.SelectRepoLine", name);
   },
   /** SwitchSubscription makes id the active subscription and reloads it. */
   switchSubscription(id: string): Promise<LoadResult | null> {

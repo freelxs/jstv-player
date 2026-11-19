@@ -54,6 +54,10 @@ func TestNormalizePlay(t *testing.T) {
 	if len(s) != 1 || !s[0].Parse {
 		t.Fatal(s)
 	}
+	s = NormalizePlay(M{"parse": float64(0), "jx": "1", "url": "http://example.com/play.php"})
+	if len(s) != 1 || !s[0].Parse {
+		t.Fatal(s)
+	}
 	s = NormalizePlay(M{"parse": float64(0), "url": []any{"a", "u1", "b", "u2"}, "header": map[string]any{"Referer": "r"}})
 	if len(s) != 2 || s[1].URL != "u2" || s[0].Headers["Referer"] != "r" {
 		t.Fatal(s)

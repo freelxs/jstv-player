@@ -11,9 +11,12 @@ import (
 // Subscription is one user-supplied plugin address.
 type Subscription struct {
 	ID   string `json:"id"`
-	Type string `json:"type,omitempty"` // auto | plugin | live
+	Type string `json:"type,omitempty"` // auto | plugin | live | tvbox
 	Name string `json:"name"`
-	URL  string `json:"url"` // index.js or index.js.md5
+	URL  string `json:"url"` // index.js, a live list, or a TVBox JSON config
+	// Line is the chosen path through a multi-repository config.
+	// Names are separated by U+001F so a line name can contain slashes.
+	Line string `json:"line,omitempty"`
 }
 
 var (
@@ -111,8 +114,38 @@ func (s *Settings) update(id, name, url string) error {
 	if name == "" {
 		name = defaultSubName(i + 1)
 	}
+	if s.Subscriptions[i].URL != url {
+		s.Subscriptions[i].Line = ""
+	}
 	s.Subscriptions[i].Name, s.Subscriptions[i].URL = name, url
 	return nil
+}
+
+func validSubType(kind string) bool {
+	switch kind {
+	case "auto", "plugin", "live", "tvbox":
+		return true
+	default:
+		return false
+	}
+}
+
+const repoLineSep = "\x1f"
+
+func splitRepoLine(line string) []string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+	parts := strings.Split(line, repoLineSep)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // remove deletes a subscription; if it was active the next one takes over.

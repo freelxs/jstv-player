@@ -87,7 +87,7 @@
       hls = new window.Hls({ enableWorker: false, lowLatencyMode: false });
       hls.on(window.Hls.Events.ERROR, (_, data) => {
         if (!data || !data.fatal || mine !== token) return;
-        showError('播放失败，请换一条线路或稍后重试');
+        advanceLine();
       });
       hls.on(window.Hls.Events.MANIFEST_PARSED, () => { if (mine === token) tryPlay(); });
       hls.loadSource(url);
@@ -127,15 +127,41 @@
     rpc('ReportProgress', [current.progressId, video.currentTime || 0, video.duration, final]).catch(() => {});
   }
 
+  let stallTimer = 0;
+  function lineChoices() {
+    if (current && Array.isArray(current.lines) && current.lines.length > 1) return current.lines;
+    return [];
+  }
+  function armStall() {
+    clearTimeout(stallTimer);
+    const mine = token;
+    stallTimer = setTimeout(() => {
+      if (mine !== token || video.currentTime >= 0.2) return;
+      advanceLine();
+    }, 15000);
+  }
+  function advanceLine() {
+    const lines = lineChoices();
+    const next = (current && current.lineIndex || 0) + 1;
+    if (!current || next >= lines.length) {
+      showError('全部线路都无法播放');
+      return;
+    }
+    current.lineIndex = next;
+    errEl.textContent = `正在切换线路 ${next + 1}/${lines.length}`;
+    attach({ url: lines[next].url, media: lines[next].media }).then(() => armStall()).catch((err) => showError(err.message || '播放失败'));
+  }
+
   function show(playback) {
     reportProgress(true);
     progressReady = false;
     current = playback;
+    if (current) current.lineIndex = 0;
     lastProgressAt = 0; pendingSeek = playback.position || 0;
     titleEl.textContent = playback.title || '正在播放';
     root.hidden = false;
     syncButtons();
-    attach(playback).catch((err) => showError(err.message || '播放失败'));
+    attach(playback).then(() => armStall()).catch((err) => showError(err.message || '播放失败'));
   }
 
   async function go(index) {
@@ -170,9 +196,11 @@
     if (!current || !current.playlistId || current.index + 1 >= current.count) return;
     go(current.index + 1);
   });
+  video.addEventListener('timeupdate', () => { if (video.currentTime >= 0.2) clearTimeout(stallTimer); });
   video.addEventListener('error', () => {
     if (suppressVideoError) return;
     if (!video.getAttribute('src') && !hls) return;
+    if (lineChoices().length > 1) { advanceLine(); return; }
     if (!errEl.textContent) showError('浏览器无法解码这个流，请换一条线路');
   });
 

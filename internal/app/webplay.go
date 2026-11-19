@@ -23,6 +23,9 @@ type WebPlayback struct {
 	Count      int          `json:"count"`
 	ProgressID string       `json:"progressId,omitempty"`
 	Position   float64      `json:"position,omitempty"`
+	// Lines are alternate addresses for this playback, first one included.
+	// The page switches on error or when nothing starts within 15 seconds.
+	Lines []WebQuality `json:"lines,omitempty"`
 }
 
 // WebQuality is one already-proxied rendition.
@@ -109,6 +112,7 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 			out.Action = "play"
 			out.URL = qs[0].URL
 			out.Media = qs[0].Media
+			p.withWebLines(out, playable[0])
 			p.log("网页播放: " + title)
 			return out, nil
 		}
@@ -144,6 +148,7 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 	out.URL = q.URL
 	out.Media = q.Media
 	out.PlaylistID = id
+	p.withWebLines(out, chosen)
 	p.log("网页连播: " + title)
 	return out, nil
 }

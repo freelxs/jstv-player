@@ -492,6 +492,7 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 		items := builtinEpisodeItems(show, eps, start, func(i int) string { return p.eps.epURL(id, i) }, u)
 		items[start].Media = kind
 		items[start].ProgressID, items[start].Position = progressID, position
+		items[start].Fallbacks = p.proxiedFallbacks(first.Fallbacks)
 		return nil, startContinuousPlayback(p, s.Player, "", title, builtinPlayerPage(items, start))
 	}
 	return nil, startContinuousPlayback(p, s.Player, p.eps.playlistURL(id), "", "")
@@ -508,11 +509,12 @@ var startContinuousPlayback = func(p *Player, player, media, title, page string)
 }
 
 type builtinItem struct {
-	Title      string  `json:"t"`
-	URL        string  `json:"u"`
-	Media      string  `json:"m,omitempty"`
-	ProgressID string  `json:"p,omitempty"`
-	Position   float64 `json:"s,omitempty"`
+	Title      string   `json:"t"`
+	URL        string   `json:"u"`
+	Media      string   `json:"m,omitempty"`
+	ProgressID string   `json:"p,omitempty"`
+	Position   float64  `json:"s,omitempty"`
+	Fallbacks  []string `json:"f,omitempty"`
 }
 
 // builtinEpisodeItems lists the whole line. The clicked episode uses the
@@ -618,12 +620,26 @@ async function mediaURL(u){
   if(!r.ok||!body.url) throw new Error((body&&body.error)||'这一集解析失败');
   return body;
 }
+let lineAt=0;
+function lineList(item){return [item.u].concat(item.f||[]).filter(Boolean);}
+function arm(mine){
+ const timer=setTimeout(function(){if(mine===token&&v.currentTime<0.2) failLine(mine);},15000);
+ function tick(){if(v.currentTime>=0.2){clearTimeout(timer);v.removeEventListener('timeupdate',tick);}}
+ v.addEventListener('timeupdate',tick);
+}
+function failLine(mine){
+ if(mine!==token) return;
+ const item=L[i]; const list=item?lineList(item):[];
+ if(!item||lineAt+1>=list.length){showErr(HINT);return;}
+ lineAt++; err.textContent='正在切换线路 '+(lineAt+1)+'/'+list.length;
+ destroyHls(); attach(list[lineAt], item.m); arm(mine);
+}
 function attach(url,media){
   const hlsLike=media==='hls'||isHls(url);
   if(hlsLike&&v.canPlayType('application/vnd.apple.mpegurl')){suppress=false;v.src=url;tryPlay();return;}
   if(hlsLike&&window.Hls&&window.Hls.isSupported()){
     hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
-    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;showErr(HINT);});
+    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;failLine(token);});
     hls.on(window.Hls.Events.MANIFEST_PARSED,function(){tryPlay();});
     hls.loadSource(url);
     hls.attachMedia(v);
@@ -643,7 +659,7 @@ async function go(k){
   try{result=await mediaURL(item.u);}catch(e){if(mine===token)showErr((e&&e.message)||HINT);return;}
   if(mine!==token)return;
   progressId=item.p||result.progressId||'';pendingSeek=item.s||result.position||0;progressAt=0;
-  attach(result.url,item.m||result.media);
+  lineAt=0; attach(result.url,item.m||result.media); arm(mine);
 }
 v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;});
 v.addEventListener('pause',()=>{if(!suppress)reportProgress(true);});
@@ -656,7 +672,7 @@ v.addEventListener('timeupdate',function(){
   }
 });
 v.addEventListener('ended',function(){reportProgress(true);if(i+1<L.length)go(i+1);});
-v.addEventListener('error',function(){if(suppress)return;if(!v.getAttribute('src')&&!hls)return;if(!err.textContent)showErr(HINT);});
+v.addEventListener('error',function(){if(suppress)return;if(!v.getAttribute('src')&&!hls)return;failLine(token);});
 document.getElementById('p').onclick=function(){go(i-1);};
 document.getElementById('n').onclick=function(){go(i+1);};
 document.getElementById('c').onclick=function(){reportProgress(true);progressId='';token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
