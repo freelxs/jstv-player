@@ -56,13 +56,13 @@
   </div>
 
   <div class="pane" data-pane="subs">
-    <p class="hint">支持 JS 插件、M3U/TXT 直播和含 lives 的 TVBox 配置。直播列表不需要 Node.js。</p>
+    <p class="hint">支持 JS 插件、M3U/TXT 直播、含 lives 的 TVBox 直播，以及带 sites 的 TVBox 点播配置。多仓配置会先选择一条线路。直播列表不需要 Node.js；点播里的 JavaScript 站点需要 Node，csp_ 站点只展示、不运行。</p>
     <ul id="subList" class="sub-list"></ul>
     <form id="subForm" class="sub-form">
       <input id="subFormId" type="hidden">
       <input id="subFormName" placeholder="名称（可选）" maxlength="40">
       <input id="subFormURL" placeholder="插件或直播订阅的 HTTP(S) 地址" required>
-      <select id="subFormType" aria-label="订阅类型"><option value="auto">自动识别</option><option value="plugin">JS 插件</option><option value="live">M3U / TXT / TVBox 直播</option></select>
+      <select id="subFormType" aria-label="订阅类型"><option value="auto">自动识别</option><option value="plugin">JS 插件</option><option value="live">M3U / TXT / TVBox 直播</option><option value="tvbox">TVBox 点播</option></select>
       <button class="primary" id="subFormBtn">添加</button>
       <button type="button" class="ghost" id="subFormCancel" hidden>取消</button>
     </form>
@@ -105,7 +105,7 @@
     <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；只显示近 7 天，最多 4 MiB）</label>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
-    <p id="appVersion" class="hint small">JSTV Player 0.4.2</p>
+    <p id="appVersion" class="hint small">JSTV Player 0.5.0</p>
   </form>
 
   <div class="pane" data-pane="logs" hidden>

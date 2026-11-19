@@ -19,7 +19,7 @@ func isLiveSubscription(sub Subscription) bool {
 	if sub.Type == "live" {
 		return true
 	}
-	if sub.Type == "plugin" {
+	if sub.Type == "plugin" || sub.Type == "tvbox" {
 		return false
 	}
 	u, err := url.Parse(sub.URL)
@@ -145,12 +145,23 @@ func (p *Player) playLive(api, id string, generation uint64) ([]catvod.Stream, e
 	if channel == nil {
 		return nil, errors.New("直播频道不存在")
 	}
-	if !catvod.IsHTTPMediaURL(channel.URL) {
-		return nil, errors.New("当前直播仅支持 HTTP(S) 媒体；此频道的协议需要专用播放器")
+	lines := channel.Lines
+	if len(lines) == 0 && channel.URL != "" {
+		lines = []live.Line{{URL: channel.URL, Headers: channel.Headers}}
 	}
 	settings := p.GetSettings()
-	if !settings.AllowLANMedia && catvod.IsLocalNetworkURL(channel.URL) {
-		return nil, errors.New("频道指向本机或局域网；请先允许局域网媒体")
+	var httpLines []live.Line
+	for _, line := range lines {
+		if !catvod.IsHTTPMediaURL(line.URL) {
+			continue
+		}
+		if !settings.AllowLANMedia && catvod.IsLocalNetworkURL(line.URL) {
+			continue
+		}
+		httpLines = append(httpLines, line)
+	}
+	if len(httpLines) == 0 {
+		return nil, errors.New("当前直播仅支持 HTTP(S) 媒体；此频道的协议需要专用播放器，或请先允许局域网媒体")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -160,8 +171,58 @@ func (p *Player) playLive(api, id string, generation uint64) ([]catvod.Stream, e
 	if p.proxy == nil {
 		return nil, errors.New("本地播放代理未启动")
 	}
-	if err := p.proxy.GrantLive(channel.URL, channel.Headers, p.settings.AllowLANMedia); err != nil {
-		return nil, err
+	for _, line := range httpLines {
+		if err := p.proxy.GrantLive(line.URL, line.Headers, p.settings.AllowLANMedia); err != nil {
+			return nil, err
+		}
 	}
-	return []catvod.Stream{{Direct: true, Name: channel.Name, URL: channel.URL, Headers: channel.Headers}}, nil
+	stream := catvod.Stream{Direct: true, Name: channel.Name, URL: httpLines[0].URL, Headers: httpLines[0].Headers}
+	for i, line := range httpLines[1:] {
+		stream.Fallbacks = append(stream.Fallbacks, catvod.Fallback{Name: fmt.Sprintf("线路%d", i+2), URL: line.URL, Headers: line.Headers})
+	}
+	return []catvod.Stream{stream}, nil
+}
+
+func (p *Player) proxiedFallbacks(items []catvod.Fallback) []string {
+	if p == nil || p.proxy == nil || len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		u, err := p.proxy.WrapGranted(item.URL, item.Headers)
+		if err != nil || u == "" {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+func (p *Player) withWebLines(out *WebPlayback, st catvod.Stream) {
+	if out == nil || out.URL == "" || len(st.Fallbacks) == 0 {
+		return
+	}
+	lines := []WebQuality{{Name: "线路1", URL: out.URL, Media: out.Media}}
+	for i, item := range st.Fallbacks {
+		abs, err := p.proxy.WrapGranted(item.URL, item.Headers)
+		if err != nil {
+			continue
+		}
+		pub, err := p.toPublicMedia(abs)
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = fmt.Sprintf("线路%d", i+2)
+		}
+		media := "file"
+		if strings.Contains(strings.ToLower(item.URL), ".m3u8") {
+			media = "hls"
+		}
+		lines = append(lines, WebQuality{Name: name, URL: pub, Media: media})
+	}
+	if len(lines) > 1 {
+		out.Lines = lines
+	}
 }

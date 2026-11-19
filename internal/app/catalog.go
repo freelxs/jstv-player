@@ -31,7 +31,7 @@ func (p *Player) clientWithContext(ctx context.Context, api string) (*catvod.Cli
 	return c, nil
 }
 
-func (p *Player) initSite(api string, c *catvod.Client, expectedHost *catvod.Host) error {
+func (p *Player) initSite(api string, c *catvod.Client, expectedHost sourceRuntime) error {
 	p.initMu.Lock()
 	defer p.initMu.Unlock()
 	p.mu.Lock()

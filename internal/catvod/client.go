@@ -54,10 +54,19 @@ type Site struct {
 	Searchable  *int   `json:"searchable,omitempty"`
 	QuickSearch *int   `json:"quickSearch,omitempty"`
 	Filterable  *int   `json:"filterable,omitempty"`
+	// Unsupported sites stay visible so a TVBox subscription can load when
+	// some spiders cannot run here. Reason is the short explanation for the UI.
+	Unsupported bool   `json:"unsupported,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
-// CanSearch is true unless the site sets searchable:0.
-func (s Site) CanSearch() bool { return s.Searchable == nil || *s.Searchable != 0 }
+// CanSearch is true unless the site sets searchable:0 or cannot run.
+func (s Site) CanSearch() bool {
+	if s.Unsupported {
+		return false
+	}
+	return s.Searchable == nil || *s.Searchable != 0
+}
 
 // Config is GET /config.
 type Config struct {
@@ -286,6 +295,16 @@ type Stream struct {
 	URL        string            `json:"url"`
 	Parse      bool              `json:"parse"` // a web page that still needs sniffing
 	Headers    map[string]string `json:"headers,omitempty"`
+	// Fallbacks are later lines of the same item. Players try the next one
+	// when the current line errors or does not start.
+	Fallbacks []Fallback `json:"fallbacks,omitempty"`
+}
+
+// Fallback is another address for the same stream.
+type Fallback struct {
+	Name    string            `json:"name,omitempty"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // IsHTTPMediaURL reports the URL forms currently accepted for proxy grants.
@@ -306,6 +325,14 @@ func NormalizePlay(r M) []Stream {
 		parse = v
 	case string:
 		parse = v == "1"
+	}
+	switch v := r["jx"].(type) {
+	case float64:
+		parse = parse || v == 1
+	case bool:
+		parse = parse || v
+	case string:
+		parse = parse || v == "1"
 	}
 	headers := map[string]string{}
 	if h, ok := r["header"].(map[string]any); ok {

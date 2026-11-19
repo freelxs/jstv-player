@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/jstv-player .
 
 FROM node:24-bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates gosu \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg gosu \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/jstv-player /usr/local/bin/jstv-player
 COPY docker/entrypoint.sh /usr/local/bin/jstv-entrypoint

@@ -114,6 +114,55 @@ func TestNativeLiveNeedsNoNodeAndPlaysHLSWithHeaders(t *testing.T) {
 	}
 }
 
+func TestSameNameLiveLinesAreGrantedTogether(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/list.txt":
+			fmt.Fprintf(w, "新闻,#genre#\n台一,http://%s/a.m3u8\n台一,http://%s/b.m3u8\n", r.Host, r.Host)
+		case "/a.m3u8", "/b.m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:1,\nseg.ts\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	p.webMode.Store(true)
+	if err := p.SaveSettings(Settings{AllowLANMedia: true, Player: "builtin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.AddSubscriptionWithType("直播", server.URL+"/list.txt", "live"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := p.LoadSource()
+	if err != nil || len(loaded.Sites) != 1 {
+		t.Fatalf("%+v %v", loaded, err)
+	}
+	api := loaded.Sites[0].API
+	category, err := p.Category(api, "新闻", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := category["list"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("channels not merged: %v", list)
+	}
+	id := list[0].(catvod.M)["vod_id"].(string)
+	detail, err := p.Detail(api, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, err := p.WebPlay(api, id, "台一", "直播", detail.Lines[0].Episodes, 0, "")
+	if err != nil || web.Action != "play" || len(web.Lines) != 2 {
+		t.Fatalf("%+v %v", web, err)
+	}
+	if !strings.Contains(web.Lines[1].URL, "/media/") {
+		t.Fatal(web.Lines[1].URL)
+	}
+}
+
 func TestNativeLiveExternalPlayerLaunchAndActualDecode(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {

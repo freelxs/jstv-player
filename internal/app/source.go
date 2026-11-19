@@ -62,6 +62,12 @@ func (p *Player) loadSource(useCache bool, force ...bool) (*LoadResult, error) {
 	}
 	// Each subscription keeps its own plugin copy and data files.
 	dir := filepath.Join(p.dir, "subs", sub.ID)
+	if shouldTryTVBox(sub) {
+		loaded, handled, err := p.tryTVBox(ctx, s, sub, dir, generation, useCache)
+		if handled || err != nil {
+			return loaded, err
+		}
+	}
 	if isLiveSubscription(sub) {
 		return p.loadLive(ctx, sub, dir, generation, useCache)
 	}
@@ -152,8 +158,9 @@ func (p *Player) ApproveSource() error {
 	if !ok {
 		return errors.New("没有待确认的插件版本")
 	}
-	scriptURL, _ := catvod.ScriptURLs(sub.URL)
-	if scriptURL != pending.URL {
+	entered := strings.TrimSpace(sub.URL)
+	scriptURL, _ := catvod.ScriptURLs(entered)
+	if pending.URL != scriptURL && pending.URL != entered {
 		return errors.New("订阅地址已更改，请重新加载并确认新的版本")
 	}
 	if err := writePin(filepath.Join(p.dir, "subs", sub.ID), pending); err != nil {
@@ -185,7 +192,7 @@ func (p *Player) beginSourceLoad() (context.Context, uint64) {
 
 // clearSourceLocked and playback authorization commits use the same mutex, so
 // a stale play response cannot re-grant a resource after a stop has revoked it.
-func (p *Player) clearSourceLocked() *catvod.Host {
+func (p *Player) clearSourceLocked() sourceRuntime {
 	if p.loadCancel != nil {
 		p.loadCancel()
 		p.loadCancel = nil
@@ -194,12 +201,14 @@ func (p *Player) clearSourceLocked() *catvod.Host {
 	p.invalidateCatalogLocked()
 	h := p.host
 	p.host, p.sites, p.inited = nil, nil, map[string]bool{}
+	p.vodConfig = nil
 	p.liveCatalog, p.liveAPI = nil, ""
 	p.progress = nil
 	p.eps.mu.Lock()
 	p.eps.lists, p.eps.order = nil, nil
 	p.eps.mu.Unlock()
 	if p.proxy != nil {
+		p.proxy.SetUpstream(nil, nil)
 		p.proxy.Reset()
 	}
 	return h
