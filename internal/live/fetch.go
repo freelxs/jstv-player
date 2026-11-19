@@ -105,14 +105,7 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 		if group != "" && channels[i].Group == "默认" {
 			channels[i].Group = group
 		}
-		merged := map[string]string{}
-		for k, v := range headers {
-			merged[http.CanonicalHeaderKey(k)] = v
-		}
-		for k, v := range channels[i].Headers {
-			merged[k] = v
-		}
-		channels[i].Headers = merged
+		applyFeedHeaders(&channels[i], headers)
 		channels[i].ID = channelID(channels[i])
 	}
 	out.Channels = append(out.Channels, channels...)
@@ -122,17 +115,22 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 	return nil
 }
 
+type liveChannel struct {
+	Name     string            `json:"name"`
+	Group    string            `json:"group"`
+	URLs     []string          `json:"urls"`
+	URL      string            `json:"url"`
+	Header   map[string]string `json:"header"`
+	Channels []liveChannel     `json:"channels"`
+}
+
 type liveSource struct {
 	Name     string            `json:"name"`
 	URL      json.RawMessage   `json:"url"`
 	Header   map[string]string `json:"header"`
 	UA       string            `json:"ua"`
-	Channels []struct {
-		Name   string            `json:"name"`
-		URLs   []string          `json:"urls"`
-		URL    string            `json:"url"`
-		Header map[string]string `json:"header"`
-	} `json:"channels"`
+	Channels []liveChannel     `json:"channels"`
+	Groups   []liveChannel     `json:"groups"`
 }
 
 func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group string, out *Catalog, seen map[string]bool, depth int) error {
@@ -162,34 +160,8 @@ func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group str
 		if err := validateHeaders(headers); err != nil {
 			return err
 		}
-		for _, item := range source.Channels {
-			urls := item.URLs
-			if item.URL != "" {
-				urls = append(urls, item.URL)
-			}
-			for _, raw := range urls {
-				u, h, err := mediaURL(raw, base)
-				if err != nil {
-					return err
-				}
-				for k, v := range headers {
-					if _, ok := h[k]; !ok {
-						h[k] = v
-					}
-				}
-				for k, v := range item.Header {
-					h[http.CanonicalHeaderKey(k)] = v
-				}
-				if err := validateHeaders(h); err != nil {
-					return err
-				}
-				ch := Channel{Name: item.Name, Group: source.Name, URL: u, Headers: h}
-				ch.ID = channelID(ch)
-				out.Channels = append(out.Channels, ch)
-				if len(out.Channels) > MaxChannels {
-					return errors.New("直播频道过多")
-				}
-			}
+		if err := l.addLiveChannels(append(source.Channels, source.Groups...), source.Name, headers, base, out); err != nil {
+			return err
 		}
 		if len(source.URL) == 0 {
 			continue
@@ -205,6 +177,102 @@ func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group str
 				return ctx.Err()
 			}
 			out.Warnings = append(out.Warnings, source.Name+": "+err.Error())
+		}
+	}
+	return nil
+}
+
+func applyFeedHeaders(ch *Channel, feed map[string]string) {
+	if ch.Headers == nil {
+		ch.Headers = map[string]string{}
+	}
+	for k, v := range feed {
+		k = http.CanonicalHeaderKey(k)
+		if _, ok := ch.Headers[k]; !ok {
+			ch.Headers[k] = v
+		}
+	}
+	if len(ch.Lines) == 0 && ch.URL != "" {
+		ch.Lines = []Line{{URL: ch.URL, Headers: cloneHeaders(ch.Headers)}}
+	}
+	for i := range ch.Lines {
+		if ch.Lines[i].Headers == nil {
+			ch.Lines[i].Headers = map[string]string{}
+		}
+		for k, v := range feed {
+			k = http.CanonicalHeaderKey(k)
+			if _, ok := ch.Lines[i].Headers[k]; !ok {
+				ch.Lines[i].Headers[k] = v
+			}
+		}
+	}
+	if len(ch.Lines) > 0 {
+		ch.URL = ch.Lines[0].URL
+		ch.Headers = ch.Lines[0].Headers
+	}
+}
+
+func cloneHeaders(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func (l Loader) addLiveChannels(items []liveChannel, group string, headers map[string]string, base *url.URL, out *Catalog) error {
+	for _, item := range items {
+		nextGroup := group
+		if strings.TrimSpace(item.Group) != "" {
+			nextGroup = strings.TrimSpace(item.Group)
+		}
+		urls := append([]string{}, item.URLs...)
+		if item.URL != "" {
+			urls = append(urls, item.URL)
+		}
+		if len(item.Channels) > 0 && len(urls) == 0 {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				nextGroup = name
+			}
+			if err := l.addLiveChannels(item.Channels, nextGroup, headers, base, out); err != nil {
+				return err
+			}
+			continue
+		}
+		for _, raw := range urls {
+			u, h, err := mediaURL(raw, base)
+			if err != nil {
+				return err
+			}
+			for k, v := range headers {
+				if _, ok := h[k]; !ok {
+					h[k] = v
+				}
+			}
+			for k, v := range item.Header {
+				h[http.CanonicalHeaderKey(k)] = v
+			}
+			if err := validateHeaders(h); err != nil {
+				return err
+			}
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				name = "未命名"
+			}
+			ch := Channel{Name: name, Group: nextGroup, URL: u, Headers: h}
+			out.Channels = append(out.Channels, ch)
+			if len(out.Channels) > MaxChannels {
+				return errors.New("直播频道过多")
+			}
+		}
+		if len(item.Channels) > 0 {
+			if err := l.addLiveChannels(item.Channels, nextGroup, headers, base, out); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

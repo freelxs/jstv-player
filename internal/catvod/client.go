@@ -295,6 +295,16 @@ type Stream struct {
 	URL        string            `json:"url"`
 	Parse      bool              `json:"parse"` // a web page that still needs sniffing
 	Headers    map[string]string `json:"headers,omitempty"`
+	// Fallbacks are later lines of the same item. Players try the next one
+	// when the current line errors or does not start.
+	Fallbacks []Fallback `json:"fallbacks,omitempty"`
+}
+
+// Fallback is another address for the same stream.
+type Fallback struct {
+	Name    string            `json:"name,omitempty"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // IsHTTPMediaURL reports the URL forms currently accepted for proxy grants.

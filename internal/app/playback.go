@@ -75,7 +75,8 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		}
 	}
 	if player == "builtin" || player == "" {
-		p.openBuiltin(title, builtinPlayerPage([]builtinItem{{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position}}, 0))
+		item := builtinItem{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position, Fallbacks: p.proxiedFallbacks(st.Fallbacks)}
+		p.openBuiltin(title, builtinPlayerPage([]builtinItem{item}, 0))
 		return nil
 	}
 	return p.launch(player, u, title)
