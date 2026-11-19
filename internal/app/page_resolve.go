@@ -26,7 +26,7 @@ func mediaFile(raw string) bool {
 	return false
 }
 
-func (p *Player) materializeStreams(flag string, streams []catvod.Stream) []catvod.Stream {
+func (p *Player) materializeStreams(flag string, streams []catvod.Stream) ([]catvod.Stream, error) {
 	out := append([]catvod.Stream(nil), streams...)
 	p.mu.Lock()
 	ctx := p.sourceContext
@@ -43,21 +43,34 @@ func (p *Player) materializeStreams(flag string, streams []catvod.Stream) []catv
 		res, err := resolve.Resolve(ctx, resolve.Options{
 			URL: out[i].URL, Headers: out[i].Headers, Flag: flag, Parsers: parsers, AllowLAN: allow,
 		})
-		if err != nil || res.URL == "" || res.URL == out[i].URL {
-			if err != nil {
-				p.log("播放页解析: " + err.Error())
-			}
+		if err == nil && res.URL != "" && res.URL != out[i].URL {
+			applyResolved(&out[i], res.URL, res.Headers)
+			p.log("播放页已解析为媒体地址")
 			continue
 		}
-		out[i].URL = res.URL
-		out[i].Parse = false
-		out[i].Direct = true
-		if len(res.Headers) > 0 {
-			out[i].Headers = res.Headers
+		if err != nil {
+			p.log("播放页解析: " + err.Error())
 		}
-		p.log("播放页已解析为媒体地址")
+		if p.webMode.Load() {
+			continue
+		}
+		found, serr := sniffPage(ctx, out[i].URL, out[i].Headers)
+		if serr != nil {
+			return nil, serr
+		}
+		applyResolved(&out[i], found.URL, found.Headers)
+		p.log("隐藏页面已嗅探到媒体地址")
 	}
-	return out
+	return out, nil
+}
+
+func applyResolved(st *catvod.Stream, media string, headers map[string]string) {
+	st.URL = media
+	st.Parse = false
+	st.Direct = true
+	if len(headers) > 0 {
+		st.Headers = headers
+	}
 }
 
 func (p *Player) playbackParsers() []resolve.Parser {

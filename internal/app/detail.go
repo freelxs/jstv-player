@@ -57,7 +57,10 @@ func (p *Player) playAtGeneration(api, flag, id string, generation uint64) ([]ca
 		return nil, err
 	}
 	s := catvod.NormalizePlay(m)
-	s = p.materializeStreams(flag, s)
+	s, err = p.materializeStreams(flag, s)
+	if err != nil {
+		return nil, err
+	}
 	if len(s) == 0 {
 		if e, ok := m["error"].(string); ok && e != "" {
 			p.log("源返回错误: " + e)
