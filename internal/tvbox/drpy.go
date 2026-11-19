@@ -47,7 +47,7 @@ func startDrpy(ctx context.Context, opt Options, hosts map[string]string, src So
 	if err != nil {
 		return nil, err
 	}
-	extURL, extFile, extJSON, err := materializeExt(ctx, clientFor(opt), dir, src.Ext)
+	extURL, extFile, extJSON, err := materializeExt(ctx, clientFor(opt), dir, json.RawMessage(absolutizeExtJSON(src.API, src.Ext)))
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +207,15 @@ func prepareDrpy(ctx context.Context, opt Options, src Source) (string, error) {
 	if client == nil {
 		client = HTTPClient(nil, 60*time.Second)
 	}
-	body, err := fetchURL(ctx, client, script.String())
+	body, err := fetchURLHeaders(ctx, client, script.String(), src.Header)
 	if err != nil {
 		return "", fmt.Errorf("下载 drpy 失败: %w", err)
 	}
-	rewritten, err := rewriteDrpy(string(body))
+	rewritten, err := localizeImports(ctx, client, dir, script.String(), string(body))
+	if err != nil {
+		return "", err
+	}
+	rewritten, err = rewriteDrpy(rewritten)
 	if err != nil {
 		return "", err
 	}
@@ -239,7 +243,7 @@ func prepareDrpy(ctx context.Context, opt Options, src Source) (string, error) {
 		target := base.ResolveReference(ref)
 		content, err := fetchURL(ctx, client, target.String())
 		if err != nil {
-			return "", fmt.Errorf("下载 %s 失败: %w", pair[0], err)
+			continue
 		}
 		if err := os.WriteFile(filepath.Join(dir, pair[1]), content, 0o644); err != nil {
 			return "", err
@@ -259,32 +263,10 @@ func prepareDrpy(ctx context.Context, opt Options, src Source) (string, error) {
 }
 
 func rewriteDrpy(src string) (string, error) {
-	if !strings.Contains(src, "export default") || !strings.Contains(src, "function init") {
+	if !strings.Contains(src, "export default") && !strings.Contains(src, "function init") {
 		return "", errors.New("下载到的脚本不是 drpy 模块")
 	}
 	src = strings.ReplaceAll(src, "assets://js/lib/", "./")
-	for _, stmt := range []string{
-		`import"./crypto-js.js";`,
-		`import "./crypto-js.js";`,
-		`import"./node-rsa.js";`,
-		`import "./node-rsa.js";`,
-		`import"./pako.min.js";`,
-		`import "./pako.min.js";`,
-		`import"./json5.js";`,
-		`import "./json5.js";`,
-		`import"./jinja.js";`,
-		`import "./jinja.js";`,
-	} {
-		src = strings.ReplaceAll(src, stmt, "")
-	}
-	needle := `import cheerio from"./cheerio.min.js";`
-	if !strings.Contains(src, needle) {
-		needle = `import cheerio from "./cheerio.min.js";`
-	}
-	if !strings.Contains(src, needle) {
-		return "", errors.New("drpy 的 cheerio 导入无法识别")
-	}
-	src = strings.Replace(src, needle, needle+`import"./shims.mjs";`, 1)
 	return src, nil
 }
 
@@ -335,27 +317,80 @@ func copyBoot(dir string) error {
 }
 
 func fetchURL(ctx context.Context, client *http.Client, raw string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	return fetchURLHeaders(ctx, client, raw, nil)
+}
+
+func fetchURLHeaders(ctx context.Context, client *http.Client, raw string, headers map[string]string) ([]byte, error) {
+	body, status, err := doFetch(ctx, client, raw, headers)
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		retry := map[string]string{}
+		for k, v := range headers {
+			retry[k] = v
+		}
+		retry["User-Agent"] = "okhttp/3.12.0"
+		if _, ok := retry["Referer"]; !ok {
+			if u, perr := url.Parse(raw); perr == nil && u.Host != "" {
+				retry["Referer"] = u.Scheme + "://" + u.Host + "/"
+			}
+		}
+		body, status, err = doFetch(ctx, client, raw, retry)
+	}
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", status)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) == 0 {
+	if len(body) == 0 {
 		return nil, errors.New("空文件")
 	}
-	return b, nil
+	if scriptPath(raw) && looksLikeHTML(body) {
+		return nil, errors.New("脚本地址返回了网页")
+	}
+	return body, nil
+}
+
+func doFetch(ctx context.Context, client *http.Client, raw string, headers map[string]string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+	for k, v := range headers {
+		if strings.TrimSpace(k) != "" && !strings.ContainsAny(k+v, "\r\n") {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return b, resp.StatusCode, err
+}
+
+func scriptPath(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(strings.ToLower(u.Path), ".js") || strings.HasSuffix(strings.ToLower(u.Path), ".mjs")
+}
+
+func looksLikeHTML(body []byte) bool {
+	s := bytes.TrimSpace(body)
+	if len(s) == 0 {
+		return false
+	}
+	if s[0] == '<' {
+		return true
+	}
+	head := bytes.ToLower(s)
+	if len(head) > 200 {
+		head = head[:200]
+	}
+	return bytes.Contains(head, []byte("<html")) || bytes.Contains(head, []byte("<!doctype"))
 }
 
 func drpyEnv(inherit bool, hosts map[string]string, modulePath, extURL, extFile, extJSON string) []string {

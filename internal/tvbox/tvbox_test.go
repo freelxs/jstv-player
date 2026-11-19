@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -455,6 +456,40 @@ function play(flag, id) {
 }
 export default {init, home, homeVod, category, detail, search, play};
 `
+
+func TestNodeLoadsRemoteDefaultImport(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip(err)
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/drpy2.min.js":
+			fmt.Fprintf(w, "import cheerio from \"%s/cheerio.min.js\";\nfunction init(){}\nfunction home(){return JSON.stringify({class:[{type_id:\"1\",type_name:cheerio.load(\"<p>电影</p>\").text()}]})}\nfunction homeVod(){return \"\"}\nfunction category(){return \"\"}\nfunction detail(){return \"\"}\nfunction search(){return \"\"}\nfunction play(){return \"\"}\nexport default {init,home,homeVod,category,detail,search,play};\n", srv.URL)
+		case "/cheerio.min.js":
+			fmt.Fprint(w, "function load(html){return {text(){const m=String(html).match(/<p>([^<]*)<\\/p>/);return m?m[1]:\"\"}}}\nconst cheerio={load};\nexport {cheerio as default, load};\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	eng, err := startDrpy(ctx, Options{Dir: t.TempDir(), Node: node, HTTP: srv.Client()}, nil, Source{API: srv.URL + "/drpy2.min.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+	home, err := eng.call(ctx, "home", map[string]any{"filter": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	class := asMap(home)["class"].([]any)[0].(map[string]any)
+	if class["type_name"] != "电影" {
+		t.Fatalf("%v", home)
+	}
+}
 
 func TestDirectMediaClearsParseFlag(t *testing.T) {
 	media := coercePlay(map[string]any{"parse": 1, "url": "https://cdn.example.com/a.mp4"}, map[string]string{"Referer": "https://example.com"})

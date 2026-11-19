@@ -105,6 +105,32 @@ func TestExtHTTPProxyAndNestedGroups(t *testing.T) {
 	}
 }
 
+func TestProxyLiveListExpandsToChannels(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tv.json":
+			ext := base64.StdEncoding.EncodeToString([]byte(srv.URL + "/live.txt"))
+			fmt.Fprintf(w, `{"lives":[{"name":"新闻","channels":[{"name":"台一","urls":["proxy://do=live&type=txt&ext=%s"]}]}]}`, ext)
+		case "/live.txt":
+			fmt.Fprint(w, "新闻,#genre#\n台一,https://cdn.example/a.m3u8\n台一,https://cdn.example/b.m3u8\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cat, err := (Loader{AllowLAN: true}).Load(context.Background(), srv.URL+"/tv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Channels) != 1 || len(cat.Channels[0].Lines) != 2 || strings.HasPrefix(cat.Channels[0].URL, "proxy://") {
+		t.Fatalf("%+v warnings=%v", cat.Channels, cat.Warnings)
+	}
+	if cat.Channels[0].Lines[1].URL != "https://cdn.example/b.m3u8" {
+		t.Fatal(cat.Channels[0].Lines[1].URL)
+	}
+}
+
 func TestLoaderBlocksPrivateReferencesAndReportsPartialFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "name,https://example.com/a.m3u8") }))
 	defer server.Close()

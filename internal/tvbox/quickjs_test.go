@@ -2,6 +2,7 @@ package tvbox
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,76 @@ import (
 
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
+
+func TestQuickJSLoadsCoreImport(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/lib/drpy2.min.js":
+			fmt.Fprint(w, "import {\n  cheerio\n} from \"./drpy-core-lite.min.js\";\nfunction init(){}\nfunction home(){return JSON.stringify({class:[{type_id:\"1\",type_name:cheerio.tag}]})}\nfunction homeVod(){return \"\"}\nfunction category(){return \"\"}\nfunction detail(){return \"\"}\nfunction search(){return \"\"}\nfunction play(){return \"\"}\nexport default {init,home,homeVod,category,detail,search,play};\n")
+		case "/lib/drpy-core-lite.min.js":
+			fmt.Fprint(w, "var y={tag:\"电影\"};export{y as cheerio};")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	eng, err := startQuickJS(ctx, Options{Dir: t.TempDir(), HTTP: srv.Client()}, nil, Source{API: srv.URL + "/lib/drpy2.min.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+	home, err := eng.call(ctx, "home", map[string]any{"filter": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asMap(home)["class"] == nil {
+		t.Fatal(home)
+	}
+}
+
+func TestQuickJSDefaultExport(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/lib/drpy2.min.js":
+			fmt.Fprint(w, "import 模板 from \"./模板.js\";\nfunction init(){}\nfunction home(){return JSON.stringify({class:[{type_id:\"1\",type_name:模板.getMubans().name}]})}\nfunction homeVod(){return \"\"}\nfunction category(){return \"\"}\nfunction detail(){return \"\"}\nfunction search(){return \"\"}\nfunction play(){return \"\"}\nexport default {init,home,homeVod,category,detail,search,play};\n")
+		case "/lib/模板.js":
+			fmt.Fprint(w, "function getMubans(){return {name:\"儿歌\"}}\nexport default {getMubans};\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	eng, err := startQuickJS(ctx, Options{Dir: t.TempDir(), HTTP: srv.Client()}, nil, Source{API: srv.URL + "/lib/drpy2.min.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+	home, err := eng.call(ctx, "home", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	class := asMap(home)["class"].([]any)[0].(map[string]any)
+	if class["type_name"] != "儿歌" {
+		t.Fatalf("%v", home)
+	}
+}
+
+func TestCutImportKeepsMultilineClause(t *testing.T) {
+	src := "import {\n  cheerio,\n  模板\n} from \"./drpy-core-lite.min.js\";\nlet vercode = 1;\n"
+	spec, names, rest, ok := cutImport(src)
+	if !ok || spec != "./drpy-core-lite.min.js" || !strings.Contains(names, "cheerio") || !strings.Contains(names, "模板") {
+		t.Fatalf("%v %q %q", ok, spec, names)
+	}
+	if !strings.Contains(rest, "let vercode") || strings.Contains(rest, "from") {
+		t.Fatalf("%q", rest)
+	}
+}
 
 func TestQuickJSRunsType3WithoutNode(t *testing.T) {
 	var srv *httptest.Server

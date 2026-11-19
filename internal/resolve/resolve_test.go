@@ -100,6 +100,18 @@ func TestParsersMatchFlagAndPreferJSON(t *testing.T) {
 	}
 }
 
+func TestParserTargetAddsQueryWhenMissing(t *testing.T) {
+	if got := parserTarget("https://example.com/jx", "https://example.com/play/1"); got != "https://example.com/jx?url=https%3A%2F%2Fexample.com%2Fplay%2F1" {
+		t.Fatal(got)
+	}
+	if got := parserTarget("https://example.com/jx?url=", "https://example.com/play/1"); !strings.HasPrefix(got, "https://example.com/jx?url=https%3A") {
+		t.Fatal(got)
+	}
+	if !flagMatches([]string{"量子"}, "量子云") || flagMatches([]string{"其他"}, "量子") {
+		t.Fatal("flag match")
+	}
+}
+
 func TestEncryptOneUnescapesPlayerURL(t *testing.T) {
 	html := `<script>player_data={"encrypt":1,"url":"https%3A%2F%2Fcdn.example%2Fa.m3u8"}</script>`
 	got := macCMSURLs(html)

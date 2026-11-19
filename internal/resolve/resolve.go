@@ -53,6 +53,9 @@ type Options struct {
 	Client  *http.Client
 	// AllowLAN permits parser and page requests to private addresses.
 	AllowLAN bool
+	// Sniff loads a page in a hidden web view when static extraction fails.
+	// Web mode leaves it nil.
+	Sniff func(ctx context.Context, page string, headers map[string]string) (string, map[string]string, error)
 }
 
 // Resolve inspects a page, then tries matching type 0 and type 1 parsers.
@@ -87,7 +90,7 @@ func Resolve(ctx context.Context, opt Options) (Result, error) {
 			continue
 		}
 		pctx, cancel := context.WithTimeout(ctx, parserBudget)
-		found, headers, ok, err := runParser(pctx, client, parser, raw, opt.Headers, opt.AllowLAN, seen, &budget)
+		found, headers, ok, err := runParser(pctx, client, parser, raw, opt.Headers, opt.AllowLAN, seen, &budget, opt.Sniff)
 		cancel()
 		if err != nil {
 			errs++
@@ -138,7 +141,7 @@ func walk(ctx context.Context, client *http.Client, raw string, headers map[stri
 	return "", nil, false
 }
 
-func runParser(ctx context.Context, client *http.Client, parser Parser, play string, headers map[string]string, allowLAN bool, seen map[string]bool, budget *int) (string, map[string]string, bool, error) {
+func runParser(ctx context.Context, client *http.Client, parser Parser, play string, headers map[string]string, allowLAN bool, seen map[string]bool, budget *int, sniff func(context.Context, string, map[string]string) (string, map[string]string, error)) (string, map[string]string, bool, error) {
 	target := parserTarget(parser.URL, play)
 	if !isHTTP(target) {
 		return "", nil, false, errors.New("解析接口地址无效")
@@ -163,10 +166,15 @@ func runParser(ctx context.Context, client *http.Client, parser Parser, play str
 		return found, hdr, true, nil
 	}
 	found, hdr, ok := walk(ctx, client, target, merged, allowLAN, 1, seen, budget)
-	if !ok {
-		return "", nil, false, errors.New("网页解析没有得到媒体地址")
+	if ok {
+		return found, hdr, true, nil
 	}
-	return found, hdr, true, nil
+	if sniff != nil {
+		if u, h, err := sniff(ctx, target, merged); err == nil && mediaPath(u) {
+			return u, h, true, nil
+		}
+	}
+	return "", nil, false, errors.New("网页解析没有得到媒体地址")
 }
 
 func parserTarget(template, play string) string {
@@ -175,7 +183,16 @@ func parserTarget(template, play string) string {
 	if strings.Contains(template, "{url}") {
 		return strings.ReplaceAll(template, "{url}", encoded)
 	}
-	return template + encoded
+	if strings.HasSuffix(template, "=") {
+		return template + encoded
+	}
+	if strings.Contains(template, "?") {
+		if strings.Contains(strings.ToLower(template), "url=") {
+			return template + encoded
+		}
+		return template + "&url=" + encoded
+	}
+	return template + "?url=" + encoded
 }
 
 func jsonMedia(body []byte) string {
@@ -222,7 +239,7 @@ func fetch(ctx context.Context, client *http.Client, raw string, headers map[str
 	if err != nil {
 		return nil, "", "", nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	for k, v := range headers {
 		if strings.TrimSpace(k) != "" && !strings.ContainsAny(k+v, "\r\n") {
 			req.Header.Set(k, v)
@@ -483,8 +500,15 @@ func flagMatches(flags []string, flag string) bool {
 		return true
 	}
 	flag = strings.TrimSpace(flag)
+	if flag == "" {
+		return true
+	}
 	for _, item := range flags {
-		if item == flag {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if item == flag || strings.Contains(flag, item) || strings.Contains(item, flag) {
 			return true
 		}
 	}

@@ -41,6 +41,16 @@ globalThis.req = req;
 globalThis.fetch = (url, obj) => (req(url, obj).content || "");
 globalThis.log = (...args) => console.log(args.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "));
 globalThis.print = globalThis.log;
+globalThis.joinUrl = (from, now) => {
+  try { return new URL(now || "", from || undefined).href; }
+  catch { return now || from || ""; }
+};
+if (typeof globalThis.pdfh !== "function") {
+  globalThis.pdfh = () => "";
+  globalThis.pdfa = () => [];
+  globalThis.pd = () => "";
+}
+globalThis.local = globalThis.local || { get() { return ""; }, set() {}, delete() {} };
 
 let ext = process.env.DRPY_EXT_URL || "";
 if (!ext && process.env.DRPY_EXT_FILE) {

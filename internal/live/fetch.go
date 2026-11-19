@@ -37,7 +37,11 @@ func (l Loader) Load(ctx context.Context, raw string) (*Catalog, error) {
 	}
 	catalog.Channels = deduplicate(catalog.Channels)
 	if len(catalog.Channels) == 0 {
-		return nil, errors.New("订阅未返回可用的直播频道；请检查直播地址或网络")
+		msg := "订阅未返回可用的直播频道；请检查直播地址或网络"
+		if len(catalog.Warnings) > 0 {
+			msg += "：" + catalog.Warnings[0]
+		}
+		return nil, errors.New(msg)
 	}
 	return catalog, nil
 }
@@ -106,11 +110,9 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 			channels[i].Group = group
 		}
 		applyFeedHeaders(&channels[i], headers)
-		channels[i].ID = channelID(channels[i])
-	}
-	out.Channels = append(out.Channels, channels...)
-	if len(out.Channels) > MaxChannels {
-		return errors.New("直播订阅频道过多")
+		if err := l.consumeChannel(ctx, channels[i], out, seen, depth); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -160,7 +162,7 @@ func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group str
 		if err := validateHeaders(headers); err != nil {
 			return err
 		}
-		if err := l.addLiveChannels(append(source.Channels, source.Groups...), source.Name, headers, base, out); err != nil {
+		if err := l.addLiveChannels(ctx, append(source.Channels, source.Groups...), source.Name, headers, base, out, seen, depth); err != nil {
 			return err
 		}
 		if len(source.URL) == 0 {
@@ -170,6 +172,9 @@ func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group str
 		if err := json.Unmarshal(source.URL, &raw); err != nil {
 			out.Warnings = append(out.Warnings, source.Name+": 不支持此直播 URL 结构")
 			continue
+		}
+		if target, _, ok := unwrapLiveProxy(raw); ok {
+			raw = target
 		}
 		target := resolveURL(base, raw)
 		if err := l.load(ctx, target, headers, source.Name, out, seen, depth+1); err != nil {
@@ -223,7 +228,25 @@ func cloneHeaders(in map[string]string) map[string]string {
 	return out
 }
 
-func (l Loader) addLiveChannels(items []liveChannel, group string, headers map[string]string, base *url.URL, out *Catalog) error {
+func (l Loader) consumeChannel(ctx context.Context, ch Channel, out *Catalog, seen map[string]bool, depth int) error {
+	if isLiveList("", ch.URL) {
+		if err := l.load(ctx, ch.URL, ch.Headers, ch.Group, out, seen, depth+1); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			out.Warnings = append(out.Warnings, ch.Name+": "+err.Error())
+		}
+		return nil
+	}
+	ch.ID = channelID(ch)
+	out.Channels = append(out.Channels, ch)
+	if len(out.Channels) > MaxChannels {
+		return errors.New("直播订阅频道过多")
+	}
+	return nil
+}
+
+func (l Loader) addLiveChannels(ctx context.Context, items []liveChannel, group string, headers map[string]string, base *url.URL, out *Catalog, seen map[string]bool, depth int) error {
 	for _, item := range items {
 		nextGroup := group
 		if strings.TrimSpace(item.Group) != "" {
@@ -238,12 +261,21 @@ func (l Loader) addLiveChannels(items []liveChannel, group string, headers map[s
 			if name != "" {
 				nextGroup = name
 			}
-			if err := l.addLiveChannels(item.Channels, nextGroup, headers, base, out); err != nil {
+			if err := l.addLiveChannels(ctx, item.Channels, nextGroup, headers, base, out, seen, depth); err != nil {
 				return err
 			}
 			continue
 		}
 		for _, raw := range urls {
+			if target, kind, ok := unwrapLiveProxy(raw); ok && isLiveList(kind, target) {
+				if err := l.load(ctx, target, headers, nextGroup, out, seen, depth+1); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					out.Warnings = append(out.Warnings, strings.TrimSpace(item.Name)+": "+err.Error())
+				}
+				continue
+			}
 			u, h, err := mediaURL(raw, base)
 			if err != nil {
 				return err
@@ -264,13 +296,12 @@ func (l Loader) addLiveChannels(items []liveChannel, group string, headers map[s
 				name = "未命名"
 			}
 			ch := Channel{Name: name, Group: nextGroup, URL: u, Headers: h}
-			out.Channels = append(out.Channels, ch)
-			if len(out.Channels) > MaxChannels {
-				return errors.New("直播频道过多")
+			if err := l.consumeChannel(ctx, ch, out, seen, depth); err != nil {
+				return err
 			}
 		}
 		if len(item.Channels) > 0 {
-			if err := l.addLiveChannels(item.Channels, nextGroup, headers, base, out); err != nil {
+			if err := l.addLiveChannels(ctx, item.Channels, nextGroup, headers, base, out, seen, depth); err != nil {
 				return err
 			}
 		}

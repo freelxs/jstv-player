@@ -207,7 +207,7 @@ func resolveURL(base *url.URL, raw string) string {
 
 func mediaURL(raw string, base *url.URL) (string, map[string]string, error) {
 	raw = strings.TrimSpace(raw)
-	if target, ok := unwrapLiveProxy(raw); ok {
+	if target, _, ok := unwrapLiveProxy(raw); ok {
 		raw = target
 	}
 	address, tail, hasHeaders := strings.Cut(raw, "|")
@@ -309,10 +309,10 @@ func deduplicate(channels []Channel) []Channel {
 
 // unwrapLiveProxy reads proxy://do=live and /proxy?do=live wrappers.
 // The url or ext value may be an HTTP address or standard base64 of one.
-func unwrapLiveProxy(raw string) (string, bool) {
+func unwrapLiveProxy(raw string) (target, kind string, ok bool) {
 	lower := strings.ToLower(strings.TrimSpace(raw))
 	if !strings.Contains(lower, "do=live") {
-		return "", false
+		return "", "", false
 	}
 	query := strings.TrimSpace(raw)
 	switch {
@@ -321,25 +321,39 @@ func unwrapLiveProxy(raw string) (string, bool) {
 	default:
 		u, err := url.Parse(raw)
 		if err != nil || !strings.Contains(strings.ToLower(u.Path), "proxy") {
-			return "", false
+			return "", "", false
 		}
 		query = u.RawQuery
 	}
 	values, err := url.ParseQuery(query)
 	if err != nil || values.Get("do") != "live" {
-		return "", false
+		return "", "", false
 	}
-	target := strings.TrimSpace(values.Get("url"))
+	kind = strings.ToLower(values.Get("type"))
+	target = strings.TrimSpace(values.Get("url"))
 	if target == "" {
 		target = strings.TrimSpace(values.Get("ext"))
 	}
-	if decoded, ok := decodeProxyTarget(target); ok {
+	if decoded, ok2 := decodeProxyTarget(target); ok2 {
 		target = decoded
 	}
 	if target == "" || strings.ContainsAny(target, "\r\n") {
-		return "", false
+		return "", "", false
 	}
-	return target, true
+	return target, kind, true
+}
+
+func isLiveList(kind, raw string) bool {
+	switch strings.ToLower(kind) {
+	case "txt", "text", "m3u":
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	p := strings.ToLower(u.Path)
+	return strings.HasSuffix(p, ".txt") || strings.HasSuffix(p, ".m3u")
 }
 
 func decodeProxyTarget(s string) (string, bool) {

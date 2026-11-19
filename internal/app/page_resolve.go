@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freelxs/jstv-player/internal/catvod"
 	"github.com/freelxs/jstv-player/internal/resolve"
@@ -14,6 +17,49 @@ func needsPageResolve(st catvod.Stream) bool {
 		return false
 	}
 	return st.Parse || catvod.IsWebPage(st.URL)
+}
+
+func (p *Player) extensionlessPage(ctx context.Context, st catvod.Stream) bool {
+	if st.Direct || st.Parse || mediaFile(st.URL) || catvod.IsWebPage(st.URL) || !catvod.IsHTTPMediaURL(st.URL) {
+		return false
+	}
+	return peekKind(ctx, st.URL, st.Headers) == "html"
+}
+
+func peekKind(ctx context.Context, raw string, headers map[string]string) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Range", "bytes=0-2047")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "mpegurl") || strings.Contains(ct, "video/") || bytesHasM3U(body) {
+		return "media"
+	}
+	if strings.Contains(ct, "text/html") || (len(body) > 0 && body[0] == '<') {
+		return "html"
+	}
+	return ""
+}
+
+func bytesHasM3U(b []byte) bool {
+	s := strings.TrimSpace(string(b))
+	return strings.HasPrefix(s, "#EXTM3U")
 }
 
 func mediaFile(raw string) bool {
@@ -36,12 +82,22 @@ func (p *Player) materializeStreams(flag string, streams []catvod.Stream) ([]cat
 	}
 	parsers := p.playbackParsers()
 	allow := p.GetSettings().AllowLANMedia
+	var sniff func(context.Context, string, map[string]string) (string, map[string]string, error)
+	if !p.webMode.Load() {
+		sniff = func(ctx context.Context, page string, headers map[string]string) (string, map[string]string, error) {
+			found, err := sniffPage(ctx, page, headers)
+			if err != nil {
+				return "", nil, err
+			}
+			return found.URL, found.Headers, nil
+		}
+	}
 	for i := range out {
-		if !needsPageResolve(out[i]) {
+		if !needsPageResolve(out[i]) && !p.extensionlessPage(ctx, out[i]) {
 			continue
 		}
 		res, err := resolve.Resolve(ctx, resolve.Options{
-			URL: out[i].URL, Headers: out[i].Headers, Flag: flag, Parsers: parsers, AllowLAN: allow,
+			URL: out[i].URL, Headers: out[i].Headers, Flag: flag, Parsers: parsers, AllowLAN: allow, Sniff: sniff,
 		})
 		if err == nil && res.URL != "" && res.URL != out[i].URL {
 			applyResolved(&out[i], res.URL, res.Headers)

@@ -1,7 +1,6 @@
 package tvbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +35,7 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 	if client == nil {
 		client = clientFor(opt)
 	}
-	body, err := fetchURL(ctx, client, src.API)
+	body, err := fetchURLHeaders(ctx, client, src.API, src.Header)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +61,16 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 		vm.Close()
 		return nil, err
 	}
-	if _, err := vm.Eval(qjsPrelude+adaptSpider(string(body)), quickjs.EvalGlobal); err != nil {
+	if _, err := vm.Eval(qjsPrelude, quickjs.EvalGlobal); err != nil {
+		vm.Close()
+		return nil, err
+	}
+	prepared, err := eng.prepareSpider(ctx, src.API, string(body))
+	if err != nil {
+		vm.Close()
+		return nil, err
+	}
+	if _, err := vm.Eval(prepared+"\n;0", quickjs.EvalGlobal); err != nil {
 		vm.Close()
 		return nil, err
 	}
@@ -74,10 +82,7 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 		}
 		return nil, err
 	}
-	ext := "{}"
-	if len(bytes.TrimSpace(src.Ext)) > 0 {
-		ext = string(src.Ext)
-	}
+	ext := absolutizeExtJSON(src.API, src.Ext)
 	if _, err := vm.Call("__init", ext); err != nil {
 		vm.Close()
 		return nil, err
@@ -116,20 +121,26 @@ func (e *qjsEngine) call(ctx context.Context, fn string, args map[string]any) (a
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	vm := e.vm
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	done := make(chan struct{})
 	go func() {
+		defer func() { _ = recover() }()
 		select {
 		case <-ctx.Done():
-			e.vm.Interrupt()
+			select {
+			case <-done:
+			default:
+				vm.Interrupt()
+			}
 		case <-done:
 		}
 	}()
 	defer close(done)
 	payload, _ := json.Marshal(args)
-	raw, err := e.vm.Call("__call", fn, string(payload))
+	raw, err := vm.Call("__call", fn, string(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +383,8 @@ function setTimeout(fn) { try { if (typeof fn === 'function') fn(); } catch (e) 
 function setInterval() { return 0; }
 function clearTimeout() {}
 function clearInterval() {}
+function print() {}
+var console = globalThis.console || { log: print, error: print, info: print, warn: print, debug: print };
 function req(url, obj) { return JSON.parse(__req(String(url), JSON.stringify(obj || {}))); }
 function joinUrl(base, rel) { return __joinUrl(String(base || ''), String(rel || '')); }
 function pdfh(html, expr) { return __pdfh(String(html || ''), String(expr || '')); }

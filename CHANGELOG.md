@@ -5,8 +5,8 @@
 - TVBox 点播配置可以加载。支持 BOM、注释、Base64、图片外壳和 `$#key#$` 解密；type 0 XML 与 type 1/4 JSON 采集；`csp_`、JAR 和 Python 站点只展示原因。`urls` 多仓配置先选择一条线路，最多跟随 4 层。`hosts` 改写连接地址，`rules` 去掉匹配的 HLS 广告分片。HTTP-FLV 在有 ffmpeg 时转成 fMP4。
 - 返回网页的播放地址（`parse:1`、`jx` 或 HTML）会先从 video/source、MacCMS `player_` 对象、iframe 和媒体链接里提取直链，再按 flag 尝试配置里的 type 0/1 解析接口。解析出的地址进入连播队列，桌面和网页模式都可用。
 - 桌面模式在静态解析失败后，用隐藏的无痕 WebView 嗅探页面里的媒体请求，并在本播放器里播放。12 秒内没有结果会给出明确错误。网页模式不做这一步。
-- type 3 的 JavaScript 站点先在内置 QuickJS 里运行。脚本从用户配置的地址加载，不随应用打包。QuickJS 无法运行时，如果本机有 Node，仍走原来的 Node 路径。
-- 同组同名直播频道合并为一条，保留多条线路。`#EXTHTTP`、`proxy://do=live` 和嵌套分组可以读取。内置播放器和网页播放器在出错或 15 秒没有画面时自动换下一条线路。
+- type 3 的 JavaScript 站点先在内置 QuickJS 里运行。脚本从用户配置的地址加载，不随应用打包。QuickJS 会展开 `import`/`export`（含 `export default`）并提供 `print`。脚本地址返回网页时拒绝执行；401/403 会换一套常见请求头再试一次。QuickJS 无法运行时，如果本机有 Node，仍走原来的 Node 路径，并把脚本里的远程 `import` 下载到本地再加载。
+- 同组同名直播频道合并为一条，保留多条线路。`#EXTHTTP`、`proxy://do=live` 和嵌套分组可以读取。`proxy://do=live` 会展开成直播列表，不再把列表地址本身当作播放地址。内置播放器和网页播放器在出错或 15 秒没有画面时自动换下一条线路。
 
 ## 0.4.2
 
