@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -25,7 +26,7 @@ type Server struct {
 
 	mu      sync.Mutex
 	ln      net.Listener
-	engines map[string]*drpyEngine
+	engines map[string]scriptEngine
 	lives   map[int][]Channel
 	srv     *http.Server
 }
@@ -39,18 +40,10 @@ type Options struct {
 	HTTP       *http.Client
 }
 
-// NewServer prepares the adapter. JavaScript sites stay disabled when Node
-// is missing so the rest of the subscription can still load.
+// NewServer prepares the adapter. JavaScript sites stay enabled: QuickJS
+// runs them in-process, and Node is used only when that fails.
 func NewServer(cfg *Config, opt Options) *Server {
 	sites := append([]Source(nil), cfg.Sites...)
-	if strings.TrimSpace(opt.Node) == "" {
-		for i := range sites {
-			if sites[i].Kind == "drpy" {
-				sites[i].Unsupported = true
-				sites[i].Reason = "这个站点是 JavaScript（drpy），但没有找到 Node.js 18 或更新版本"
-			}
-		}
-	}
 	if len(cfg.Lives) > 0 {
 		zero := 0
 		sites = append(sites, Source{
@@ -62,7 +55,7 @@ func NewServer(cfg *Config, opt Options) *Server {
 	if client == nil {
 		client = HTTPClient(cfg.Hosts, 25*time.Second)
 	}
-	return &Server{cfg: cfg, sites: sites, client: client, opt: opt, engines: map[string]*drpyEngine{}, lives: map[int][]Channel{}}
+	return &Server{cfg: cfg, sites: sites, client: client, opt: opt, engines: map[string]scriptEngine{}, lives: map[int][]Channel{}}
 }
 
 // Sites is the catalog exposed to the player, including unsupported entries.
@@ -109,7 +102,7 @@ func (s *Server) Stop() {
 	srv := s.srv
 	s.ln = nil
 	engines := s.engines
-	s.engines = map[string]*drpyEngine{}
+	s.engines = map[string]scriptEngine{}
 	s.mu.Unlock()
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -254,14 +247,14 @@ func (s *Server) drpy(ctx context.Context, src Source, action string, body map[s
 	}
 }
 
-func (s *Server) engine(ctx context.Context, src Source) (*drpyEngine, error) {
+func (s *Server) engine(ctx context.Context, src Source) (scriptEngine, error) {
 	s.mu.Lock()
 	if e := s.engines[src.Key]; e != nil {
 		s.mu.Unlock()
 		return e, nil
 	}
 	s.mu.Unlock()
-	e, err := startDrpy(ctx, s.opt, s.cfg.Hosts, src)
+	e, err := s.startScript(ctx, src)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +270,23 @@ func (s *Server) engine(ctx context.Context, src Source) (*drpyEngine, error) {
 	}
 	s.engines[src.Key] = e
 	return e, nil
+}
+
+func (s *Server) startScript(ctx context.Context, src Source) (scriptEngine, error) {
+	qjs, qerr := startQuickJS(ctx, s.opt, s.client, src)
+	if qerr == nil {
+		if s.opt.Log != nil {
+			s.opt.Log("JavaScript 站点使用内置 QuickJS")
+		}
+		return qjs, nil
+	}
+	if s.opt.Log != nil {
+		s.opt.Log("QuickJS 未能运行该脚本，改用 Node: " + qerr.Error())
+	}
+	if strings.TrimSpace(s.opt.Node) == "" {
+		return nil, fmt.Errorf("内置 QuickJS 无法运行这个脚本（%s），也没有 Node.js 可以回退", qerr.Error())
+	}
+	return startDrpy(ctx, s.opt, s.cfg.Hosts, src)
 }
 
 func (s *Server) live(ctx context.Context, action string, body map[string]any) (any, int, error) {

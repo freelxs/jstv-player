@@ -13,7 +13,7 @@
 ## 功能
 
 - **直播订阅**：支持 M3U/TXT 分组、台标、UA/Referer、自带 headers、TVBox lives 与图片包装配置。直播只支持 HTTP(S) 媒体，EPG 和其他传输协议尚未实现
-- **TVBox 点播**：JSON 配置可含 BOM、注释、Base64、图片外壳和 `$#key#$` AES。type 0 XML、type 1/4 JSON 采集接口直接请求；type 3 的 `.js` 站点用 Node 跑 drpy；`csp_`、JAR 和 Python 站点只展示原因、不执行。`urls` 多仓配置先选择一条线路，最多跟随 4 层。`hosts` 改写连接地址，`rules` 去掉匹配的 HLS 广告分片。HTTP-FLV 在安装了 ffmpeg 时转成 fMP4。Docker 镜像带 ffmpeg
+- **TVBox 点播**：JSON 配置可含 BOM、注释、Base64、图片外壳和 `$#key#$` AES。type 0 XML、type 1/4 JSON 采集接口直接请求；type 3 的 `.js` 站点先用内置 QuickJS 运行（不打包 drpy2，脚本从配置地址加载），跑不了再回退到 Node。`csp_`、JAR 和 Python 站点只展示原因、不执行。`urls` 多仓配置先选择一条线路，最多跟随 4 层。`hosts` 改写连接地址，`rules` 去掉匹配的 HLS 广告分片。HTTP-FLV 在安装了 ffmpeg 时转成 fMP4。Docker 镜像带 ffmpeg
 - **多订阅**：在设置里添加、重命名、删除多个插件或直播地址（`.../index.js.md5` 或 `.../index.js`），左上角随时切换；切换时停止旧插件进程、启动新的。每个订阅的插件文件和数据分开存放
 - 自动下载 `index.js`、`index.config.js`，校验发布者提供的 md5（默认不一致时只提示）；本机保存包含脚本和可执行配置的 SHA-256 TOFU 清单，首次使用、脚本或配置变化均需用户确认后才运行；完整版本成功启动后才提交
 - 站点列表、分类浏览与翻页、单站/全站搜索（逐站返回成功/失败状态，近期失败站点后置）；Home/Category 有按订阅代际隔离的短期缓存
@@ -35,7 +35,7 @@
 ## 运行依赖
 
 - macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）。Linux 上用内置播放器看 HLS 时，WebKitGTK 还需要 GStreamer 解码插件：`gstreamer1.0-plugins-good`、`gstreamer1.0-plugins-bad`、`gstreamer1.0-libav`。Debian 包把这三项列为依赖。AC3 等专利编码另需 `gstreamer1.0-plugins-ugly`。Fedora 上对应包名是 `gstreamer1-plugins-good`、`gstreamer1-plugins-bad-free` 和 `gstreamer1-libav`。
-- Node.js 18+（仅 JS 插件需要；原生直播不需要）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
+- Node.js 18+（CatPaw 插件需要；TVBox 的 `.js` 站点优先用内置 QuickJS，失败时才需要 Node。原生直播不需要）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io) 或 [SenPlayer](https://apps.apple.com/app/senplayer-media-player/id6443975850)。
 - 内置播放器在桌面窗口里播放，用的是和网页模式同一套 HTML5 `<video>` 与 hls.js。macOS 的 web view 能直接播 HLS，会走系统解码；Windows WebView2 和 Linux WebKitGTK 在有 Media Source Extensions 时由 hls.js 把 HLS 转成 fMP4。没有 MSE 或缺少解码插件时，窗口里会提示改用外部播放器。因为这一点，还没保存过播放器设置时，Windows 仍优先 PotPlayer、然后 mpv、最后内置；Linux 优先 mpv、然后内置。macOS 仍默认内置。已经保存的选择不会被改掉。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
 - 设置 → 播放里可以选「自定义播放器」，用系统文件对话框选择 macOS `.app`、Windows `.exe` 或 Linux 可执行文件，并可选附加参数。参数里的 `{url}` 会换成代理地址或连播 M3U；不写 `{url}` 时地址追加在参数末尾。程序以参数列表启动，不经过 shell。路径必须存在且能启动，否则保存和播放都会提示错误。

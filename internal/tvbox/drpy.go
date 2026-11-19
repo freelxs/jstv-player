@@ -23,6 +23,12 @@ import (
 //go:embed jsboot
 var jsbootFS embed.FS
 
+// scriptEngine runs one type-3 spider, either in QuickJS or Node.
+type scriptEngine interface {
+	call(ctx context.Context, fn string, args map[string]any) (any, error)
+	stop()
+}
+
 type drpyEngine struct {
 	cmd    *exec.Cmd
 	base   string
