@@ -316,6 +316,14 @@ func NormalizePlay(r M) []Stream {
 	case string:
 		parse = v == "1"
 	}
+	switch v := r["jx"].(type) {
+	case float64:
+		parse = parse || v == 1
+	case bool:
+		parse = parse || v
+	case string:
+		parse = parse || v == "1"
+	}
 	headers := map[string]string{}
 	if h, ok := r["header"].(map[string]any); ok {
 		for k, v := range h {
