@@ -144,6 +144,7 @@ func playerMethods() map[string]reflect.Method {
 		"Detail": true, "GetHistory": true, "Open": true, "PlayEpisodes": true,
 		"GetFavorites": true, "ToggleFavorite": true, "ReportProgress": true,
 		"ForceRefreshSource": true, "StartCachedSource": true, "OpenConfigPage": true, "AddSubscriptionWithType": true, "UpdateSubscriptionWithType": true,
+		"SelectRepoLine":   true,
 		"PickCustomPlayer": true, "WebPlay": true, "WebAdvance": true,
 	}
 	out := map[string]reflect.Method{}

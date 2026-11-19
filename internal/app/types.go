@@ -10,7 +10,14 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/freelxs/jstv-player/internal/catvod"
 	"github.com/freelxs/jstv-player/internal/live"
+	"github.com/freelxs/jstv-player/internal/tvbox"
 )
+
+// sourceRuntime is the running subscription: a Node plugin or a TVBox adapter.
+type sourceRuntime interface {
+	Base() string
+	Stop()
+}
 
 // Settings are kept in settings.json in the user data directory.
 type Settings struct {
@@ -57,6 +64,15 @@ type LoadResult struct {
 	TrustURL          string        `json:"trustURL,omitempty"`
 	TrustScriptSHA256 string        `json:"trustScriptSHA256,omitempty"`
 	TrustConfigSHA256 string        `json:"trustConfigSHA256,omitempty"`
+	// RepoPick asks the UI to choose one line from a multi-repository config.
+	RepoPick  bool       `json:"repoPick,omitempty"`
+	RepoLines []RepoLine `json:"repoLines,omitempty"`
+}
+
+// RepoLine is one address inside a multi-repository config.
+type RepoLine struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // DetailResult is a vod with its play lines parsed.
@@ -97,7 +113,8 @@ type Player struct {
 
 	mu           sync.Mutex
 	settings     Settings
-	host         *catvod.Host
+	host         sourceRuntime
+	vodConfig    *tvbox.Config
 	liveCatalog  *live.Catalog
 	liveAPI      string
 	sites        []catvod.Site

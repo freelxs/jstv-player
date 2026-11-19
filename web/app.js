@@ -173,11 +173,18 @@ async function loadSource(fn = () => call('LoadSource')) {
     setView(skeletonGrid());
     const r = await fn();
     if (!browseRequests.current(request) || seq !== st.loadSeq) return; // a newer navigation or switch won
+    if (r.repoPick) {
+      st.settings = await call('GetSettings');
+      renderSwitcher();
+      showRepoPicker(r.repoLines || []);
+      return;
+    }
     if (r.trustRequired) {
       trustReload = fn;
       st.settings = await call('GetSettings');
       renderSwitcher();
-      $('#trustTitle').textContent = r.trustSHA256 ? '确认插件版本' : '插件更新需要确认';
+      const tvbox = r.subscription && (r.subscription.type === 'tvbox' || /\.json(?:$|[?#])/i.test(r.subscription.url || ''));
+      $('#trustTitle').textContent = tvbox ? '确认 JSON 配置' : (r.trustSHA256 ? '确认插件版本' : '插件更新需要确认');
       $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\n版本清单 SHA-256：${r.trustSHA256}${r.trustScriptSHA256 ? `\n主脚本：${r.trustScriptSHA256}\n配置脚本：${r.trustConfigSHA256 || "无"}` : ""}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
       $('#sourceTrust').dataset.pending = '1';
       if (!$('#sourceTrust').open) $('#sourceTrust').showModal();
@@ -191,10 +198,12 @@ async function loadSource(fn = () => call('LoadSource')) {
     st.settings = reloadedSettings;
     renderSwitcher();
     st.sites = r.sites || [];
-    setDot('ok'); $('#status').textContent = `${st.sites.length}`;
+    const usable = st.sites.filter((s) => !s.unsupported);
+    setDot('ok'); $('#status').textContent = usable.length === st.sites.length ? `${st.sites.length}` : `${usable.length}/${st.sites.length}`;
     if (r.mismatch) toast('提示：index.js 与发布的 md5 不一致（文件可能已更新）');
     renderSites();
-    if (st.sites.length) selectSite(st.sites[0]);
+    if (usable.length) selectSite(usable[0]);
+    else if (st.sites.length) showUnsupported(st.sites[0]);
     else setView(stateBox({ title: '这个订阅没有站点', text: '插件的 /config 没有返回任何站点。' }));
   } catch (e) {
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
@@ -218,7 +227,19 @@ $('#trustApprove').onclick = async () => {
   } catch (e) { toast(errMsg(e), { err: true }); }
   finally { b.disabled = false; }
 };
-const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '支持 JS 插件、M3U/TXT 直播和 TVBox lives，可添加多个并随时切换。',
+function showRepoPicker(lines) {
+  setDot(''); $('#status').textContent = '选择线路';
+  const actions = (lines || []).map((line) => el('button', { class: 'btn', onclick: () => loadSource(() => call('SelectRepoLine', line.name)) }, line.name));
+  if (activeSub()?.line) actions.push(el('button', { class: 'ghost', onclick: () => loadSource(() => call('SelectRepoLine', '')) }, '重新选择'));
+  setView(stateBox({ ico: 'plug', title: '这个地址是多仓配置', text: '选择一条线路后再加载其中的点播配置。', actions }));
+}
+function showUnsupported(s) {
+  st.site = s; st.stack = []; st.tid = null; st.page = 1; st.filters = {};
+  $('#back').hidden = true; $('#classes').replaceChildren(); $('#filters').replaceChildren(); $('#filters').hidden = true;
+  renderSites();
+  setView(stateBox({ title: s.name || s.key || '不支持的站点', text: s.reason || '这个站点不能在桌面或网页模式运行。' }));
+}
+const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '支持 JS 插件、M3U/TXT 直播、TVBox 直播和 TVBox 点播配置，可添加多个并随时切换。',
   actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
 const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
@@ -226,7 +247,12 @@ function renderSites() {
   const box = $('#sites'); box.replaceChildren();
   for (const s of st.sites) {
     const name = s.name || s.key;
-    box.append(el('button', { class: 'site' + (st.site && st.site.api === s.api ? ' active' : ''), title: name, onclick: () => selectSite(s) },
+    const off = !!s.unsupported;
+    box.append(el('button', {
+      class: 'site' + (st.site && st.site.api === s.api ? ' active' : '') + (off ? ' unsupported' : ''),
+      title: off ? `${name}\n${s.reason || '这个站点不能在这里运行'}` : name,
+      onclick: () => off ? showUnsupported(s) : selectSite(s),
+    },
       el('span', { class: 'av', style: `--h:${hue(name)}` }, [...name.replace(/[^\p{L}\p{N}]/gu, '')][0]?.toUpperCase() || '·'),
       el('span', { class: 'nm' }, name)));
   }
@@ -426,6 +452,10 @@ async function search(wd) {
   const request = browseRequests.begin();
   setView(skeletonGrid(12));
   if ($('#onlySite').checked && st.site) {
+    if (st.site.unsupported) {
+      setView(stateBox({ title: st.site.name || '不支持的站点', text: st.site.reason || '这个站点不能搜索。' }));
+      return;
+    }
     try {
       const r = await call('Search', st.site.api, wd, 1);
       if (!browseRequests.current(request)) return;
