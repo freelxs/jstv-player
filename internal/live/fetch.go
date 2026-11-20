@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/freelxs/jstv-player/internal/netx"
 )
 
 const maxSubscriptionBytes = 16 << 20
@@ -49,6 +51,9 @@ func (l Loader) Load(ctx context.Context, raw string) (*Catalog, error) {
 func (l Loader) load(ctx context.Context, raw string, headers map[string]string, group string, out *Catalog, seen map[string]bool, depth int) error {
 	if depth > 4 || len(seen) >= maxReferences {
 		return errors.New("直播订阅引用过多或嵌套过深")
+	}
+	if ascii, err := netx.ASCIIURL(raw); err == nil && ascii != "" {
+		raw = ascii
 	}
 	keyBytes, _ := json.Marshal([]any{raw, headers})
 	key := string(keyBytes)
@@ -98,6 +103,9 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 	if base == nil {
 		base = u
 	}
+	if IsHLSPlayback(data) {
+		return l.addPlaybackChannel(base, headers, group, out)
+	}
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("{")) {
 		return l.tvbox(ctx, data, base, group, out, seen, depth)
 	}
@@ -117,6 +125,61 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 	return nil
 }
 
+// addPlaybackChannel records the live address itself as one channel. The body
+// was an HLS media or master playlist, so the segments are not channels.
+func (l Loader) addPlaybackChannel(base *url.URL, headers map[string]string, group string, out *Catalog) error {
+	if base == nil || base.String() == "" {
+		return errors.New("直播地址无效")
+	}
+	name := strings.TrimSpace(group)
+	if name == "" {
+		name = "直播"
+	}
+	ch := Channel{Name: name, Group: name, URL: base.String(), Headers: cloneHeaders(headers)}
+	if ch.Headers == nil {
+		ch.Headers = map[string]string{}
+	}
+	if err := validateHeaders(ch.Headers); err != nil {
+		return err
+	}
+	ch.Lines = []Line{{URL: ch.URL, Headers: cloneHeaders(ch.Headers)}}
+	ch.ID = channelID(ch)
+	out.Channels = append(out.Channels, ch)
+	if len(out.Channels) > MaxChannels {
+		return errors.New("直播订阅频道过多")
+	}
+	return nil
+}
+
+// ExpandLives reads one live object, or a document with a lives array, and
+// expands URLs, nested channels, and proxy lists. An HLS playlist URL becomes
+// one channel named after that live entry.
+func (l Loader) ExpandLives(ctx context.Context, data []byte, base *url.URL) (*Catalog, error) {
+	if base == nil {
+		base = &url.URL{Scheme: "https", Host: "example.invalid", Path: "/"}
+	}
+	payload := bytes.TrimSpace(data)
+	if len(payload) > 0 && payload[0] == '{' {
+		var probe map[string]json.RawMessage
+		if json.Unmarshal(jsonData(payload), &probe) == nil {
+			if _, ok := probe["lives"]; !ok {
+				wrapped := make([]byte, 0, len(payload)+12)
+				wrapped = append(wrapped, `{"lives":[`...)
+				wrapped = append(wrapped, payload...)
+				wrapped = append(wrapped, `]}`...)
+				payload = wrapped
+			}
+		}
+	}
+	catalog := &Catalog{}
+	seen := map[string]bool{}
+	if err := l.tvbox(ctx, payload, base, "", catalog, seen, 0); err != nil {
+		return catalog, err
+	}
+	catalog.Channels = deduplicate(catalog.Channels)
+	return catalog, nil
+}
+
 type liveChannel struct {
 	Name     string            `json:"name"`
 	Group    string            `json:"group"`
@@ -131,6 +194,7 @@ type liveSource struct {
 	URL      json.RawMessage   `json:"url"`
 	Header   map[string]string `json:"header"`
 	UA       string            `json:"ua"`
+	Referer  string            `json:"referer"`
 	Channels []liveChannel     `json:"channels"`
 	Groups   []liveChannel     `json:"groups"`
 }
@@ -158,6 +222,9 @@ func (l Loader) tvbox(ctx context.Context, data []byte, base *url.URL, group str
 		}
 		if source.UA != "" {
 			headers["User-Agent"] = source.UA
+		}
+		if source.Referer != "" {
+			headers["Referer"] = source.Referer
 		}
 		if err := validateHeaders(headers); err != nil {
 			return err

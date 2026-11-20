@@ -17,10 +17,12 @@ type Rule struct {
 }
 
 // LiveSource is one live playlist entry from the configuration.
+// Raw is the original object so nested channels and proxy lists can be expanded.
 type LiveSource struct {
 	Name    string
 	URL     string
 	Headers map[string]string
+	Raw     json.RawMessage
 }
 
 // Source is one site after addresses are resolved and the runtime is chosen.
@@ -145,11 +147,13 @@ func (f flexInt) ptr() *int {
 }
 
 type liveJSON struct {
-	Name    string          `json:"name"`
-	URL     string          `json:"url"`
-	UA      string          `json:"ua"`
-	Header  json.RawMessage `json:"header"`
-	Referer string          `json:"referer"`
+	Name     string          `json:"name"`
+	URL      string          `json:"url"`
+	UA       string          `json:"ua"`
+	Header   json.RawMessage `json:"header"`
+	Referer  string          `json:"referer"`
+	Channels json.RawMessage `json:"channels"`
+	Groups   json.RawMessage `json:"groups"`
 }
 
 // Parse decodes a subscription and resolves relative addresses against origin,
@@ -213,11 +217,23 @@ func Parse(data []byte, origin string) (*Config, error) {
 		classify(&src)
 		cfg.Sites = append(cfg.Sites, src)
 	}
-	var lives []liveJSON
-	_ = json.Unmarshal(obj["lives"], &lives)
-	for _, l := range lives {
-		addr, err := resolveRef(origin, l.URL)
-		if err != nil {
+	var rawLives []json.RawMessage
+	_ = json.Unmarshal(obj["lives"], &rawLives)
+	for _, raw := range rawLives {
+		var l liveJSON
+		if json.Unmarshal(raw, &l) != nil {
+			continue
+		}
+		addr := ""
+		if strings.TrimSpace(l.URL) != "" {
+			resolved, err := resolveRef(origin, l.URL)
+			if err != nil {
+				continue
+			}
+			addr = resolved
+		}
+		inline := len(bytesTrim(l.Channels)) > 2 || len(bytesTrim(l.Groups)) > 2
+		if addr == "" && !inline {
 			continue
 		}
 		h := parseHeader(l.Header)
@@ -237,7 +253,7 @@ func Parse(data []byte, origin string) (*Config, error) {
 		if name == "" {
 			name = "直播"
 		}
-		cfg.Lives = append(cfg.Lives, LiveSource{Name: name, URL: addr, Headers: h})
+		cfg.Lives = append(cfg.Lives, LiveSource{Name: name, URL: addr, Headers: h, Raw: append(json.RawMessage(nil), raw...)})
 	}
 	if len(cfg.Sites) == 0 && len(cfg.Lives) == 0 {
 		if len(cfg.Lines) > 0 {
@@ -443,6 +459,10 @@ func classify(s *Source) {
 			s.Reason = "Python 站点需要单独的 Python 运行时，当前版本没有内置，所以这个站点不能运行"
 			return
 		default:
+			if kind, ok := nativeClass(s.API); ok {
+				s.Kind = kind
+				return
+			}
 			s.Kind = "jar"
 			s.Unsupported = true
 			s.Reason = "csp_ / JAR / DEX 站点依赖 Android 接口。桌面和网页模式没有 JVM、DEX 转码和 Android 兼容层，所以这个站点只能显示、不能打开"
@@ -456,6 +476,23 @@ func classify(s *Source) {
 		return
 	}
 	s.Reason = "不支持的站点类型"
+}
+
+func nativeClass(api string) (string, bool) {
+	name := strings.TrimSpace(api)
+	if i := strings.IndexAny(name, "?#"); i >= 0 {
+		name = name[:i]
+	}
+	switch strings.TrimSpace(name) {
+	case "csp_XBPQ":
+		return "xbpq", true
+	case "csp_AppYs", "csp_AppYsV2":
+		return "appys", true
+	case "csp_XYQHiker", "csp_XYQHikerAL", "csp_XYQBiu":
+		return "xyq", true
+	default:
+		return "", false
+	}
 }
 
 func extMentionsPy(raw json.RawMessage) bool {
@@ -738,11 +775,13 @@ func bytesTrimRight(b []byte) []byte {
 	return b
 }
 
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
+func firstNonEmpty(items ...string) string {
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			return item
+		}
 	}
-	return b
+	return ""
 }
 
 func itoa(n int) string {

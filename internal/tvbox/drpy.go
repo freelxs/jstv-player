@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/freelxs/jstv-player/internal/netx"
 )
 
 //go:embed jsboot
@@ -450,12 +453,18 @@ func Fetch(client *http.Client, raw string, limit int64) ([]byte, string, error)
 	return FetchContext(context.Background(), client, raw, limit)
 }
 
-// FetchContext is Fetch bound to ctx.
+// FetchContext is Fetch bound to ctx. TVBox documents are requested with an
+// okhttp user agent first, because some subscriptions return a navigation page
+// to browsers and the real document to a TV client. A browser agent is used
+// only when the first response is HTML.
 func FetchContext(ctx context.Context, client *http.Client, raw string, limit int64) ([]byte, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	raw = strings.TrimSpace(raw)
+	if ascii, err := netx.ASCIIURL(raw); err == nil && ascii != "" {
+		raw = ascii
+	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, "", errors.New("订阅地址需要是 http(s) URL")
@@ -463,11 +472,40 @@ func FetchContext(ctx context.Context, client *http.Client, raw string, limit in
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		body, final, err := fetchOnce(ctx, client, raw, limit, "okhttp/4.12.0")
+		if err != nil {
+			last = err
+			if !retryableFetch(err) || attempt == 1 {
+				return nil, "", err
+			}
+			continue
+		}
+		if isHTML(body) {
+			if alt, final2, err2 := fetchOnce(ctx, client, raw, limit, "Mozilla/5.0 JSTVPlayer"); err2 == nil && !isHTML(alt) {
+				return alt, final2, nil
+			}
+		}
+		return body, final, nil
+	}
+	return nil, "", last
+}
+
+func retryableFetch(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func fetchOnce(ctx context.Context, client *http.Client, raw string, limit int64, ua string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
+	req.Header.Set("User-Agent", ua)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

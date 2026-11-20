@@ -8,7 +8,7 @@ import (
 )
 
 func replace(src, dst string) error {
-	return retryReplace(func() error {
+	return retryN(40, func() error {
 		s, err := syscall.UTF16PtrFromString(src)
 		if err != nil {
 			return err
@@ -23,8 +23,5 @@ func replace(src, dst string) error {
 			return callErr
 		}
 		return nil
-	}, func(err error) bool {
-		code, ok := err.(syscall.Errno)
-		return ok && (code == 5 || code == 32 || code == 33) // access denied, sharing violation, lock violation
-	})
+	}, windowsSharing)
 }
