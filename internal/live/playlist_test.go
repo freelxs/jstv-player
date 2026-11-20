@@ -27,6 +27,58 @@ func TestPlaylistMetadataHeadersAndRelativeURLs(t *testing.T) {
 	}
 }
 
+func TestChannelListKeepsCustomEXTXTagsAndInlineAgent(t *testing.T) {
+	text := "#EXTM3U\n#EXT-X-APP FIXTURE\n#EXT-X-SUB-URL https://cdn.example/list.m3u\n#EXTINF:-1 tvg-id=\"n1\" http-user-agent=\"player-a\" group-title=\"新闻\",台一\nhttps://cdn.example/a.m3u8\n#EXTINF:-1 group-title=\"新闻\",台二\nhttps://cdn.example/b.m3u8\n"
+	channels, err := Playlist([]byte(text), nil)
+	if err != nil || len(channels) != 2 {
+		t.Fatalf("channel list rejected: %+v %v", channels, err)
+	}
+	if channels[0].Name != "台一" || channels[0].Headers["User-Agent"] != "player-a" || channels[0].Group != "新闻" {
+		t.Fatalf("%+v", channels[0])
+	}
+	if IsHLSPlayback([]byte(text)) {
+		t.Fatal("channel list classified as HLS")
+	}
+}
+
+func TestHLSPlaylistIsOneChannelNamedForTheLive(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tv.json":
+			fmt.Fprintf(w, `{"lives":[{"name":"单路","url":"%s/stream"}]}`, srv.URL)
+		case "/stream":
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nhigh.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=50\nlow.m3u8\n")
+		case "/media":
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:6,\nseg.ts\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cat, err := (Loader{AllowLAN: true}).Load(context.Background(), srv.URL+"/tv.json")
+	if err != nil || len(cat.Channels) != 1 {
+		t.Fatalf("%v %+v warnings=%v", err, cat, catWarnings(cat))
+	}
+	if cat.Channels[0].Name != "单路" || cat.Channels[0].URL != srv.URL+"/stream" {
+		t.Fatalf("%+v", cat.Channels[0])
+	}
+	media := "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg.ts\n"
+	if !IsHLSPlayback([]byte(media)) {
+		t.Fatal("media playlist not detected")
+	}
+	if _, err := Playlist([]byte(media), nil); err == nil || !strings.Contains(err.Error(), "HLS") {
+		t.Fatal(err)
+	}
+}
+
+func catWarnings(c *Catalog) []string {
+	if c == nil {
+		return nil
+	}
+	return c.Warnings
+}
+
 func TestPlaylistRejectsHLSAndPreservesHeaderVariants(t *testing.T) {
 	for _, tag := range []string{"#EXT-X-TARGETDURATION:6", "#EXT-X-STREAM-INF:BANDWIDTH=100"} {
 		if _, err := Playlist([]byte("#EXTM3U\n"+tag+"\n#EXTINF:6,part\nhttps://example.com/seg.ts"), nil); err == nil {

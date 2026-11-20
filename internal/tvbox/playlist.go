@@ -50,6 +50,14 @@ func ParsePlaylist(text, origin string, headers map[string]string) ([]Channel, e
 				}
 			}
 			entry = cloneHeader(headers)
+			if ua := attr(line, "http-user-agent"); ua != "" {
+				entry["User-Agent"] = ua
+			}
+			if ref := attr(line, "http-referrer"); ref != "" {
+				entry["Referer"] = ref
+			} else if ref := attr(line, "http-referer"); ref != "" {
+				entry["Referer"] = ref
+			}
 		case strings.HasPrefix(line, "#EXTGRP:"):
 			group = strings.TrimSpace(strings.TrimPrefix(line, "#EXTGRP:"))
 		case strings.HasPrefix(line, "#EXTVLCOPT:"):

@@ -53,10 +53,8 @@ func Playlist(data []byte, base *url.URL) ([]Channel, error) {
 		return nil, errors.New("直播列表需要 UTF-8 编码")
 	}
 	text := strings.TrimPrefix(string(data), "\ufeff")
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#EXT-X-") {
-			return nil, errors.New("这是 HLS 播放清单，请添加频道订阅列表")
-		}
+	if IsHLSPlayback(data) {
+		return nil, errors.New("这是 HLS 播放清单，请添加频道订阅列表")
 	}
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
@@ -87,6 +85,10 @@ func Playlist(data []byte, base *url.URL) ([]Channel, error) {
 					pending.Logo = resolveURL(base, value)
 				case "tvg-id":
 					pending.TVGID = value
+				case "http-user-agent", "user-agent":
+					pending.Headers["User-Agent"] = value
+				case "http-referrer", "http-referer", "referer":
+					pending.Headers["Referer"] = value
 				}
 			}
 		case strings.HasPrefix(line, "#EXTGRP:"):
