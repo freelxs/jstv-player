@@ -38,6 +38,17 @@ func TestRetryReplaceStopsOnPermanentError(t *testing.T) {
 	}
 }
 
+func TestRetryNHonorsItsOwnLimit(t *testing.T) {
+	var calls atomic.Int32
+	err := retryN(3, func() error {
+		calls.Add(1)
+		return errors.New("still transient")
+	}, func(error) bool { return true })
+	if err == nil || calls.Load() != 3 {
+		t.Fatalf("calls=%d err=%v", calls.Load(), err)
+	}
+}
+
 func TestRetryReplaceCapsAttempts(t *testing.T) {
 	want := errors.New("persistent transient failure")
 	var calls atomic.Int32

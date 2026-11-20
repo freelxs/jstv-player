@@ -17,6 +17,10 @@ func JSON(path string, value any) error {
 }
 
 func Write(path string, data []byte, mode os.FileMode) error {
+	return retryN(writeAttempts(), func() error { return writeOnce(path, data, mode) }, writeTransient)
+}
+
+func writeOnce(path string, data []byte, mode os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".write-*.tmp")
 	if err != nil {
 		return err

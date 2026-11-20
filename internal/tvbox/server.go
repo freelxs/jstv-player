@@ -1,6 +1,7 @@
 package tvbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freelxs/jstv-player/internal/catvod"
+	"github.com/freelxs/jstv-player/internal/live"
 )
 
 // Server speaks the CatPawOpen site protocol for one TVBox subscription.
@@ -172,6 +174,12 @@ func (s *Server) dispatch(ctx context.Context, src Source, action string, body m
 		return s.cms(ctx, src, action, body)
 	case "drpy":
 		return s.drpy(ctx, src, action, body)
+	case "xbpq":
+		return s.crawl(ctx, src, action, body, false)
+	case "xyq":
+		return s.crawl(ctx, src, action, body, true)
+	case "appys":
+		return s.appys(ctx, src, action, body)
 	default:
 		return nil, http.StatusNotImplemented, errors.New(src.Reason)
 	}
@@ -362,6 +370,9 @@ func (s *Server) channels(ctx context.Context, idx int) ([]Channel, error) {
 	}
 	s.mu.Unlock()
 	src := s.cfg.Lives[idx]
+	if len(bytes.TrimSpace(src.Raw)) > 0 {
+		return s.expandConfiguredLive(ctx, src)
+	}
 	if isDeviceProxy(src.URL) {
 		return nil, errors.New("这个直播列表指向本机 9978 端口，桌面和网页模式没有这个代理")
 	}
@@ -385,7 +396,18 @@ func (s *Server) channels(ctx context.Context, idx int) ([]Channel, error) {
 	if resp.StatusCode != 200 {
 		return nil, errors.New("直播列表 HTTP " + strconv.Itoa(resp.StatusCode))
 	}
-	chs, err := ParsePlaylist(string(body), src.URL, src.Headers)
+	final := src.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		final = resp.Request.URL.String()
+	}
+	if live.IsHLSPlayback(body) {
+		name := strings.TrimSpace(src.Name)
+		if name == "" {
+			name = "直播"
+		}
+		return []Channel{{Name: name, Group: name, URL: final, Headers: cloneHeader(src.Headers)}}, nil
+	}
+	chs, err := ParsePlaylist(string(body), final, src.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +420,49 @@ func (s *Server) channels(ctx context.Context, idx int) ([]Channel, error) {
 	}
 	s.mu.Unlock()
 	return chs, nil
+}
+
+func (s *Server) expandConfiguredLive(ctx context.Context, src LiveSource) ([]Channel, error) {
+	if isDeviceProxy(src.URL) {
+		return nil, errors.New("这个直播列表指向本机 9978 端口，桌面和网页模式没有这个代理")
+	}
+	base, err := url.Parse(s.cfg.Origin)
+	if err != nil {
+		return nil, err
+	}
+	cat, err := (live.Loader{Client: s.client, AllowLAN: true}).ExpandLives(ctx, src.Raw, base)
+	if err != nil {
+		return nil, err
+	}
+	var out []Channel
+	for _, ch := range cat.Channels {
+		lines := ch.Lines
+		if len(lines) == 0 && ch.URL != "" {
+			lines = []live.Line{{URL: ch.URL, Headers: ch.Headers}}
+		}
+		for i, line := range lines {
+			if strings.TrimSpace(line.URL) == "" {
+				continue
+			}
+			name := ch.Name
+			if i > 0 {
+				name = fmt.Sprintf("%s #%d", ch.Name, i+1)
+			}
+			out = append(out, Channel{
+				Name: name, Group: ch.Group, URL: line.URL, Logo: ch.Logo, Headers: cloneHeader(line.Headers),
+			})
+			if len(out) >= 8000 {
+				return out, nil
+			}
+		}
+	}
+	if len(out) == 0 {
+		if cat != nil && len(cat.Warnings) > 0 {
+			return nil, errors.New(strings.Join(cat.Warnings, "；"))
+		}
+		return nil, errors.New("这个直播源没有频道")
+	}
+	return out, nil
 }
 
 func parseChannelID(id string) (int, int, error) {

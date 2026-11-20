@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- 直播地址会区分频道列表和 HLS 播放清单。带 `#EXTINF:-1`、`group-title` 或分组行的 M3U 仍按频道解析，自定义的 `#EXT-X-` 标记不再把整份列表拒掉。`#EXT-X-STREAM-INF`、`#EXT-X-TARGETDURATION` 这类媒体或主播放列表则把该直播地址本身收成一个频道，名字用直播源的名称。`#EXTINF` 上的 `http-user-agent` 会带去播放。
+- 订阅地址里的国际化域名会先转成 punycode。配置下载先用 TV 客户端的标识；如果返回的是网页，再换浏览器标识重试。没有 `url`、只有嵌套 `channels` 或 `proxy://do=live` 的直播源也会展开。
+- `csp_XBPQ`、`csp_XYQHiker`（含 `csp_XYQHikerAL`、`csp_XYQBiu`）和 `csp_AppYs` / `csp_AppYsV2` 用 ext 里的公开规则在桌面和网页模式打开分类、详情和播放。其余 `csp_`、JAR 和 DEX 仍然只展示原因：这些类依赖 Android 接口，桌面 JVM 加载不了 spider JAR，DEX 也不能在桌面执行。
+- Windows 上替换正在被读取的文件时，会把「拒绝访问」和共享冲突多试几次，避免偶发的原子写入失败。
+
 ## 0.5.0
 
 - TVBox 点播配置可以加载。支持 BOM、注释、Base64、图片外壳和 `$#key#$` 解密；type 0 XML 与 type 1/4 JSON 采集；`csp_`、JAR 和 Python 站点只展示原因。`urls` 多仓配置先选择一条线路，最多跟随 4 层。`hosts` 改写连接地址，`rules` 去掉匹配的 HLS 广告分片。HTTP-FLV 在有 ffmpeg 时转成 fMP4。

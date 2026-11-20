@@ -56,7 +56,7 @@
   </div>
 
   <div class="pane" data-pane="subs">
-    <p class="hint">支持 JS 插件、M3U/TXT 直播、含 lives 的 TVBox 直播，以及带 sites 的 TVBox 点播配置。多仓配置会先选择一条线路。直播列表不需要 Node.js；点播里的 JavaScript 站点需要 Node，csp_ 站点只展示、不运行。</p>
+    <p class="hint">支持 JS 插件、M3U/TXT 直播、含 lives 的 TVBox 直播，以及带 sites 的 TVBox 点播配置。多仓配置会先选择一条线路。直播列表不需要 Node.js；点播里的 JavaScript 站点需要 Node。csp_XBPQ、csp_XYQHiker 和 csp_AppYs / csp_AppYsV2 由 ext 规则在桌面和网页模式运行；其余 JAR、DEX 和 Python 站点只展示、不运行。</p>
     <ul id="subList" class="sub-list"></ul>
     <form id="subForm" class="sub-form">
       <input id="subFormId" type="hidden">
@@ -105,7 +105,7 @@
     <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；只显示近 7 天，最多 4 MiB）</label>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
-    <p id="appVersion" class="hint small">JSTV Player 0.5.0</p>
+    <p id="appVersion" class="hint small">JSTV Player 0.6.0</p>
   </form>
 
   <div class="pane" data-pane="logs" hidden>
