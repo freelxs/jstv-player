@@ -58,7 +58,7 @@ func (s *webServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求无效"})
 		return
 	}
-	token, err := s.auth.login(clientIP(r), body.Username, body.Password)
+	token, err := s.auth.login(s.auth.requestClientIP(r), body.Username, body.Password)
 	if err != nil {
 		status := http.StatusUnauthorized
 		if err.Error() == "尝试次数过多，请稍后再试" {

@@ -2,7 +2,9 @@ package catvod
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,5 +95,63 @@ func TestFLVWithoutFFmpegExplainsTheGap(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(b), "ffmpeg") {
 		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+}
+
+func TestProxyBlocksDNSRebindingAndDialRewriteToRestrictedIPs(t *testing.T) {
+	secretHit := false
+	secret := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secretHit = true
+		_, _ = w.Write([]byte("loopback-secret"))
+	}))
+	defer secret.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(secret.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origLookup := lookupDialIPs
+	lookupDialIPs = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if host == "rebind.example.com" {
+			return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+		}
+		if host == "metadata.example.com" {
+			return []net.IPAddr{{IP: net.ParseIP("169.254.169.254")}}, nil
+		}
+		return origLookup(ctx, host)
+	}
+	defer func() { lookupDialIPs = origLookup }()
+
+	p := &HeaderProxy{}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{
+		"http://rebind.example.com:" + port + "/seg.ts",
+		"http://metadata.example.com:" + port + "/seg.ts",
+	} {
+		resp, err := http.Get(p.WrapAlways(target, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadGateway || secretHit {
+			t.Fatalf("DNS rebinding to %s was not blocked: status=%d secretHit=%v", target, resp.StatusCode, secretHit)
+		}
+	}
+
+	p.SetDialRewrite(func(addr string) string {
+		if strings.HasPrefix(addr, "cdn.example.com:") {
+			return "127.0.0.1:" + port
+		}
+		return addr
+	})
+	resp, err := http.Get(p.WrapAlways("http://cdn.example.com:"+port+"/seg.ts", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || secretHit {
+		t.Fatalf("dial rewrite to loopback was not blocked: status=%d secretHit=%v", resp.StatusCode, secretHit)
 	}
 }

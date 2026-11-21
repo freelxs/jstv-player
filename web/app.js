@@ -184,7 +184,7 @@ async function loadSource(fn = () => call('LoadSource')) {
       st.settings = await call('GetSettings');
       renderSwitcher();
       const tvbox = r.subscription && (r.subscription.type === 'tvbox' || /\.json(?:$|[?#])/i.test(r.subscription.url || ''));
-      $('#trustTitle').textContent = tvbox ? '确认 JSON 配置' : (r.trustSHA256 ? '确认插件版本' : '插件更新需要确认');
+      $('#trustTitle').textContent = tvbox ? (r.trustScriptSHA256 ? '确认 JSON 配置与远程脚本' : '确认 JSON 配置') : (r.trustSHA256 ? '确认插件版本' : '插件更新需要确认');
       $('#trustMessage').textContent = `来源：${r.trustURL || '（地址不可解析）'}\n版本清单 SHA-256：${r.trustSHA256}${r.trustScriptSHA256 ? `\n主脚本：${r.trustScriptSHA256}\n配置脚本：${r.trustConfigSHA256 || "无"}` : ""}${r.mismatch ? `\n警告：发布者 MD5 不一致（本地 ${r.md5} / 发布 ${r.expectedMd5}）` : ''}`;
       $('#sourceTrust').dataset.pending = '1';
       if (!$('#sourceTrust').open) $('#sourceTrust').showModal();

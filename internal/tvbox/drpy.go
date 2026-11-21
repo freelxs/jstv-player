@@ -50,7 +50,7 @@ func startDrpy(ctx context.Context, opt Options, hosts map[string]string, src So
 	if err != nil {
 		return nil, err
 	}
-	extURL, extFile, extJSON, err := materializeExt(ctx, clientFor(opt), dir, json.RawMessage(absolutizeExtJSON(src.API, src.Ext)))
+	extURL, extFile, extJSON, err := materializeExt(ctx, opt, clientFor(opt), dir, json.RawMessage(absolutizeExtJSON(src.API, src.Ext)))
 	if err != nil {
 		return nil, err
 	}
@@ -210,11 +210,11 @@ func prepareDrpy(ctx context.Context, opt Options, src Source) (string, error) {
 	if client == nil {
 		client = HTTPClient(nil, 60*time.Second)
 	}
-	body, err := fetchURLHeaders(ctx, client, script.String(), src.Header)
+	body, err := fetchScriptAsset(ctx, opt, client, script.String(), src.Header)
 	if err != nil {
 		return "", fmt.Errorf("下载 drpy 失败: %w", err)
 	}
-	rewritten, err := localizeImports(ctx, client, dir, script.String(), string(body))
+	rewritten, err := localizeImports(ctx, opt, client, dir, script.String(), string(body))
 	if err != nil {
 		return "", err
 	}
@@ -239,6 +239,9 @@ func prepareDrpy(ctx context.Context, opt Options, src Source) (string, error) {
 		{"jinja.js", "jinja.cjs"},
 	}
 	for _, pair := range files {
+		if opt.LockScripts {
+			continue
+		}
 		ref, err := url.Parse(pair[0])
 		if err != nil {
 			return "", err
@@ -280,14 +283,14 @@ func clientFor(opt Options) *http.Client {
 	return HTTPClient(nil, 60*time.Second)
 }
 
-func materializeExt(ctx context.Context, client *http.Client, dir string, raw json.RawMessage) (extURL, extFile, extJSON string, err error) {
+func materializeExt(ctx context.Context, opt Options, client *http.Client, dir string, raw json.RawMessage) (extURL, extFile, extJSON string, err error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return "", "", "", nil
 	}
 	var asString string
 	if json.Unmarshal(raw, &asString) == nil {
 		if strings.HasPrefix(asString, "http://") || strings.HasPrefix(asString, "https://") {
-			body, err := fetchURL(ctx, client, asString)
+			body, err := fetchScriptAsset(ctx, opt, client, asString, nil)
 			if err != nil {
 				return "", "", "", fmt.Errorf("下载规则失败: %w", err)
 			}

@@ -36,6 +36,7 @@ type HeaderProxy struct {
 	// playlistRewrite edits an HLS body before its URLs are proxied.
 	// The argument is the upstream hostname. Nil leaves the playlist unchanged.
 	playlistRewrite func(host string, body []byte) []byte
+	dialRewrite     func(addr string) string
 }
 
 type proxyResource struct {
@@ -86,13 +87,25 @@ func (p *HeaderProxy) SetUpstream(client *http.Client, rewrite func(host string,
 	p.mu.Lock()
 	p.Client = client
 	p.playlistRewrite = rewrite
+	p.dialRewrite = nil
 	p.mu.Unlock()
 }
 
-func (p *HeaderProxy) upstream() (*http.Client, func(string, []byte) []byte) {
+// SetDialRewrite configures an optional host:port rewrite (such as TVBox hosts
+// mappings) that is validated by RestrictedDialContext before connecting.
+func (p *HeaderProxy) SetDialRewrite(rewrite func(addr string) string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.dialRewrite = rewrite
+	p.mu.Unlock()
+}
+
+func (p *HeaderProxy) upstream() (*http.Client, func(string, []byte) []byte, func(string) string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.Client, p.playlistRewrite
+	return p.Client, p.playlistRewrite, p.dialRewrite
 }
 
 // Start listens on 127.0.0.1 (random port).
@@ -417,6 +430,10 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasSuffix(strings.ToLower(tu.Path), ".flv") {
+		if !resource.AllowLAN && AllowedLoopbackAddr(tu) == "" && restrictedNetworkURL(target) {
+			http.Error(w, "upstream request failed", http.StatusBadGateway)
+			return
+		}
 		p.serveFLVAsMP4(w, r, target, h)
 		return
 	}
@@ -434,12 +451,28 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rg := r.Header.Get("Range"); rg != "" && !looksM3U8 {
 		req.Header.Set("Range", rg)
 	}
-	c, rewrite := p.upstream()
+	c, rewrite, dialRewrite := p.upstream()
 	if c == nil {
 		c = http.DefaultClient
 	}
 	client := *c
 	initial := *tu
+	allowedLoopback := AllowedLoopbackAddr(&initial)
+	if client.Transport == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		if !resource.AllowLAN {
+			tr.Proxy = nil
+		}
+		tr.DialContext = RestrictedDialContext(resource.AllowLAN, allowedLoopback, dialRewrite)
+		client.Transport = tr
+	} else if baseTr, ok := client.Transport.(*http.Transport); ok {
+		tr := baseTr.Clone()
+		if !resource.AllowLAN {
+			tr.Proxy = nil
+		}
+		tr.DialContext = RestrictedDialContext(resource.AllowLAN, allowedLoopback, dialRewrite)
+		client.Transport = tr
+	}
 	previousCheck := c.CheckRedirect
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
 		if previousCheck != nil {
@@ -650,3 +683,103 @@ func lookupRestrictedHost(host string) bool {
 // IsLocalNetworkURL includes loopback as well as private and link-local hosts.
 // Native playlists do not inherit the plugin's special loopback authorization.
 func IsLocalNetworkURL(raw string) bool { return restrictedNetworkURL(raw) }
+
+var lookupDialIPs = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+// IsRestrictedIP reports whether ip is loopback, private, link-local,
+// unspecified, or multicast.
+func IsRestrictedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast()
+}
+
+// AllowedLoopbackAddr returns the normalized ip:port when u explicitly targets
+// an IP-literal loopback host, or "" for domain names and non-loopback targets.
+func AllowedLoopbackAddr(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(ip.String(), port)
+}
+
+// RestrictedDialContext resolves hostnames once at dial time, blocks restricted
+// IPs (including after optional host:port rewrites) when allowLAN is false, and
+// dials the validated IP literal directly to prevent DNS rebinding.
+func RestrictedDialContext(allowLAN bool, allowedLoopbackAddr string, rewrite func(string) string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		origHost, origPort, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		targetAddr := addr
+		if rewrite != nil {
+			if repl := strings.TrimSpace(rewrite(addr)); repl != "" {
+				targetAddr = repl
+			}
+		}
+		host, port, err := net.SplitHostPort(targetAddr)
+		if err != nil {
+			return nil, err
+		}
+		rewritten := !strings.EqualFold(origHost, host) || origPort != port
+		cleanHost := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+		if !allowLAN {
+			if !rewritten && allowedLoopbackAddr != "" {
+				if origIP := net.ParseIP(origHost); origIP != nil && origIP.IsLoopback() && strings.EqualFold(net.JoinHostPort(origIP.String(), origPort), allowedLoopbackAddr) {
+					return dialer.DialContext(ctx, network, net.JoinHostPort(origIP.String(), origPort))
+				}
+			}
+			if cleanHost == "localhost" || strings.HasSuffix(cleanHost, ".localhost") {
+				return nil, fmt.Errorf("dial to local/LAN address blocked")
+			}
+			if ip := net.ParseIP(cleanHost); ip != nil {
+				if IsRestrictedIP(ip) {
+					return nil, fmt.Errorf("dial to local/LAN address blocked")
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			}
+			lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			ips, err := lookupDialIPs(lookupCtx, cleanHost)
+			cancel()
+			if err != nil || len(ips) == 0 {
+				if err == nil {
+					err = fmt.Errorf("no IP addresses resolved")
+				}
+				return nil, err
+			}
+			for _, entry := range ips {
+				if IsRestrictedIP(entry.IP) {
+					return nil, fmt.Errorf("dial to local/LAN address blocked")
+				}
+			}
+			var lastErr error
+			for _, entry := range ips {
+				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(entry.IP.String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			return nil, lastErr
+		}
+		return dialer.DialContext(ctx, network, targetAddr)
+	}
+}

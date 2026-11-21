@@ -3,12 +3,12 @@ package webserver
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 )
 
 func (s *webServer) serveFrontend(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +104,13 @@ func contentType(ext string) string {
 	}
 }
 
+var jsonReadTimeout = 15 * time.Second
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, dest any) error {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(jsonReadTimeout))
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	defer r.Body.Close()
-	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
+	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
 		return err

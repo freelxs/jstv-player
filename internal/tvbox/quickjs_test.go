@@ -149,6 +149,68 @@ func TestQuickJSRunsType3WithoutNode(t *testing.T) {
 	}
 }
 
+func TestQuickJSBlocksCrossPortLoopbackAndPrivateRequests(t *testing.T) {
+	secretHit := false
+	secret := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secretHit = true
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer secret.Close()
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(qjsSpider))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	eng, err := startQuickJS(ctx, Options{Dir: t.TempDir()}, nil, Source{API: srv.URL + "/spider.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+
+	for _, blockedURL := range []string{
+		secret.URL + "/admin",
+		"http://localhost/admin",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://192.168.1.1/admin",
+	} {
+		if _, err := eng.call(ctx, "play", map[string]any{"flag": "线", "id": blockedURL}); err == nil {
+			t.Fatalf("expected QuickJS __req to block %s", blockedURL)
+		}
+	}
+	if secretHit {
+		t.Fatal("QuickJS __req reached cross-port loopback server")
+	}
+}
+
+func TestServerDisablesSilentNodeFallbackByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("this is not valid quickjs spider syntax {{{"))
+	}))
+	defer srv.Close()
+	cfg, err := Parse([]byte(`{"sites":[{"key":"bad","name":"坏脚本","type":3,"api":"`+srv.URL+`/bad.js"}]}`), srv.URL+"/tv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(cfg, Options{Dir: t.TempDir(), Node: "node"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = s.startScript(ctx, cfg.Sites[0])
+	if err == nil || !strings.Contains(err.Error(), "已禁用自动回退到 Node.js") {
+		t.Fatalf("expected silent Node fallback to be rejected, got: %v", err)
+	}
+}
+
+func TestParseHTMLDocumentCapsLargeInput(t *testing.T) {
+	big := `<div class="ok">标题</div>` + strings.Repeat("a</p>", (maxHTMLParseBytes/4)+1000)
+	if got := pdfh(big, ".ok&&Text"); got != "标题" {
+		t.Fatalf("unexpected pdfh output: %q", got)
+	}
+}
+
 const qjsSpider = `
 function init(ext) { local.set('name', ext && ext.name ? ext.name : ''); }
 function home() {

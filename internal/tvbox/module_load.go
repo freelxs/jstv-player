@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"modernc.org/quickjs"
@@ -88,6 +89,174 @@ func resolveAsset(base, spec string) (string, error) {
 	return bu.ResolveReference(ru).String(), nil
 }
 
+// PrefetchScripts downloads all executable JavaScript assets (main scripts,
+// imported modules, and remote ext rule URLs) referenced by drpy sites in cfg
+// and populates cfg.Scripts and cfg.ScriptSHA256 prior to trust confirmation.
+func PrefetchScripts(ctx context.Context, client *http.Client, cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	scripts := map[string][]byte{}
+	for _, site := range cfg.Sites {
+		if site.Kind != "drpy" || site.Unsupported {
+			continue
+		}
+		body, err := fetchURLHeaders(ctx, client, site.API, site.Header)
+		if err != nil {
+			return fmt.Errorf("下载 JavaScript 站点「%s」脚本失败: %w", site.Name, err)
+		}
+		scripts[site.API] = body
+		if err := prefetchModuleDeps(ctx, client, site.API, string(body), scripts, 0); err != nil {
+			return fmt.Errorf("下载 JavaScript 站点「%s」依赖失败: %w", site.Name, err)
+		}
+		var extStr string
+		if json.Unmarshal([]byte(absolutizeExtJSON(site.API, site.Ext)), &extStr) == nil {
+			extStr = strings.TrimSpace(extStr)
+			if strings.HasPrefix(extStr, "http://") || strings.HasPrefix(extStr, "https://") {
+				if _, ok := scripts[extStr]; !ok {
+					extBody, err := fetchURLHeaders(ctx, client, extStr, site.Header)
+					if err != nil {
+						return fmt.Errorf("下载 JavaScript 站点「%s」扩展规则失败: %w", site.Name, err)
+					}
+					scripts[extStr] = extBody
+				}
+			}
+		}
+	}
+	if len(scripts) == 0 {
+		cfg.Scripts = nil
+		cfg.ScriptSHA256 = ""
+		return nil
+	}
+	cfg.Scripts = scripts
+	cfg.ScriptSHA256 = ComputeScriptSHA256(scripts)
+	return nil
+}
+
+func prefetchModuleDeps(ctx context.Context, client *http.Client, baseURL, src string, scripts map[string][]byte, depth int) error {
+	if depth > 4 {
+		return errors.New("脚本依赖嵌套过深")
+	}
+	rest := src
+	for {
+		spec, _, next, ok := cutImport(rest)
+		if !ok {
+			break
+		}
+		abs, err := resolveAsset(baseURL, spec)
+		if err != nil {
+			return err
+		}
+		if _, seen := scripts[abs]; !seen {
+			body, err := fetchURLHeaders(ctx, client, abs, nil)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path.Base(spec), err)
+			}
+			scripts[abs] = body
+			if err := prefetchModuleDeps(ctx, client, abs, string(body), scripts, depth+1); err != nil {
+				return err
+			}
+		}
+		rest = next
+	}
+	return nil
+}
+
+// VerifyCachedScripts checks that all drpy sites and their dependencies in cfg
+// are present in cfg.Scripts and recomputes cfg.ScriptSHA256.
+func VerifyCachedScripts(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	need := false
+	for _, site := range cfg.Sites {
+		if site.Kind != "drpy" || site.Unsupported {
+			continue
+		}
+		need = true
+		body, ok := cfg.Scripts[site.API]
+		if !ok || len(body) == 0 {
+			return errors.New("缓存缺少已确认的 JavaScript 站点脚本，请刷新订阅")
+		}
+		if err := verifyCachedDeps(site.API, string(body), cfg.Scripts, 0); err != nil {
+			return err
+		}
+		var extStr string
+		if json.Unmarshal([]byte(absolutizeExtJSON(site.API, site.Ext)), &extStr) == nil {
+			extStr = strings.TrimSpace(extStr)
+			if strings.HasPrefix(extStr, "http://") || strings.HasPrefix(extStr, "https://") {
+				if b, ok := cfg.Scripts[extStr]; !ok || len(b) == 0 {
+					return errors.New("缓存缺少已确认的 JavaScript 扩展规则，请刷新订阅")
+				}
+			}
+		}
+	}
+	if !need {
+		cfg.ScriptSHA256 = ""
+		return nil
+	}
+	cfg.ScriptSHA256 = ComputeScriptSHA256(cfg.Scripts)
+	return nil
+}
+
+func verifyCachedDeps(baseURL, src string, scripts map[string][]byte, depth int) error {
+	if depth > 4 {
+		return errors.New("脚本依赖嵌套过深")
+	}
+	rest := src
+	for {
+		spec, _, next, ok := cutImport(rest)
+		if !ok {
+			break
+		}
+		abs, err := resolveAsset(baseURL, spec)
+		if err != nil {
+			return err
+		}
+		body, ok := scripts[abs]
+		if !ok || len(body) == 0 {
+			return errors.New("缓存缺少已确认的 JavaScript 依赖模块，请刷新订阅")
+		}
+		if err := verifyCachedDeps(abs, string(body), scripts, depth+1); err != nil {
+			return err
+		}
+		rest = next
+	}
+	return nil
+}
+
+// ComputeScriptSHA256 returns a deterministic SHA-256 digest over all URL->bytes
+// entries in scripts.
+func ComputeScriptSHA256(scripts map[string][]byte) string {
+	if len(scripts) == 0 {
+		return ""
+	}
+	urls := make([]string, 0, len(scripts))
+	for u := range scripts {
+		urls = append(urls, u)
+	}
+	sort.Strings(urls)
+	h := sha256.New()
+	_, _ = h.Write([]byte("jstv-tvbox-scripts-v1\n"))
+	for _, u := range urls {
+		sum := sha256.Sum256(scripts[u])
+		_, _ = h.Write([]byte(u + ":" + hex.EncodeToString(sum[:]) + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func fetchScriptAsset(ctx context.Context, opt Options, client *http.Client, raw string, headers map[string]string) ([]byte, error) {
+	if opt.PinnedScripts != nil {
+		if b, ok := opt.PinnedScripts[raw]; ok && len(b) > 0 {
+			return b, nil
+		}
+	}
+	if opt.LockScripts {
+		return nil, errors.New("未获信任确认的远程脚本资源已被拒绝")
+	}
+	return fetchURLHeaders(ctx, client, raw, headers)
+}
+
 func (e *qjsEngine) prepareSpider(ctx context.Context, baseURL, src string) (string, error) {
 	var prelude strings.Builder
 	rest := src
@@ -143,7 +312,7 @@ func (e *qjsEngine) evalDependency(ctx context.Context, baseURL, spec string, se
 		return global, nil
 	}
 	seen[abs] = true
-	body, err := fetchURLHeaders(ctx, e.client, abs, nil)
+	body, err := fetchScriptAsset(ctx, e.opt, e.client, abs, nil)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", path.Base(spec), err)
 	}
@@ -290,11 +459,11 @@ func moduleGlobal(spec string) string {
 	return b.String()
 }
 
-func localizeImports(ctx context.Context, client *http.Client, dir, baseURL, src string) (string, error) {
-	return rewriteLocalImports(ctx, client, dir, baseURL, src, map[string]string{}, 0)
+func localizeImports(ctx context.Context, opt Options, client *http.Client, dir, baseURL, src string) (string, error) {
+	return rewriteLocalImports(ctx, opt, client, dir, baseURL, src, map[string]string{}, 0)
 }
 
-func rewriteLocalImports(ctx context.Context, client *http.Client, dir, baseURL, src string, seen map[string]string, depth int) (string, error) {
+func rewriteLocalImports(ctx context.Context, opt Options, client *http.Client, dir, baseURL, src string, seen map[string]string, depth int) (string, error) {
 	if depth > 4 {
 		return src, nil
 	}
@@ -305,7 +474,7 @@ func rewriteLocalImports(ctx context.Context, client *http.Client, dir, baseURL,
 		if !ok {
 			break
 		}
-		local, err := cacheImport(ctx, client, dir, baseURL, spec, seen, depth)
+		local, err := cacheImport(ctx, opt, client, dir, baseURL, spec, seen, depth)
 		if err != nil {
 			return "", err
 		}
@@ -328,7 +497,7 @@ func rewrittenImport(names, spec string) string {
 	return "import " + names + " from \"" + spec + "\";"
 }
 
-func cacheImport(ctx context.Context, client *http.Client, dir, baseURL, spec string, seen map[string]string, depth int) (string, error) {
+func cacheImport(ctx context.Context, opt Options, client *http.Client, dir, baseURL, spec string, seen map[string]string, depth int) (string, error) {
 	abs, err := resolveAsset(baseURL, spec)
 	if err != nil {
 		return "", err
@@ -336,13 +505,13 @@ func cacheImport(ctx context.Context, client *http.Client, dir, baseURL, spec st
 	if local, ok := seen[abs]; ok {
 		return local, nil
 	}
-	body, err := fetchURL(ctx, client, abs)
+	body, err := fetchScriptAsset(ctx, opt, client, abs, nil)
 	if err != nil {
 		return "", err
 	}
 	name := safeModuleName(spec)
 	seen[abs] = name
-	text, err := rewriteLocalImports(ctx, client, dir, abs, string(body), seen, depth+1)
+	text, err := rewriteLocalImports(ctx, opt, client, dir, abs, string(body), seen, depth+1)
 	if err != nil {
 		return "", err
 	}

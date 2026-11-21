@@ -35,11 +35,17 @@ type Server struct {
 
 // Options configures the local adapter.
 type Options struct {
-	Node       string
-	Dir        string
-	Log        func(string)
-	InheritEnv bool
-	HTTP       *http.Client
+	Node                string
+	Dir                 string
+	Log                 func(string)
+	InheritEnv          bool
+	HTTP                *http.Client
+	AllowLAN            bool
+	RestrictLAN         bool
+	AllowedLoopbackAddr string
+	AllowNodeFallback   bool
+	PinnedScripts       map[string][]byte
+	LockScripts         bool
 }
 
 // NewServer prepares the adapter. JavaScript sites stay enabled: QuickJS
@@ -53,9 +59,16 @@ func NewServer(cfg *Config, opt Options) *Server {
 			Searchable: &zero,
 		})
 	}
+	if opt.PinnedScripts == nil && len(cfg.Scripts) > 0 {
+		opt.PinnedScripts = cfg.Scripts
+	}
 	client := opt.HTTP
 	if client == nil {
-		client = HTTPClient(cfg.Hosts, 25*time.Second)
+		if opt.RestrictLAN {
+			client = RestrictedHTTPClient(cfg.Hosts, 25*time.Second, opt.AllowLAN, opt.AllowedLoopbackAddr)
+		} else {
+			client = HTTPClient(cfg.Hosts, 25*time.Second)
+		}
 	}
 	return &Server{cfg: cfg, sites: sites, client: client, opt: opt, engines: map[string]scriptEngine{}, lives: map[int][]Channel{}}
 }
@@ -287,6 +300,9 @@ func (s *Server) startScript(ctx context.Context, src Source) (scriptEngine, err
 			s.opt.Log("JavaScript 站点使用内置 QuickJS")
 		}
 		return qjs, nil
+	}
+	if !s.opt.AllowNodeFallback {
+		return nil, fmt.Errorf("内置 QuickJS 无法运行这个脚本（%s）；出于安全原因已禁用自动回退到 Node.js", qerr.Error())
 	}
 	if s.opt.Log != nil {
 		s.opt.Log("QuickJS 未能运行该脚本，改用 Node: " + qerr.Error())

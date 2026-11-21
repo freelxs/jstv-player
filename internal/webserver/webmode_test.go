@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freelxs/jstv-player/internal/app"
 	"golang.org/x/crypto/bcrypt"
@@ -257,6 +259,115 @@ func TestLoginRateLimit(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("rate limit %d", resp.StatusCode)
+	}
+}
+
+func TestLoginRateLimitBehindTrustedProxyAndBoundedFails(t *testing.T) {
+	dir := t.TempDir()
+	auth, err := openAuth(dir, "admin", "test-password", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.setTrustedProxies("127.0.0.1/8, ::1")
+	runtime := app.New(dir, os.DirFS("../.."), true)
+	defer runtime.Player.StopSource()
+	srv := httptest.NewServer(newWebHandler(runtime, auth, os.DirFS("../..")))
+	defer srv.Close()
+	client := &http.Client{}
+
+	for i := 0; i < 10; i++ {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/login", strings.NewReader(`{"username":"admin","password":"wrong-password"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-JSTV-Request", "1")
+		// Spoof a rotating leftmost IP while the trusted proxy appends the true attacker IP 198.51.100.77.
+		req.Header.Set("X-Forwarded-For", "203.0.113."+strconv.Itoa(i+1)+", 198.51.100.77")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status %d", i, resp.StatusCode)
+		}
+	}
+
+	// 11th attempt from attacker IP 198.51.100.77 must be rate-limited even with a new spoofed leftmost XFF entry.
+	attackerReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/login", strings.NewReader(`{"username":"admin","password":"test-password"}`))
+	attackerReq.Header.Set("Content-Type", "application/json")
+	attackerReq.Header.Set("X-JSTV-Request", "1")
+	attackerReq.Header.Set("X-Forwarded-For", "192.0.2.99, 198.51.100.77")
+	attackerResp, err := client.Do(attackerReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attackerResp.Body.Close()
+	if attackerResp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected attacker IP to be rate limited, got %d", attackerResp.StatusCode)
+	}
+
+	// Legitimate admin behind the same reverse proxy with a different client IP must NOT be locked out.
+	adminReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/login", strings.NewReader(`{"username":"admin","password":"test-password"}`))
+	adminReq.Header.Set("Content-Type", "application/json")
+	adminReq.Header.Set("X-JSTV-Request", "1")
+	adminReq.Header.Set("X-Forwarded-For", "203.0.113.200")
+	adminResp, err := client.Do(adminReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminResp.Body.Close()
+	if adminResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected legitimate admin behind proxy to succeed, got %d", adminResp.StatusCode)
+	}
+
+	// Verify fails table stays bounded by maxFailEntries.
+	for i := 0; i < maxFailEntries+200; i++ {
+		auth.noteFail("198.18." + strconv.Itoa(i/256) + "." + strconv.Itoa(i%256))
+	}
+	auth.mu.Lock()
+	count := len(auth.fails)
+	auth.mu.Unlock()
+	if count > maxFailEntries {
+		t.Fatalf("fails map grew beyond maxFailEntries: %d > %d", count, maxFailEntries)
+	}
+}
+
+func TestDecodeJSONEnforcesReadDeadline(t *testing.T) {
+	origTimeout := jsonReadTimeout
+	jsonReadTimeout = 40 * time.Millisecond
+	defer func() { jsonReadTimeout = origTimeout }()
+
+	dir := t.TempDir()
+	auth, err := openAuth(dir, "admin", "test-password", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := app.New(dir, os.DirFS("../.."), true)
+	defer runtime.Player.StopSource()
+	srv := httptest.NewServer(newWebHandler(runtime, auth, os.DirFS("../..")))
+	defer srv.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write([]byte(`{"username":"admin"`))
+		time.Sleep(120 * time.Millisecond)
+		_ = pw.Close()
+	}()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/login", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-JSTV-Request", "1")
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected slow JSON body to fail with 400, got %d", resp.StatusCode)
 	}
 }
 

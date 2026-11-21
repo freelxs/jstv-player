@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freelxs/jstv-player/internal/catvod"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
@@ -27,6 +28,39 @@ func HTTPClient(hosts map[string]string, timeout time.Duration) *http.Client {
 		}
 	}
 	return &http.Client{Timeout: timeout, Transport: tr}
+}
+
+// RestrictedHTTPClient builds an HTTP client whose dialer applies hosts
+// overrides and enforces single-resolution DNS pinning and private/loopback IP
+// blocking when allowLAN is false.
+func RestrictedHTTPClient(hosts map[string]string, timeout time.Duration, allowLAN bool, allowedLoopbackAddr string) *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	if !allowLAN {
+		tr.Proxy = nil
+	}
+	var rewrite func(string) string
+	if len(hosts) > 0 {
+		rewrite = func(addr string) string {
+			return RewriteDial(addr, hosts)
+		}
+	}
+	tr.DialContext = catvod.RestrictedDialContext(allowLAN, allowedLoopbackAddr, rewrite)
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("invalid redirect scheme")
+			}
+			if !allowLAN && catvod.AllowedLoopbackAddr(req.URL) != allowedLoopbackAddr && catvod.IsLocalNetworkURL(req.URL.String()) {
+				return fmt.Errorf("redirect to local/LAN address blocked")
+			}
+			return nil
+		},
+	}
 }
 
 type cmsClient struct {

@@ -128,3 +128,124 @@ func TestTVBoxDepotPicksOneLine(t *testing.T) {
 		t.Fatalf("reset %+v %v", again, err)
 	}
 }
+
+func TestTVBoxTrustIncludesRemoteScriptsAndDetectsScriptReplacement(t *testing.T) {
+	spiderTitle := "初始电影"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/tv.json":
+			fmt.Fprintf(w, `{"sites":[{"key":"js","name":"脚本站","type":3,"api":"%s/spider.js"}]}`, server.URL)
+		case "/spider.js":
+			fmt.Fprintf(w, `function init(){}
+function home(){return JSON.stringify({class:[{type_id:"1",type_name:%q}]});}
+function homeVod(){return JSON.stringify({list:[]});}
+function category(){return JSON.stringify({page:1,pagecount:1,list:[]});}
+function detail(){return JSON.stringify({list:[]});}
+function search(){return JSON.stringify({list:[]});}
+function play(){return JSON.stringify({parse:0,url:"https://cdn.example.com/a.m3u8"});}
+export default {init,home,homeVod,category,detail,search,play};`, spiderTitle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	if _, err := p.AddSubscriptionWithType("脚本配置", server.URL+"/tv.json", "tvbox"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := p.LoadSource()
+	if err != nil || !first.TrustRequired || first.TrustScriptSHA256 == "" || first.TrustConfigSHA256 == "" {
+		t.Fatalf("expected script and config trust hashes, got %+v err=%v", first, err)
+	}
+	if first.TrustSHA256 == first.TrustConfigSHA256 {
+		t.Fatalf("bundle hash %s should include script hash, not just config hash", first.TrustSHA256)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := p.LoadSource()
+	if err != nil || loaded.TrustRequired || len(loaded.Sites) != 1 {
+		t.Fatalf("load after approve: %+v %v", loaded, err)
+	}
+	home, err := p.Home(loaded.Sites[0].API)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classes, _ := home["class"].([]any)
+	if len(classes) != 1 || classes[0].(map[string]any)["type_name"] != "初始电影" {
+		t.Fatalf("unexpected home: %+v", home)
+	}
+
+	// Replace remote spider.js while keeping /tv.json byte-for-byte identical.
+	spiderTitle = "被替换的脚本"
+
+	// Cached startup must use the pinned script bytes without hitting the network.
+	cached, err := p.StartCachedSource()
+	if err != nil || cached.TrustRequired {
+		t.Fatalf("cached start: %+v %v", cached, err)
+	}
+	cachedHome, err := p.Home(cached.Sites[0].API)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachedClasses, _ := cachedHome["class"].([]any)
+	if len(cachedClasses) != 1 || cachedClasses[0].(map[string]any)["type_name"] != "初始电影" {
+		t.Fatalf("cached start executed unapproved script: %+v", cachedHome)
+	}
+
+	// Fresh load must detect that spider.js changed and require re-approval.
+	reloaded, err := p.LoadSource()
+	if err != nil || !reloaded.TrustRequired {
+		t.Fatalf("expected TrustRequired after remote script replacement, got %+v err=%v", reloaded, err)
+	}
+	if reloaded.TrustScriptSHA256 == first.TrustScriptSHA256 || reloaded.TrustSHA256 == first.TrustSHA256 {
+		t.Fatalf("expected updated script/bundle hash, got %+v vs %+v", reloaded, first)
+	}
+}
+
+func TestTVBoxMediaProxyBlocksHostsOverrideToLoopback(t *testing.T) {
+	secretHit := false
+	secret := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secretHit = true
+		_, _ = w.Write([]byte("secret-loopback-body"))
+	}))
+	defer secret.Close()
+	secretPort := strings.TrimPrefix(secret.URL, "http://127.0.0.1:")
+
+	var cfgServer *httptest.Server
+	cfgServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"sites":[{"key":"cms","name":"采集","type":1,"api":"%s/api.php"}],"hosts":["cdn.example.com=127.0.0.1"]}`, cfgServer.URL)
+	}))
+	defer cfgServer.Close()
+
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	if _, err := p.AddSubscriptionWithType("点播", cfgServer.URL+"/tv.json", "tvbox"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := p.LoadSource()
+	if err != nil || !first.TrustRequired {
+		t.Fatalf("first load: %+v %v", first, err)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LoadSource(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.proxy.Start(); err != nil {
+		t.Fatal(err)
+	}
+	proxied := p.proxy.WrapAlways("http://cdn.example.com:"+secretPort+"/video.ts", nil)
+	resp, err := http.Get(proxied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || secretHit {
+		t.Fatalf("expected hosts loopback rewrite to be blocked (status=%d, secretHit=%v)", resp.StatusCode, secretHit)
+	}
+}

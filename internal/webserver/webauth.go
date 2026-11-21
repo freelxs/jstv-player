@@ -22,6 +22,8 @@ const (
 	sessionCookie   = "jstv_session"
 	sessionLife     = 12 * time.Hour
 	sessionAbsolute = 7 * 24 * time.Hour
+	maxFailEntries  = 4096
+	failWindow      = 10 * time.Minute
 )
 
 // bcryptCost is 12 in the server binary. Tests lower it; they are not part of the binary.
@@ -46,15 +48,17 @@ type sessionFile struct {
 }
 
 type authStore struct {
-	path         string
-	sessionsPath string
-	secure       bool
+	path           string
+	sessionsPath   string
+	secure         bool
+	trustedProxies []*net.IPNet
 
-	mu       sync.Mutex
-	file     authFile
-	dummy    []byte
-	sessions map[string]*storedSession
-	fails    map[string][]time.Time
+	mu        sync.Mutex
+	file      authFile
+	dummy     []byte
+	sessions  map[string]*storedSession
+	fails     map[string][]time.Time
+	lastSweep time.Time
 }
 
 func openAuth(dir, user, password string, reset, secure bool) (*authStore, error) {
@@ -62,11 +66,12 @@ func openAuth(dir, user, password string, reset, secure bool) (*authStore, error
 		return nil, err
 	}
 	a := &authStore{
-		path:         filepath.Join(dir, "auth.json"),
-		sessionsPath: filepath.Join(dir, "sessions.json"),
-		secure:       secure,
-		sessions:     map[string]*storedSession{},
-		fails:        map[string][]time.Time{},
+		path:           filepath.Join(dir, "auth.json"),
+		sessionsPath:   filepath.Join(dir, "sessions.json"),
+		secure:         secure,
+		trustedProxies: parseTrustedProxies(os.Getenv("JSTV_WEB_TRUSTED_PROXIES")),
+		sessions:       map[string]*storedSession{},
+		fails:          map[string][]time.Time{},
 	}
 	dummy, err := bcrypt.GenerateFromPassword([]byte("jstv-web-dummy-password"), bcryptCost)
 	if err != nil {
@@ -265,7 +270,15 @@ func (a *authStore) limited(ip string) bool {
 func (a *authStore) noteFail(ip string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.fails[ip] = append(a.recentFailsLocked(ip), time.Now())
+	now := time.Now()
+	if len(a.fails) >= maxFailEntries || a.lastSweep.IsZero() || now.Sub(a.lastSweep) >= time.Minute {
+		a.sweepFailsLocked(now)
+	}
+	recent := a.recentFailsAtLocked(ip, now)
+	if len(recent) == 0 && len(a.fails) >= maxFailEntries {
+		a.evictOldestFailLocked()
+	}
+	a.fails[ip] = append(recent, now)
 }
 
 func (a *authStore) clearFails(ip string) {
@@ -275,7 +288,11 @@ func (a *authStore) clearFails(ip string) {
 }
 
 func (a *authStore) recentFailsLocked(ip string) []time.Time {
-	cut := time.Now().Add(-10 * time.Minute)
+	return a.recentFailsAtLocked(ip, time.Now())
+}
+
+func (a *authStore) recentFailsAtLocked(ip string, now time.Time) []time.Time {
+	cut := now.Add(-failWindow)
 	old := a.fails[ip]
 	kept := make([]time.Time, 0, len(old))
 	for _, t := range old {
@@ -289,6 +306,110 @@ func (a *authStore) recentFailsLocked(ip string) []time.Time {
 	}
 	a.fails[ip] = kept
 	return kept
+}
+
+func (a *authStore) sweepFailsLocked(now time.Time) {
+	a.lastSweep = now
+	for ip := range a.fails {
+		_ = a.recentFailsAtLocked(ip, now)
+	}
+}
+
+func (a *authStore) evictOldestFailLocked() {
+	var oldestKey string
+	var oldestTime time.Time
+	for k, ts := range a.fails {
+		if len(ts) == 0 {
+			delete(a.fails, k)
+			return
+		}
+		last := ts[len(ts)-1]
+		if oldestKey == "" || last.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = last
+		}
+	}
+	if oldestKey != "" {
+		delete(a.fails, oldestKey)
+	}
+}
+
+func (a *authStore) setTrustedProxies(raw string) {
+	a.mu.Lock()
+	a.trustedProxies = parseTrustedProxies(raw)
+	a.mu.Unlock()
+}
+
+func parseTrustedProxies(raw string) []*net.IPNet {
+	var out []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, cidr, err := net.ParseCIDR(part); err == nil && cidr != nil {
+			out = append(out, cidr)
+			continue
+		}
+		if ip := net.ParseIP(part); ip != nil {
+			bits := 128
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+				bits = 32
+			}
+			out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+		}
+	}
+	return out
+}
+
+func isTrustedProxyIP(ip net.IP, trusted []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range trusted {
+		if cidr != nil && cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *authStore) requestClientIP(r *http.Request) string {
+	remote := clientIP(r)
+	if a == nil {
+		return remote
+	}
+	a.mu.Lock()
+	trusted := a.trustedProxies
+	a.mu.Unlock()
+	if len(trusted) == 0 || !isTrustedProxyIP(net.ParseIP(remote), trusted) {
+		return remote
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		var lastValid string
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			ip := net.ParseIP(candidate)
+			if ip == nil {
+				continue
+			}
+			lastValid = ip.String()
+			if !isTrustedProxyIP(ip, trusted) {
+				return ip.String()
+			}
+		}
+		if lastValid != "" {
+			return lastValid
+		}
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		if ip := net.ParseIP(xri); ip != nil {
+			return ip.String()
+		}
+	}
+	return remote
 }
 
 func newSessionToken() (string, error) {
