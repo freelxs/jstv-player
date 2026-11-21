@@ -278,3 +278,8 @@ input:focus,select:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-
 @media (max-width:980px){.web-player{left:200px}}
 
 .sidebar-foot .icon-text{white-space:nowrap;justify-content:flex-start;padding:8px 4px;min-width:0}
+.update-box{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.update-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.update-row #appVersion{margin:0}
+.update-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.update-notes{margin:8px 0 0;padding:10px 12px;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-word;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);font:12px/1.5 var(--mono,ui-monospace,monospace);color:var(--muted)}

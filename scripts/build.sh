@@ -256,6 +256,14 @@ build_darwin() {
     echo "归档发布失败；尝试保留旧归档，隔离输出保留在: $build_root" >&2
     return 1
   fi
+  if [[ "$WITH_NODE" -eq 0 ]]; then
+    shopt -s nullglob
+    local update_file
+    for update_file in "$platform_dir"/update-*.json "$platform_dir"/*.delta "$platform_dir"/*.tar.gz; do
+      cp "$update_file" "$OUT/$(basename "$update_file")"
+    done
+    shopt -u nullglob
+  fi
 
   echo "==> macOS 归档已验证并发布:"
   ls -lh "$zip_final" "$dmg_final"

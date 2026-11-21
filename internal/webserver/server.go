@@ -28,6 +28,10 @@ func Enabled() bool {
 }
 
 func Run(assets fs.FS) error {
+	return RunWithVersion(assets, "")
+}
+
+func RunWithVersion(assets fs.FS, appVersion string) error {
 	dir := os.Getenv("JSTV_DATA_DIR")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -50,6 +54,9 @@ func Run(assets fs.FS) error {
 		log.Printf("web: login user %q", auth.file.Username)
 	}
 	runtime := app.New(dir, assets, true)
+	if appVersion != "" {
+		runtime.SetAppVersion(appVersion)
+	}
 	p := runtime.Player
 	addr := strings.TrimSpace(os.Getenv("JSTV_WEB_ADDR"))
 	if addr == "" {

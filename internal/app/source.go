@@ -141,6 +141,7 @@ func (p *Player) loadSource(useCache bool, force ...bool) (*LoadResult, error) {
 	}
 	p.host, p.sites, p.inited = h, cfg.Video.Sites, map[string]bool{}
 	p.mu.Unlock()
+	p.setKeepRunning(true)
 	return &LoadResult{Sites: cfg.Video.Sites, MD5: src.MD5, ExpectedMD5: src.Expected, Mismatch: src.MD5Mismatch(), Node: node, Sub: sub}, nil
 }
 
@@ -187,6 +188,7 @@ func (p *Player) beginSourceLoad() (context.Context, uint64) {
 	if h != nil {
 		h.Stop()
 	}
+	p.setKeepRunning(false)
 	return ctx, generation
 }
 
@@ -221,6 +223,7 @@ func (p *Player) StopSource() {
 	if h != nil {
 		h.Stop()
 	}
+	p.setKeepRunning(false)
 }
 
 // ProbeNodePermissions reports which permission-related flags are advertised

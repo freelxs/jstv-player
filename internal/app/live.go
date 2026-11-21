@@ -55,20 +55,25 @@ func (p *Player) loadLive(ctx context.Context, sub Subscription, dir string, gen
 		}
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if ctx.Err() != nil || generation != p.sourceGeneration {
+		p.mu.Unlock()
 		return nil, context.Canceled
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		p.mu.Unlock()
 		return nil, err
 	}
 	if err := atomicfile.JSON(cache, catalog); err != nil {
+		p.mu.Unlock()
 		return nil, err
 	}
 	p.liveCatalog = catalog
 	p.liveAPI = fmt.Sprintf("live:%s:%d", sub.ID, generation)
 	p.sites = []catvod.Site{{Key: "native-live", Name: "📺 " + sub.Name, Type: 3, API: p.liveAPI}}
-	return &LoadResult{Sub: sub, Sites: p.sites, Warnings: catalog.Warnings}, nil
+	sites := append([]catvod.Site(nil), p.sites...)
+	p.mu.Unlock()
+	p.setKeepRunning(true)
+	return &LoadResult{Sub: sub, Sites: sites, Warnings: catalog.Warnings}, nil
 }
 
 func (p *Player) nativeCatalog(api string) (*live.Catalog, error, bool) {

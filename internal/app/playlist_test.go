@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -188,7 +189,7 @@ func TestEpisodeServerResolvesLazily(t *testing.T) {
 		}
 	}
 	api := res.Sites[0].API
-	d, err := p.Detail(api, "v1")
+	d, err := p.Detail(context.Background(), api, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +422,7 @@ func TestLegacyHistoryMigratesToActiveSubscription(t *testing.T) {
 // preferring that rendition and falling back when it is absent.
 func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
 	p, api := loadQualityPlugin(t)
-	d, err := p.Detail(api, "show")
+	d, err := p.Detail(context.Background(), api, "show")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,14 +441,14 @@ func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
 		page = builtinPage
 		return nil
 	})
-	streams, err := p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "")
+	streams, err := p.PlayEpisodes(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(streams) != 2 || streams[0].Name != "代理" || streams[1].Name != "原画" || page != "" {
 		t.Fatalf("expected a quality choice, got %+v page=%t", streamNames(streams), page != "")
 	}
-	streams, err = p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
+	streams, err = p.PlayEpisodes(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +480,7 @@ func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
 	if err := p.SaveSettings(Settings{Player: "mpv"}); err != nil {
 		t.Fatal(err)
 	}
-	streams, err = p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 1, "代理")
+	streams, err = p.PlayEpisodes(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 1, "代理")
 	if err != nil || len(streams) != 0 || playlistURL == "" {
 		t.Fatalf("mpv did not receive a playlist: streams=%d url=%s err=%v", len(streams), playlistURL, err)
 	}
@@ -494,15 +495,15 @@ func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
 	}
 
 	p.webMode.Store(true)
-	offered, err := p.WebPlay(api, "show", "演示", line.Flag, line.Episodes, 1, "")
+	offered, err := p.WebPlay(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 1, "")
 	if err != nil || offered.Action != "qualities" || len(offered.Qualities) != 2 || offered.PlaylistID != "" {
 		t.Fatalf("web offer: %+v %v", offered, err)
 	}
-	web, err := p.WebPlay(api, "show", "演示", line.Flag, line.Episodes, 1, "原画")
+	web, err := p.WebPlay(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 1, "原画")
 	if err != nil || web.Action != "play" || web.PlaylistID == "" || web.Count != 3 || web.Index != 1 {
 		t.Fatalf("web continuous: %+v %v", web, err)
 	}
-	next, err := p.WebAdvance(web.PlaylistID, 0)
+	next, err := p.WebAdvance(context.Background(), web.PlaylistID, 0)
 	if err != nil || next.PlaylistID != web.PlaylistID || next.Index != 0 || next.Count != 3 {
 		t.Fatalf("web prev: %+v %v", next, err)
 	}
@@ -515,7 +516,7 @@ func TestChosenQualityContinuesAndResolvesLazily(t *testing.T) {
 		t.Fatal(err)
 	}
 	page = ""
-	one, err := p.PlayEpisodes(api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
+	one, err := p.PlayEpisodes(context.Background(), api, "show", "演示", line.Flag, line.Episodes, 0, "代理")
 	if err != nil || len(one) != 1 || one[0].Name != "代理" || page != "" {
 		t.Fatalf("senplayer should stay single-url: %+v page=%t err=%v", one, page != "", err)
 	}

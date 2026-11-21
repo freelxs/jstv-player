@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
@@ -36,7 +37,7 @@ type WebQuality struct {
 }
 
 // WebPlay resolves an episode for the browser. It never opens a native player.
-func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) (*WebPlayback, error) {
+func (p *Player) WebPlay(ctx context.Context, api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) (*WebPlayback, error) {
 	if !p.webMode.Load() {
 		return nil, errors.New("仅网页模式可用")
 	}
@@ -44,7 +45,7 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 		return nil, errors.New("剧集不存在")
 	}
 	settings, generation := p.playbackState()
-	streams, err := p.playAtGeneration(api, flag, eps[start].ID, generation)
+	streams, err := p.playAtGenerationContext(ctx, api, flag, eps[start].ID, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -154,9 +155,12 @@ func (p *Player) WebPlay(api, vodID, show, flag string, eps []catvod.Episode, st
 }
 
 // WebAdvance resolves a later episode of a browser playlist.
-func (p *Player) WebAdvance(id string, index int) (*WebPlayback, error) {
+func (p *Player) WebAdvance(ctx context.Context, id string, index int) (*WebPlayback, error) {
 	if !p.webMode.Load() {
 		return nil, errors.New("仅网页模式可用")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	pl := p.eps.get(id)
 	if pl == nil || index < 0 || index >= len(pl.eps) {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"io/fs"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -130,4 +131,17 @@ type Player struct {
 	// the loopback episode server to close it; window.close() does not.
 	builtinMu  sync.Mutex
 	builtinWin *mygo.Window
+
+	appVersion string
+	desktop    DesktopHooks
+
+	powerMu             sync.Mutex
+	keepRunningRelease  func()
+	builtinAwakeRelease func()
+
+	updateMu         sync.Mutex
+	pendingUpdate    *mygo.Update
+	pendingUpdateURL string
+	updateAPIURL     string
+	updateHTTP       *http.Client
 }

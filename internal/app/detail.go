@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -8,14 +9,14 @@ import (
 )
 
 // Detail returns a vod with its play lines.
-func (p *Player) Detail(api, id string) (*DetailResult, error) {
+func (p *Player) Detail(ctx context.Context, api, id string) (*DetailResult, error) {
 	if c, err, ok := p.nativeCatalog(api); ok {
 		if err != nil {
 			return nil, err
 		}
 		return liveDetail(c, id)
 	}
-	c, err := p.client(api)
+	c, err := p.clientWithContext(ctx, api)
 	if err != nil {
 		return nil, err
 	}
@@ -34,18 +35,25 @@ func (p *Player) Detail(api, id string) (*DetailResult, error) {
 }
 
 // Play resolves an episode to streams.
-func (p *Player) Play(api, flag, id string) ([]catvod.Stream, error) {
-	return p.playAtGeneration(api, flag, id, p.generation())
+func (p *Player) Play(ctx context.Context, api, flag, id string) ([]catvod.Stream, error) {
+	return p.playAtGenerationContext(ctx, api, flag, id, p.generation())
 }
 
 func (p *Player) playAtGeneration(api, flag, id string, generation uint64) ([]catvod.Stream, error) {
+	return p.playAtGenerationContext(context.Background(), api, flag, id, generation)
+}
+
+func (p *Player) playAtGenerationContext(ctx context.Context, api, flag, id string, generation uint64) ([]catvod.Stream, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !p.isGeneration(generation) {
 		return nil, errSourceChanged
 	}
 	if strings.HasPrefix(api, "live:") {
 		return p.playLive(api, id, generation)
 	}
-	c, err := p.client(api)
+	c, err := p.clientWithContext(ctx, api)
 	if err != nil {
 		return nil, err
 	}

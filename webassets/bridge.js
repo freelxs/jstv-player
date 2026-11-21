@@ -24,12 +24,13 @@
     return text;
   }
 
-  async function rpc(method, args) {
+  async function rpc(method, args, options) {
     const response = await fetch('/api/call', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-JSTV-Request': '1' },
       body: JSON.stringify({ method, args: args || [] }),
+      signal: options && options.signal,
     });
     const text = await readBody(response);
     if (!response.ok) throw apiError(response.status, text);
@@ -38,12 +39,13 @@
     return data.result;
   }
 
-  async function streamSearch(wd, channel) {
+  async function streamSearch(wd, channel, options) {
     const response = await fetch('/api/stream', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', 'X-JSTV-Request': '1' },
       body: JSON.stringify({ method: 'SearchAll', args: [wd] }),
+      signal: options && options.signal,
     });
     if (!response.ok || !response.body) {
       throw apiError(response.status, await readBody(response));
@@ -71,54 +73,62 @@
     return typeof url === 'string' && (url.startsWith('/media/') || url.startsWith(location.origin + '/media/'));
   }
 
+  async function invoke(method, args, options) {
+    const list = Array.isArray(args) ? args : [];
+    const name = String(method || '').replace(/^Player\./, '');
+    if (name === 'SearchAll') {
+      await streamSearch(list[0], list[1], options);
+      return null;
+    }
+    if (name === 'PlayEpisodes') {
+      const playback = await rpc('WebPlay', list, options);
+      if (!playback) return [];
+      if (playback.action === 'qualities') {
+        return (playback.qualities || []).map((item) => ({ name: item.name || '播放', url: item.url, parse: false, media: item.media, progressId:playback.progressId, position:playback.position }));
+      }
+      if (playback.action === 'page') {
+        if (!playback.pageUrl) throw new Error(playback.message || '无法在浏览器打开该网页');
+        return [{ name: playback.title || '网页', url: playback.pageUrl, parse: true }];
+      }
+      if (!playable(playback.url)) throw new Error(playback.message || '没有可播放的地址');
+      if (window.jstvWebPlay) window.jstvWebPlay(playback);
+      return [];
+    }
+    if (name === 'Open') {
+      const stream = list[0] || {};
+      const title = list[1] || stream.name || '';
+      if (stream.parse) {
+        if (window.jstvWebOpenPage) window.jstvWebOpenPage(stream.url);
+        else if (stream.url) window.open(stream.url, '_blank', 'noopener,noreferrer');
+        return null;
+      }
+      if (!playable(stream.url)) throw new Error('没有可播放的地址');
+      if (window.jstvWebPlay) {
+        window.jstvWebPlay({
+          action: 'play',
+          title,
+          url: stream.url,
+          media: stream.media || (/\.m3u8(\?|$)/i.test(stream.url) ? 'hls' : 'file'),
+          index: 0,
+          count: 1,
+          progressId: stream.progressId, position: stream.position,
+        });
+      }
+      return null;
+    }
+    if (name === 'PickCustomPlayer') throw new Error('网页模式不能选择本机播放器');
+    return rpc(name, list, options);
+  }
+
   window.mygo = {
     channel(onmessage) {
       return { __channel: true, onmessage, close() {} };
     },
-    async call(method, ...args) {
-      const name = String(method || '').replace(/^Player\./, '');
-      if (name === 'SearchAll') {
-        await streamSearch(args[0], args[1]);
-        return null;
-      }
-      if (name === 'PlayEpisodes') {
-        const playback = await rpc('WebPlay', args);
-        if (!playback) return [];
-        if (playback.action === 'qualities') {
-          return (playback.qualities || []).map((item) => ({ name: item.name || '播放', url: item.url, parse: false, media: item.media, progressId:playback.progressId, position:playback.position }));
-        }
-        if (playback.action === 'page') {
-          if (!playback.pageUrl) throw new Error(playback.message || '无法在浏览器打开该网页');
-          return [{ name: playback.title || '网页', url: playback.pageUrl, parse: true }];
-        }
-        if (!playable(playback.url)) throw new Error(playback.message || '没有可播放的地址');
-        if (window.jstvWebPlay) window.jstvWebPlay(playback);
-        return [];
-      }
-      if (name === 'Open') {
-        const stream = args[0] || {};
-        const title = args[1] || stream.name || '';
-        if (stream.parse) {
-          if (window.jstvWebOpenPage) window.jstvWebOpenPage(stream.url);
-          else if (stream.url) window.open(stream.url, '_blank', 'noopener,noreferrer');
-          return null;
-        }
-        if (!playable(stream.url)) throw new Error('没有可播放的地址');
-        if (window.jstvWebPlay) {
-          window.jstvWebPlay({
-            action: 'play',
-            title,
-            url: stream.url,
-            media: stream.media || (/\.m3u8(\?|$)/i.test(stream.url) ? 'hls' : 'file'),
-            index: 0,
-            count: 1,
-            progressId: stream.progressId, position: stream.position,
-          });
-        }
-        return null;
-      }
-      if (name === 'PickCustomPlayer') throw new Error('网页模式不能选择本机播放器');
-      return rpc(name, args);
+    call(method, ...args) {
+      return invoke(method, args);
+    },
+    callWith(method, args, options) {
+      return invoke(method, args, options);
     },
   };
 })();

@@ -16,3 +16,16 @@ test('navigation invalidates work still in flight', () => {
   requests.invalidate();
   assert.equal(requests.current(pending), false);
 });
+
+test('begin and invalidate abort the previous request signal', () => {
+  const requests = createRequestToken();
+  requests.begin();
+  const first = requests.signal();
+  assert.equal(first.aborted, false);
+  requests.begin();
+  const second = requests.signal();
+  assert.equal(first.aborted, true);
+  assert.equal(second.aborted, false);
+  requests.invalidate();
+  assert.equal(second.aborted, true);
+});

@@ -146,6 +146,7 @@ func playerMethods() map[string]reflect.Method {
 		"ForceRefreshSource": true, "StartCachedSource": true, "OpenConfigPage": true, "AddSubscriptionWithType": true, "UpdateSubscriptionWithType": true,
 		"SelectRepoLine":   true,
 		"PickCustomPlayer": true, "WebPlay": true, "WebAdvance": true,
+		"CheckUpdate": true, "InstallUpdate": true,
 	}
 	out := map[string]reflect.Method{}
 	typ := reflect.TypeOf(&app.Player{})
