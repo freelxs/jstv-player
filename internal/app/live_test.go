@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,20 +54,20 @@ func TestNativeLiveNeedsNoNodeAndPlaysHLSWithHeaders(t *testing.T) {
 		t.Fatalf("native live used JS host: %+v %v", loaded, err)
 	}
 	api := loaded.Sites[0].API
-	home, err := p.Home(api)
+	home, err := p.Home(context.Background(), api)
 	if err != nil || len(home["class"].([]any)) != 1 {
 		t.Fatalf("home: %v %v", home, err)
 	}
-	category, err := p.Category(api, "新闻", 1, nil)
+	category, err := p.Category(context.Background(), api, "新闻", 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := category["list"].([]any)[0].(catvod.M)["vod_id"].(string)
-	detail, err := p.Detail(api, id)
+	detail, err := p.Detail(context.Background(), api, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	playback, err := p.WebPlay(api, id, "频道一", "直播", detail.Lines[0].Episodes, 0, "")
+	playback, err := p.WebPlay(context.Background(), api, id, "频道一", "直播", detail.Lines[0].Episodes, 0, "")
 	if err != nil || playback.Media != "hls" || !strings.HasPrefix(playback.URL, "/media/") {
 		t.Fatalf("native playback: %+v %v", playback, err)
 	}
@@ -104,7 +105,7 @@ func TestNativeLiveNeedsNoNodeAndPlaysHLSWithHeaders(t *testing.T) {
 	if resp.StatusCode != 404 {
 		t.Fatal("stopped live grant remains usable")
 	}
-	if _, err := p.Play(api, "直播", id); err == nil {
+	if _, err := p.Play(context.Background(), api, "直播", id); err == nil {
 		t.Fatal("old live API still resolves")
 	}
 	server.Close()
@@ -141,7 +142,7 @@ func TestSameNameLiveLinesAreGrantedTogether(t *testing.T) {
 		t.Fatalf("%+v %v", loaded, err)
 	}
 	api := loaded.Sites[0].API
-	category, err := p.Category(api, "新闻", 1, nil)
+	category, err := p.Category(context.Background(), api, "新闻", 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +151,11 @@ func TestSameNameLiveLinesAreGrantedTogether(t *testing.T) {
 		t.Fatalf("channels not merged: %v", list)
 	}
 	id := list[0].(catvod.M)["vod_id"].(string)
-	detail, err := p.Detail(api, id)
+	detail, err := p.Detail(context.Background(), api, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	web, err := p.WebPlay(api, id, "台一", "直播", detail.Lines[0].Episodes, 0, "")
+	web, err := p.WebPlay(context.Background(), api, id, "台一", "直播", detail.Lines[0].Episodes, 0, "")
 	if err != nil || web.Action != "play" || len(web.Lines) != 2 {
 		t.Fatalf("%+v %v", web, err)
 	}
@@ -202,11 +203,11 @@ func TestNativeLiveExternalPlayerLaunchAndActualDecode(t *testing.T) {
 	}
 	catalog, _, _ := p.nativeCatalog(result.Sites[0].API)
 	channel := catalog.Channels[0]
-	detail, err := p.Detail(result.Sites[0].API, channel.ID)
+	detail, err := p.Detail(context.Background(), result.Sites[0].API, channel.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	streams, err := p.PlayEpisodes(result.Sites[0].API, channel.ID, channel.Name, "直播", detail.Lines[0].Episodes, 0, "")
+	streams, err := p.PlayEpisodes(context.Background(), result.Sites[0].API, channel.ID, channel.Name, "直播", detail.Lines[0].Episodes, 0, "")
 	if err != nil || len(streams) != 1 {
 		t.Fatalf("external stream selection: %+v %v", streams, err)
 	}

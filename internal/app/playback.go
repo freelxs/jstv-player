@@ -98,14 +98,21 @@ func (p *Player) openBuiltin(title, page string) {
 		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 650})
 		w.OnClosed(func() {
 			p.builtinMu.Lock()
-			if p.builtinWin == w {
+			wasCurrent := p.builtinWin == w
+			if wasCurrent {
 				p.builtinWin = nil
 			}
 			p.builtinMu.Unlock()
+			if wasCurrent {
+				p.setBuiltinAwake(false)
+				p.clearNowPlaying()
+			}
 		})
 		p.builtinMu.Lock()
 		p.builtinWin = w
 		p.builtinMu.Unlock()
+		p.setBuiltinAwake(true)
+		p.updateNowPlaying(builtinPlayerState{Title: title, Playing: true})
 		w.Page().LoadHTML(page, base)
 	})
 }

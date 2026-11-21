@@ -242,6 +242,7 @@ func (p *Player) activateTVBox(ctx context.Context, s Settings, sub Subscription
 	p.host, p.vodConfig, p.sites, p.inited = srv, cfg, srv.Sites(), map[string]bool{}
 	sites := append([]catvod.Site(nil), p.sites...)
 	p.mu.Unlock()
+	p.setKeepRunning(true)
 	usable := 0
 	for _, site := range sites {
 		if !site.Unsupported {

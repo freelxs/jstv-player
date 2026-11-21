@@ -105,7 +105,17 @@
     <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；只显示近 7 天，最多 4 MiB）</label>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
-    <p id="appVersion" class="hint small">JSTV Player 0.6.2</p>
+    <div class="update-box">
+      <div class="update-row">
+        <p id="appVersion" class="hint small">JSTV Player 0.6.3</p>
+        <div class="update-actions">
+          <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
+          <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>
+        </div>
+      </div>
+      <p id="updateStatus" class="hint small" hidden></p>
+      <pre id="updateNotes" class="update-notes" hidden></pre>
+    </div>
   </form>
 
   <div class="pane" data-pane="logs" hidden>

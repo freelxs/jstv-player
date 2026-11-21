@@ -2,7 +2,7 @@
   "name": "JSTV Player",
   "slug": "jstv-player",
   "identifier": "com.freelxs.jstvplayer",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "frontendDist": "web",
   "macos": {
     "infoPlist": {
@@ -17,10 +17,21 @@
   },
   "copyright": "Copyright (c) 2026 freelxs. Released under the MIT License.",
   "linux": {
-    "depends": [
-      "gstreamer1.0-plugins-good",
-      "gstreamer1.0-plugins-bad",
-      "gstreamer1.0-libav"
-    ]
+    "depends": {
+      "deb": [
+        "gstreamer1.0-plugins-good",
+        "gstreamer1.0-plugins-bad",
+        "gstreamer1.0-libav"
+      ],
+      "rpm": [
+        "gstreamer1-plugins-good",
+        "gstreamer1-plugins-bad-free"
+      ],
+      "arch": [
+        "gst-plugins-good",
+        "gst-plugins-bad",
+        "gst-libav"
+      ]
+    }
   }
 }

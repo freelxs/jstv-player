@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -163,7 +164,7 @@ func TestSwitchReloadsPlugin(t *testing.T) {
 	if _, err := catvod.CachedSource(filepath.Join(p.dir, "subs", b)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Home(r2.Sites[0].API); err != nil {
+	if _, err := p.Home(context.Background(), r2.Sites[0].API); err != nil {
 		t.Fatal(err)
 	}
 	// Removing the active subscription stops its process.

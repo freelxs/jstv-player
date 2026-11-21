@@ -11,7 +11,7 @@ import (
 func TestFrontendLiteralCallsHaveWebAdapters(t *testing.T) {
 	methods := playerMethods()
 	exempt := map[string]bool{"SearchAll": true} // explicit NDJSON stream adapter
-	call := regexp.MustCompile(`(?:^|[^.A-Za-z0-9_])(?:call|rpc)\(['"](?:Player\.)?([A-Za-z0-9_]+)['"]`)
+	call := regexp.MustCompile(`(?:^|[^.A-Za-z0-9_])(?:(?:call|rpc)\(|callWith\([^,]+,\s*)['"](?:Player\.)?([A-Za-z0-9_]+)['"]`)
 	for _, directory := range []string{"web", "webassets"} {
 		entries, err := os.ReadDir(filepath.Join("../..", directory))
 		if err != nil {

@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"io/fs"
+	"strings"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
 
@@ -19,6 +22,23 @@ func New(dir string, assets fs.FS, webMode bool) *Runtime {
 	p := newConfiguredPlayer(dir, assets)
 	p.webMode.Store(webMode)
 	return &Runtime{Player: p, MediaProxy: p.proxy}
+}
+
+// SetAppVersion sets the application semantic version reported by update checks.
+func (r *Runtime) SetAppVersion(version string) {
+	r.Player.appVersion = strings.TrimPrefix(strings.TrimSpace(version), "v")
+}
+
+// EnableDesktopIntegration wires desktop-only MyGo lifecycle hooks (App Nap
+// prevention, sleep prevention, system media controls, and signed updates).
+func (r *Runtime) EnableDesktopIntegration(hooks DesktopHooks) {
+	r.Player.desktop = hooks
+}
+
+// HandleMediaCommand forwards a system media key or control center command to
+// the active built-in player window, if one is open.
+func (r *Runtime) HandleMediaCommand(cmd mygo.MediaCommand, pos time.Duration) {
+	r.Player.handleMediaCommand(cmd, pos)
 }
 
 // StreamSearch sends each site's result as it arrives.

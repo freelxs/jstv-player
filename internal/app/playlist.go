@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,8 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 		// in-window player, and only while the desktop UI loop is running.
 		p.closeBuiltin()
 		w.WriteHeader(http.StatusNoContent)
+	case r.URL.Path == "/player/state":
+		p.servePlayerState(w, r)
 	case strings.HasPrefix(r.URL.Path, "/ep/"):
 		id, n, ok := parseEpPath(r.URL.Path)
 		pl := p.eps.get(id)
@@ -425,7 +428,7 @@ func preferredQuality(requested string, first *catvod.Stream) string {
 // Otherwise (连播 off, the system player, SenPlayer, several qualities still
 // to choose from, or a web page) the streams of that episode are returned
 // and the page continues with Open, or asks for a quality and calls again.
-func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) ([]catvod.Stream, error) {
+func (p *Player) PlayEpisodes(ctx context.Context, api, vodID, show, flag string, eps []catvod.Episode, start int, quality string) ([]catvod.Stream, error) {
 	if p.webMode.Load() {
 		return nil, errors.New("网页模式请使用浏览器播放")
 	}
@@ -433,7 +436,7 @@ func (p *Player) PlayEpisodes(api, vodID, show, flag string, eps []catvod.Episod
 		return nil, errors.New("剧集不存在")
 	}
 	settings, generation := p.playbackState()
-	streams, err := p.playAtGeneration(api, flag, eps[start].ID, generation)
+	streams, err := p.playAtGenerationContext(ctx, api, flag, eps[start].ID, generation)
 	if err != nil {
 		return nil, err
 	}
@@ -589,6 +592,18 @@ function reportProgress(final=false){
  const now=Date.now();if(!final&&now-progressAt<10000)return;progressAt=now;
  fetch('progress/'+encodeURIComponent(progressId),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:v.currentTime||0,duration:v.duration,final}),keepalive:final}).catch(()=>{});
 }
+function syncNowPlaying(){
+ const item=(i>=0&&L[i])?L[i]:null;
+ fetch('player/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:(item&&item.t)||document.title||'',playing:!v.paused&&!v.ended,position:Number.isFinite(v.currentTime)?v.currentTime:0,duration:Number.isFinite(v.duration)&&v.duration>0?v.duration:0,hasPrev:i>0,hasNext:i>=0&&i+1<L.length})}).catch(()=>{});
+}
+window.__jstvMediaCmd=function(cmd,pos){
+ if(cmd==='play') tryPlay();
+ else if(cmd==='pause') v.pause();
+ else if(cmd==='next'&&i+1<L.length) go(i+1);
+ else if(cmd==='prev'&&i>0) go(i-1);
+ else if(cmd==='seek'&&Number.isFinite(pos)){v.currentTime=Math.max(0,pos);syncNowPlaying();}
+ else if(cmd==='stop') document.getElementById('c').click();
+};
 function sync(){
   document.getElementById('p').disabled=i<=0;
   document.getElementById('n').disabled=i<0||i+1>=L.length;
@@ -661,8 +676,10 @@ async function go(k){
   progressId=item.p||result.progressId||'';pendingSeek=item.s||result.position||0;progressAt=0;
   lineAt=0; attach(result.url,item.m||result.media); arm(mine);
 }
-v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;});
-v.addEventListener('pause',()=>{if(!suppress)reportProgress(true);});
+v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;syncNowPlaying();});
+v.addEventListener('play',()=>{if(!suppress)syncNowPlaying();});
+v.addEventListener('seeked',()=>{if(!suppress)syncNowPlaying();});
+v.addEventListener('pause',()=>{if(!suppress){reportProgress(true);syncNowPlaying();}});
 window.addEventListener('pagehide',()=>reportProgress(true));
 v.addEventListener('timeupdate',function(){
   reportProgress();

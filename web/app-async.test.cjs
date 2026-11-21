@@ -49,7 +49,14 @@ function makeApp(callImpl = async () => ({})) {
     addEventListener() {},
   };
   const channels = [];
-  const window = { mygo: { call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args), channel: (onmessage) => {
+  const signals = [];
+  const window = { mygo: {
+    call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args),
+    callWith: (method, args, opts) => {
+      signals.push({ method: method.replace('Player.', ''), args, signal: opts && opts.signal });
+      return callImpl(method.replace('Player.', ''), ...(args || []), opts);
+    },
+    channel: (onmessage) => {
     const ch = { onmessage, closed: false, close() { this.closed = true; } };
     channels.push(ch);
     return ch;
@@ -59,9 +66,9 @@ function makeApp(callImpl = async () => ({})) {
   assert.ok(startup > 0, 'find application startup block');
   const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, play, filtersForCategory, cards };`;
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
-    setTimeout, clearTimeout, URL, console, Promise };
+    AbortController, setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
-  return { app: context.app, el: get, channels };
+  return { app: context.app, el: get, channels, signals };
 }
 
 const site = (name, api = name) => ({ name, key: name, api });
@@ -459,4 +466,49 @@ test('choosing a quality replays the whole line instead of opening one url', asy
   assert.equal(plays[1][1][5], 0);
   assert.equal(plays[1][1][6], '代理');
   assert.equal(calls.some((c) => c[0] === 'Open'), false);
+});
+
+test('opening a newer category aborts the earlier request signal', async () => {
+  const first = deferred();
+  const second = deferred();
+  let count = 0;
+  const harness = makeApp(async (method) => {
+    if (method !== 'Category') return {};
+    return ++count === 1 ? first.promise : second.promise;
+  });
+  harness.app.st.site = site('示例', '/demo');
+  harness.app.st.home = { class: [{ type_id: '1', type_name: '电影' }, { type_id: '2', type_name: '剧集' }] };
+  const p1 = harness.app.openCategory('1', 1);
+  const p2 = harness.app.openCategory('2', 1);
+  assert.equal(harness.signals.length, 2);
+  assert.equal(harness.signals[0].signal.aborted, true);
+  assert.equal(harness.signals[1].signal.aborted, false);
+  second.resolve({ list: [] });
+  first.resolve({ list: [] });
+  await Promise.all([p1, p2]);
+});
+
+test('check and install update buttons reflect available release', async () => {
+  const calls = [];
+  const harness = makeApp(async (method) => {
+    calls.push(method);
+    if (method === 'CheckUpdate') {
+      return {
+        currentVersion: '0.6.2',
+        latestVersion: '0.7.0',
+        available: true,
+        canAutoInstall: true,
+        notes: '修复若干问题',
+        source: 'mygo',
+      };
+    }
+    if (method === 'InstallUpdate') return 'installed';
+    return {};
+  });
+  await harness.el('#btnCheckUpdate').onclick();
+  assert.equal(harness.el('#btnInstallUpdate').hidden, false);
+  assert.match(harness.el('#updateStatus').textContent, /0\.7\.0/);
+  assert.match(harness.el('#updateNotes').textContent, /修复若干问题/);
+  await harness.el('#btnInstallUpdate').onclick();
+  assert.deepEqual(calls, ['CheckUpdate', 'InstallUpdate']);
 });

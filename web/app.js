@@ -2,6 +2,9 @@
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
+const callWith = (signal, m, ...a) => (signal && window.mygo && typeof window.mygo.callWith === 'function')
+  ? window.mygo.callWith('Player.' + m, a, { signal })
+  : window.mygo.call('Player.' + m, ...a);
 const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0 };
 const browseRequests = BrowseRequestToken();
 let activeSearch = null;
@@ -274,7 +277,8 @@ async function selectSite(s) {
     }).catch((e) => toast(errMsg(e), { err: true }));
   }
   try {
-    const home = await call('Home', s.api);
+    const signal = browseRequests.signal();
+    const home = await callWith(signal, 'Home', s.api);
     if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
     st.home = home;
     const cls = home.class || [];
@@ -285,7 +289,7 @@ async function selectSite(s) {
       for (const c of cls.slice(0, 4)) {
         if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
         try {
-          const r = await call('Category', s.api, String(c.type_id), 1, defaultFilters(c.type_id));
+          const r = await callWith(signal, 'Category', s.api, String(c.type_id), 1, defaultFilters(c.type_id));
           if (!browseRequests.current(request) || seq !== st.loadSeq || st.site !== s) return;
           if ((r.list || []).length) { openCategory(c.type_id, 1); return; }
         } catch (e) {
@@ -359,6 +363,7 @@ function renderFilters(tid) {
 }
 async function openCategory(tid, page, selected = null) {
   const request = browseRequests.begin();
+  const signal = browseRequests.signal();
   if (String(st.tid) !== String(tid)) st.filters = defaultFilters(tid);
   else if (selected) st.filters = { ...selected };
   st.tid = tid; st.page = page;
@@ -367,7 +372,7 @@ async function openCategory(tid, page, selected = null) {
   setView(skeletonGrid());
   const site = st.site;
   try {
-    const r = await call('Category', site.api, String(tid), page, { ...st.filters });
+    const r = await callWith(signal, 'Category', site.api, String(tid), page, { ...st.filters });
     if (!browseRequests.current(request) || st.site !== site) return;
     st.stack = [];
     show(() => {
@@ -390,11 +395,12 @@ function isFolderItem(v) {
 // not detail(id). Calling detail on that id is defined to come back empty.
 async function openFolder(site, vod) {
   const request = browseRequests.begin();
+  const signal = browseRequests.signal();
   const id = String(vod.vod_id);
   const title = vod.vod_name || '';
   setView(skeletonGrid());
   try {
-    const r = await call('Category', site.api, id, 1, {});
+    const r = await callWith(signal, 'Category', site.api, id, 1, {});
     if (!browseRequests.current(request) || st.site !== site) return;
     show(() => {
       const list = r.list || [];
@@ -450,6 +456,7 @@ async function search(wd) {
   if (!wd) return;
   if (!st.sites.length) return toast('请先加载一个订阅');
   const request = browseRequests.begin();
+  const signal = browseRequests.signal();
   setView(skeletonGrid(12));
   if ($('#onlySite').checked && st.site) {
     if (st.site.unsupported) {
@@ -457,7 +464,7 @@ async function search(wd) {
       return;
     }
     try {
-      const r = await call('Search', st.site.api, wd, 1);
+      const r = await callWith(signal, 'Search', st.site.api, wd, 1);
       if (!browseRequests.current(request)) return;
       st.stack = [];
       show(() => setView(el('div', { class: 'section-h' }, `“${wd}”`, el('span', { class: 'n' }, st.site.name)),
@@ -481,7 +488,7 @@ async function search(wd) {
   const isTop = () => st.stack[st.stack.length - 1] === render;
   const ch = window.mygo.channel((r) => { if (!browseRequests.current(request)) return; r.list = r.list || []; results.push(r); if (isTop()) render(); });
   activeSearch = ch;
-  try { await call('SearchAll', wd, ch); } catch (e) { if (browseRequests.current(request)) toast(errMsg(e), { err: true }); }
+  try { await callWith(signal, 'SearchAll', wd, ch); } catch (e) { if (browseRequests.current(request)) toast(errMsg(e), { err: true }); }
   if (!browseRequests.current(request)) return;
   done = true; if (isTop()) render();
 }
@@ -497,11 +504,12 @@ function youtubeLoginHint(site) {
 
 async function openDetail(site, id) {
   const request = browseRequests.begin();
+  const signal = browseRequests.signal();
   setView(el('div', { class: 'hero' }, el('div', { class: 'cover skel' }), el('div', { class: 'info', style: 'flex:1' },
     el('div', { class: 'skel skel-line', style: 'height:26px;width:40%' }), el('div', { class: 'skel skel-line short', style: 'width:30%' }),
     el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line' }), el('div', { class: 'skel skel-line short' }))));
   let d;
-  try { d = await call('Detail', site.api, String(id)); if (!browseRequests.current(request)) return; } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => openDetail(site, id))); return; }
+  try { d = await callWith(signal, 'Detail', site.api, String(id)); if (!browseRequests.current(request)) return; } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => openDetail(site, id))); return; }
   let lineIdx = 0;
   const vodId = String(id);
   let favorite = false;
@@ -711,6 +719,69 @@ $('#probeNodePermissions').onclick = async () => {
   try { out.textContent = await call('ProbeNodePermissions'); }
   catch (e) { out.textContent = errMsg(e); }
 };
+const btnCheckUpdate = $('#btnCheckUpdate');
+const btnInstallUpdate = $('#btnInstallUpdate');
+let latestUpdateInfo = null;
+if (btnCheckUpdate && btnInstallUpdate) {
+  btnCheckUpdate.onclick = async () => {
+    const status = $('#updateStatus');
+    const notes = $('#updateNotes');
+    btnCheckUpdate.disabled = true;
+    btnCheckUpdate.textContent = '检查中…';
+    btnInstallUpdate.hidden = true;
+    if (notes) { notes.hidden = true; notes.textContent = ''; }
+    if (status) { status.hidden = false; status.textContent = '正在检查最新版本…'; }
+    try {
+      const info = await call('CheckUpdate');
+      latestUpdateInfo = info;
+      if (info && info.available) {
+        const label = info.canAutoInstall
+          ? `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}），可一键更新并重启。`
+          : `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}）${info.assetName ? '：' + info.assetName : ''}。`;
+        if (status) status.textContent = label;
+        if (notes && info.notes) { notes.textContent = info.notes; notes.hidden = false; }
+        btnInstallUpdate.textContent = info.canAutoInstall ? '立即更新并重启' : (info.downloadUrl ? '一键下载更新' : '打开发布页');
+        btnInstallUpdate.hidden = false;
+      } else {
+        const ver = (info && (info.currentVersion || info.latestVersion)) || '';
+        if (status) status.textContent = ver ? `已是最新版本（v${ver}）。` : '已是最新版本。';
+      }
+    } catch (e) {
+      latestUpdateInfo = null;
+      if (status) status.textContent = errMsg(e);
+      toast(errMsg(e), { err: true });
+    } finally {
+      btnCheckUpdate.disabled = false;
+      btnCheckUpdate.textContent = '检查更新';
+    }
+  };
+  btnInstallUpdate.onclick = async () => {
+    const status = $('#updateStatus');
+    const auto = !!(latestUpdateInfo && latestUpdateInfo.canAutoInstall);
+    btnInstallUpdate.disabled = true;
+    btnCheckUpdate.disabled = true;
+    btnInstallUpdate.textContent = auto ? '正在下载并更新…' : '正在打开…';
+    if (status && auto) status.textContent = '正在下载并校验更新，完成后将自动重启…';
+    try {
+      const result = await call('InstallUpdate');
+      if (result === 'installed') {
+        toast('更新已安装，正在重启…');
+      } else if (result && window.__JSTV_WEB__) {
+        const opened = window.open(result, '_blank', 'noopener,noreferrer');
+        if (!opened) toast('请允许弹出窗口以打开更新链接', { err: true });
+      } else if (result) {
+        toast('已在浏览器中打开更新下载');
+      }
+    } catch (e) {
+      if (status) status.textContent = errMsg(e);
+      toast(errMsg(e), { err: true });
+    } finally {
+      btnInstallUpdate.disabled = false;
+      btnCheckUpdate.disabled = false;
+      btnInstallUpdate.textContent = auto ? '立即更新并重启' : (latestUpdateInfo && latestUpdateInfo.downloadUrl ? '一键下载更新' : '打开发布页');
+    }
+  };
+}
 
 $('#btnSettings').onclick = () => openSettings('subs');
 $('#btnFavorites').onclick = async () => {

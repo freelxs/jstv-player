@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,7 +64,7 @@ func TestResolvedPageJoinsContinuousPlayback(t *testing.T) {
 		}
 		return nil
 	})
-	streams, err := p.PlayEpisodes("/vod", "show", "示例", "线路", eps, 0, "")
+	streams, err := p.PlayEpisodes(context.Background(), "/vod", "show", "示例", "线路", eps, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestResolvedPageJoinsContinuousPlayback(t *testing.T) {
 		t.Fatalf("streams=%d\n%s", len(streams), page)
 	}
 	p.webMode.Store(true)
-	web, err := p.WebPlay("/vod", "show", "示例", "线路", eps, 0, "")
+	web, err := p.WebPlay(context.Background(), "/vod", "show", "示例", "线路", eps, 0, "")
 	if err != nil || web.Action != "play" || web.PlaylistID == "" || web.Count != 2 {
 		t.Fatalf("web %+v %v", web, err)
 	}

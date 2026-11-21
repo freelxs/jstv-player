@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func TestTVBoxVODLoadsCMSAndGreysOutJar(t *testing.T) {
 	if !jar.Unsupported || jar.CanSearch() || !strings.Contains(jar.Reason, "JAR") {
 		t.Fatalf("%+v", jar)
 	}
-	home, err := p.Home(loaded.Sites[0].API)
+	home, err := p.Home(context.Background(), loaded.Sites[0].API)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestTVBoxVODLoadsCMSAndGreysOutJar(t *testing.T) {
 	if len(classes) != 1 {
 		t.Fatalf("%v", home)
 	}
-	detail, err := p.Detail(loaded.Sites[0].API, "7")
+	detail, err := p.Detail(context.Background(), loaded.Sites[0].API, "7")
 	if err != nil || len(detail.Lines) != 1 || len(detail.Lines[0].Episodes) != 2 {
 		t.Fatalf("%v %+v", err, detail)
 	}
@@ -170,7 +171,7 @@ export default {init,home,homeVod,category,detail,search,play};`, spiderTitle)
 	if err != nil || loaded.TrustRequired || len(loaded.Sites) != 1 {
 		t.Fatalf("load after approve: %+v %v", loaded, err)
 	}
-	home, err := p.Home(loaded.Sites[0].API)
+	home, err := p.Home(context.Background(), loaded.Sites[0].API)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ export default {init,home,homeVod,category,detail,search,play};`, spiderTitle)
 	if err != nil || cached.TrustRequired {
 		t.Fatalf("cached start: %+v %v", cached, err)
 	}
-	cachedHome, err := p.Home(cached.Sites[0].API)
+	cachedHome, err := p.Home(context.Background(), cached.Sites[0].API)
 	if err != nil {
 		t.Fatal(err)
 	}

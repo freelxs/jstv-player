@@ -72,7 +72,7 @@ func TestDesktopSniffReplacesAnUnresolvedPage(t *testing.T) {
 		return nil
 	})
 	eps := []catvod.Episode{{Name: "第1集", ID: "e1"}, {Name: "第2集", ID: "e2"}}
-	streams, err := p.PlayEpisodes("/vod", "show", "示例", "线路", eps, 0, "")
+	streams, err := p.PlayEpisodes(context.Background(), "/vod", "show", "示例", "线路", eps, 0, "")
 	if err != nil || len(streams) != 0 || !queued {
 		t.Fatalf("streams=%d queued=%t err=%v", len(streams), queued, err)
 	}
@@ -82,7 +82,7 @@ func TestDesktopSniffReplacesAnUnresolvedPage(t *testing.T) {
 		called = true
 		return sniffed{}, errors.New("should not sniff")
 	}
-	web, err := p.WebPlay("/vod", "show", "示例", "线路", eps, 0, "")
+	web, err := p.WebPlay(context.Background(), "/vod", "show", "示例", "线路", eps, 0, "")
 	if err != nil || web.Action != "page" || called {
 		t.Fatalf("web %+v called=%t err=%v", web, called, err)
 	}
@@ -112,7 +112,7 @@ func TestSniffTimeoutIsAnError(t *testing.T) {
 	p.mu.Lock()
 	p.host = loopHost{base: srv.URL}
 	p.mu.Unlock()
-	_, err := p.Play("/vod", "线路", "e1")
+	_, err := p.Play(context.Background(), "/vod", "线路", "e1")
 	if err == nil || !strings.Contains(err.Error(), "12 秒") {
 		t.Fatal(err)
 	}
