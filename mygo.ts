@@ -40,6 +40,44 @@ export interface HistoryEntry {
   time: number;
   position?: number;
   duration?: number;
+  showName?: string;
+  picture?: string;
+  watched?: boolean;
+}
+
+/** HistoryItem is a watch-history entry returned to the frontend library view. */
+export interface HistoryItem {
+  subscription: string;
+  api: string;
+  id: string;
+  showName: string;
+  picture?: string;
+  flag: string;
+  index: number;
+  episodeName: string;
+  time: number;
+  position?: number;
+  duration?: number;
+  watched?: boolean;
+}
+
+/**
+ * LibraryBackup is the portable JSON format for exporting and importing
+ * favorites and watch history for the active subscription.
+ */
+export interface LibraryBackup {
+  version: number;
+  exportedAt: number;
+  favorites: Favorite[];
+  history: HistoryItem[];
+}
+
+/** LibraryImportResult reports how many entries were added or updated. */
+export interface LibraryImportResult {
+  favoritesAdded: number;
+  favoritesUpdated: number;
+  historyAdded: number;
+  historyUpdated: number;
 }
 
 /** Line is one play source (vod_play_from) with its episodes. */
@@ -113,6 +151,12 @@ export interface Settings {
   inheritProxyEnv: boolean;
   inheritNodeEnv: boolean;
   persistLogs: boolean;
+  /** DisableHistory stops saving new watch history and playback positions. */
+  disableHistory: boolean;
+  /** DisableAdBlock turns off WebView content blocking and third-party popup suppression. */
+  disableAdBlock: boolean;
+  /** DisableHLSAdFilter turns off built-in HLS ad-segment filtering in the media proxy. */
+  disableHlsAdFilter: boolean;
 }
 
 /** Site is one entry of GET /config → video.sites. */
@@ -243,10 +287,14 @@ export const Player = {
    * in-place installation; otherwise it checks the latest GitHub Release.
    */
   checkUpdate: bind<[], UpdateInfo | null>("Player.CheckUpdate", () => []),
+  /** ClearHistory removes all watch history entries for the active subscription. */
+  clearHistory: bind<[], void>("Player.ClearHistory", () => []),
   /** ClearLogs removes only in-memory and application-owned persistent log files. */
   clearLogs: bind<[], void>("Player.ClearLogs", () => []),
   /** Detail returns a vod with its play lines. */
   detail: bind<[string, string], DetailResult | null>("Player.Detail", (api: string, id: string) => [api, id]),
+  /** ExportLibrary exports the active subscription's favorites and watch history. */
+  exportLibrary: bind<[], LibraryBackup>("Player.ExportLibrary", () => []),
   forceRefreshSource: bind<[], LoadResult | null>("Player.ForceRefreshSource", () => []),
   getFavorites: bind<[], Favorite[]>("Player.GetFavorites", () => []),
   /**
@@ -259,11 +307,18 @@ export const Player = {
   /** Home returns the site's categories and filters. */
   home: bind<[string], Record<string, unknown>>("Player.Home", (api: string) => [api]),
   /**
+   * ImportLibrary merges a backup into the active subscription's favorites and
+   * watch history. Newer timestamps win and existing entries are preserved.
+   */
+  importLibrary: bind<[LibraryBackup], LibraryImportResult>("Player.ImportLibrary", (backup: LibraryBackup) => [backup]),
+  /**
    * InstallUpdate applies a pending signed MyGo update and relaunches the app, or
    * opens/returns the verified GitHub Release installer URL when in-place updates
    * are unavailable.
    */
   installUpdate: bind<[], string>("Player.InstallUpdate", () => []),
+  /** ListHistory returns watch history for the active subscription, newest first. */
+  listHistory: bind<[], HistoryItem[]>("Player.ListHistory", () => []),
   /**
    * LoadSource downloads the active subscription's plugin, starts it and
    * lists its sites. Any previous plugin process is stopped first.
@@ -299,6 +354,8 @@ export const Player = {
    * by the selected Node binary. It does not enable them or claim sandboxing.
    */
   probeNodePermissions: bind<[], string>("Player.ProbeNodePermissions", () => []),
+  /** RemoveHistory deletes one show from the active subscription's watch history. */
+  removeHistory: bind<[string, string], void>("Player.RemoveHistory", (api: string, vodID: string) => [api, vodID]),
   /**
    * RemoveSubscription deletes a subscription and its downloaded files. When
    * it was the active one, its plugin process is stopped.
@@ -326,6 +383,8 @@ export const Player = {
    * clears the path so the picker starts again.
    */
   selectRepoLine: bind<[string], LoadResult | null>("Player.SelectRepoLine", (name: string) => [name]),
+  /** SetWatched toggles the watched status of a show in the active subscription. */
+  setWatched: bind<[string, string, boolean], void>("Player.SetWatched", (api: string, vodID: string, watched: boolean) => [api, vodID, watched]),
   /**
    * StartCachedSource starts a verified, approved last working copy. Refreshing
    * remains an explicit LoadSource operation and always checks configuration.

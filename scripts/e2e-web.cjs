@@ -100,7 +100,7 @@ async function main() {
     await page.locator('.web-player [data-act=close]').click();
     await page.getByRole('button', { name: '收藏', exact: true }).click();
     await page.locator('#btnFavorites').click();
-    await page.locator('.card', { hasText: 'Fixture Live' }).waitFor();
+    await page.locator('[data-lib-section=saved] .card', { hasText: 'Fixture Live' }).waitFor();
     evidence.checks.push('live favorite displayed through UI');
 
     await page.locator('#btnSettings').click(); await page.locator('[data-tab=play]').click();

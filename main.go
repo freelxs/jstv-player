@@ -74,6 +74,7 @@ func main() {
 		mygo.NowPlaying.Clear()
 	})
 	mygo.App.WhenReady(func() {
+		go rt.InitPrivacyRules()
 		win := mygo.NewWindow(mygo.WindowOptions{Title: "JSTV Player", URL: "/", Width: 1280, Height: 820, MinWidth: 900, MinHeight: 600})
 		mainWinMu.Lock()
 		mainWin = win

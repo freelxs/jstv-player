@@ -49,6 +49,17 @@ type Settings struct {
 	InheritProxyEnv bool `json:"inheritProxyEnv"`
 	InheritNodeEnv  bool `json:"inheritNodeEnv"`
 	PersistLogs     bool `json:"persistLogs"`
+	// DisableHistory stops saving new watch history and playback positions.
+	DisableHistory bool `json:"disableHistory"`
+	// DisableAdBlock turns off WebView content blocking and third-party popup suppression.
+	DisableAdBlock bool `json:"disableAdBlock"`
+	// DisableHLSAdFilter turns off built-in HLS ad-segment filtering in the media proxy.
+	DisableHLSAdFilter bool `json:"disableHlsAdFilter"`
+}
+
+type vodMetaEntry struct {
+	Name    string
+	Picture string
 }
 
 // LoadResult is what LoadSource reports to the page.
@@ -122,6 +133,7 @@ type Player struct {
 	inited       map[string]bool
 	logs         []string
 	pendingTrust map[string]sourcePin
+	vodMeta      map[string]vodMetaEntry
 
 	// webMode is set only by the HTTP deployment. Desktop leaves it false,
 	// so playback still opens native players and windows.
@@ -144,4 +156,7 @@ type Player struct {
 	pendingUpdateURL string
 	updateAPIURL     string
 	updateHTTP       *http.Client
+
+	contentRulesMu sync.Mutex
+	contentRules   *mygo.ContentRules
 }

@@ -29,6 +29,7 @@ func (p *Player) sniffInto(st catvod.Stream) (catvod.Stream, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = withContentRules(ctx, p.activeContentRules())
 	found, err := sniffPage(ctx, st.URL, st.Headers)
 	if err != nil {
 		return st, err
@@ -61,6 +62,7 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 			Autoplay:             mygo.AutoplayAllow,
 			BackgroundThrottling: mygo.ThrottlingOff,
 			Session:              mygo.NewEphemeralSession(),
+			ContentRules:         contentRulesFromContext(ctx),
 			UserAgent:            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 		},
 	})
@@ -68,6 +70,12 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 		return sniffed{}, errors.New("无法打开隐藏页面来嗅探视频")
 	}
 	defer w.Close()
+	w.Page().SetWindowOpenHandler(func(mygo.WindowOpenRequest) *mygo.WindowOptions {
+		return nil
+	})
+	w.Page().OnWillDownload(func(e *mygo.DownloadEvent) {
+		e.PreventDefault()
+	})
 	w.Page().OnWillNavigate(func(e *mygo.NavigateEvent) {
 		u, err := url.Parse(e.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {

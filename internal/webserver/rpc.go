@@ -143,6 +143,8 @@ func playerMethods() map[string]reflect.Method {
 		"ProbeNodePermissions": true, "Home": true, "Category": true, "Search": true,
 		"Detail": true, "GetHistory": true, "Open": true, "PlayEpisodes": true,
 		"GetFavorites": true, "ToggleFavorite": true, "ReportProgress": true,
+		"ListHistory": true, "RemoveHistory": true, "ClearHistory": true,
+		"SetWatched": true, "ExportLibrary": true, "ImportLibrary": true,
 		"ForceRefreshSource": true, "StartCachedSource": true, "OpenConfigPage": true, "AddSubscriptionWithType": true, "UpdateSubscriptionWithType": true,
 		"SelectRepoLine":   true,
 		"PickCustomPlayer": true, "WebPlay": true, "WebAdvance": true,

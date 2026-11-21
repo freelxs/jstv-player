@@ -31,6 +31,9 @@ func (p *Player) Detail(ctx context.Context, api, id string) (*DetailResult, err
 	vod, _ := l[0].(map[string]any)
 	from, _ := vod["vod_play_from"].(string)
 	urls, _ := vod["vod_play_url"].(string)
+	vodName, _ := vod["vod_name"].(string)
+	vodPic, _ := vod["vod_pic"].(string)
+	p.rememberVodMeta(api, id, vodName, vodPic)
 	return &DetailResult{Vod: vod, Lines: catvod.ParseLines(from, urls)}, nil
 }
 

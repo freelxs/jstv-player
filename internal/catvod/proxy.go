@@ -37,6 +37,7 @@ type HeaderProxy struct {
 	// The argument is the upstream hostname. Nil leaves the playlist unchanged.
 	playlistRewrite func(host string, body []byte) []byte
 	dialRewrite     func(addr string) string
+	hlsAdFilter     bool
 }
 
 type proxyResource struct {
@@ -102,10 +103,20 @@ func (p *HeaderProxy) SetDialRewrite(rewrite func(addr string) string) {
 	p.mu.Unlock()
 }
 
-func (p *HeaderProxy) upstream() (*http.Client, func(string, []byte) []byte, func(string) string) {
+// SetHLSAdFilter toggles built-in HLS ad-segment filtering for proxied playlists.
+func (p *HeaderProxy) SetHLSAdFilter(enabled bool) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.hlsAdFilter = enabled
+	p.mu.Unlock()
+}
+
+func (p *HeaderProxy) upstream() (*http.Client, func(string, []byte) []byte, func(string) string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.Client, p.playlistRewrite, p.dialRewrite
+	return p.Client, p.playlistRewrite, p.dialRewrite, p.hlsAdFilter
 }
 
 // Start listens on 127.0.0.1 (random port).
@@ -451,7 +462,7 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rg := r.Header.Get("Range"); rg != "" && !looksM3U8 {
 		req.Header.Set("Range", rg)
 	}
-	c, rewrite, dialRewrite := p.upstream()
+	c, rewrite, dialRewrite, hlsAdFilter := p.upstream()
 	if c == nil {
 		c = http.DefaultClient
 	}
@@ -510,6 +521,9 @@ func (p *HeaderProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if filtered := rewrite(tu.Hostname(), body); filtered != nil {
 					body = filtered
 				}
+			}
+			if hlsAdFilter {
+				body = FilterHLSAds(body)
 			}
 			base := resp.Request.URL
 			if base == nil {

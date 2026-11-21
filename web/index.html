@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>JSTV Player</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -22,7 +23,7 @@
   <nav id="sites" class="sites"></nav>
 
   <div class="sidebar-foot">
-    <button id="btnFavorites" class="ghost icon-text">我的收藏</button>
+    <button id="btnFavorites" class="ghost icon-text">媒体库</button>
     <button id="btnStartCached" class="ghost icon-text" title="启动上次成功的缓存版本">启动缓存</button>
     <button id="btnReload" class="ghost icon-text" title="重新加载当前订阅"><i class="i i-reload"></i>重新加载</button>
     <button id="btnSettings" class="ghost icon-text" title="设置"><i class="i i-gear"></i>设置</button>
@@ -103,11 +104,16 @@
     <label class="check"><input type="checkbox" id="sInheritProxyEnv"> 继承系统代理变量（重载后生效；可能含代理凭据，是否生效取决于插件客户端）</label>
     <label class="check"><input type="checkbox" id="sInheritNodeEnv"> 高级兼容模式：将完整环境变量传给 Node，以兼容代理、自定义证书等环境（可能包含代理凭据或其他秘密）</label>
     <label class="check"><input type="checkbox" id="sPersistLogs"> 持久化脱敏日志（默认关闭；只显示近 7 天，最多 4 MiB）</label>
+    <div class="settings-sep"></div>
+    <label class="check"><input type="checkbox" id="sHistoryEnabled"> 记录观看历史与播放进度（关闭后暂停写入新历史，已保存的记录保留）</label>
+    <label class="check"><input type="checkbox" id="sAdBlock"> 广告与追踪拦截：拦截嗅探页和第三方播放页中的广告/追踪脚本与弹窗（默认开启）</label>
+    <label class="check"><input type="checkbox" id="sHlsAdFilter"> HLS 广告切片过滤：自动剔除 m3u8 中的常见广告片段与插播段（默认开启）</label>
+    <p class="hint small">隐私说明：本应用本身零遥测、不收集使用数据；播放时上游视频源、订阅地址以及手动检查更新时的 GitHub 仍可能看到你的网络请求。</p>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
     <div class="update-box">
       <div class="update-row">
-        <p id="appVersion" class="hint small">JSTV Player 0.6.3</p>
+        <p id="appVersion" class="hint small">JSTV Player 0.6.4</p>
         <div class="update-actions">
           <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
           <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>

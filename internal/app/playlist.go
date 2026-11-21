@@ -62,6 +62,9 @@ type HistoryEntry struct {
 	Time     int64   `json:"time"`
 	Position float64 `json:"position,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
+	ShowName string  `json:"showName,omitempty"`
+	Picture  string  `json:"picture,omitempty"`
+	Watched  bool    `json:"watched,omitempty"`
 }
 
 type episodeServer struct {
@@ -209,7 +212,7 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				kind = mediaKind(u)
 			}
-			progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name}, pl.generation)
+			progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)}, pl.generation)
 			_ = json.NewEncoder(w).Encode(map[string]any{"url": u, "media": kind, "progressId": progressID, "position": position})
 			return
 		}
@@ -228,7 +231,7 @@ func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p.recordHistory(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name})
+	p.recordHistory(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)})
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
@@ -446,8 +449,15 @@ func (p *Player) PlayEpisodes(ctx context.Context, api, vodID, show, flag string
 	if sub, ok := s.active(); ok {
 		subID = sub.ID
 	}
-	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
-	progressID, position := p.newProgressSession(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name}, generation)
+	histEntry := HistoryEntry{
+		Flag:     flag,
+		Index:    start,
+		Name:     eps[start].Name,
+		ShowName: show,
+		Picture:  p.lookupVodPicture(api, vodID),
+	}
+	p.recordHistory(subID, api, vodID, histEntry)
+	progressID, position := p.newProgressSession(subID, api, vodID, histEntry, generation)
 	for i := range streams {
 		streams[i].ProgressID, streams[i].Position = progressID, position
 	}
@@ -728,6 +738,9 @@ func (p *Player) recordHistory(subID, api, vodID string, e HistoryEntry) {
 	if vodID == "" {
 		return
 	}
+	if p.GetSettings().DisableHistory {
+		return
+	}
 	if subID == "" {
 		subID = p.activeSubID()
 	}
@@ -741,6 +754,12 @@ func (p *Player) recordHistory(subID, api, vodID string, e HistoryEntry) {
 	old := h[historyKey(subID, api, vodID)]
 	if old.Flag == e.Flag && old.Index == e.Index && e.Position == 0 && e.Duration == 0 {
 		e.Position, e.Duration = old.Position, old.Duration
+	}
+	if e.ShowName == "" {
+		e.ShowName = old.ShowName
+	}
+	if e.Picture == "" {
+		e.Picture = old.Picture
 	}
 	h[historyKey(subID, api, vodID)] = e
 	if len(h) > 2000 {

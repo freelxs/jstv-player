@@ -127,3 +127,114 @@ func TestCatalogCacheCopiesFiltersAndInvalidatesOnConfiguration(t *testing.T) {
 		t.Fatal("error cache fixture succeeded")
 	}
 }
+
+func TestLibraryListRemoveClearWatchedAndPauseHistory(t *testing.T) {
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	subA, err := p.AddSubscription("sub-a", "https://example.com/a.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subB, err := p.AddSubscription("sub-b", "https://example.com/b.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA := subA.Active
+	idB := subB.Subscriptions[1].ID
+
+	p.recordHistory(idA, "/vod", "v1", HistoryEntry{Flag: "L1", Index: 0, Name: "第1集", ShowName: "剧集一", Picture: "https://img.example/1.jpg", Position: 120, Duration: 600})
+	p.recordHistory(idA, "/vod", "v2", HistoryEntry{Flag: "L1", Index: 2, Name: "第3集", ShowName: "剧集二", Position: 50, Duration: 300})
+	p.recordHistory(idB, "/vod", "other", HistoryEntry{Flag: "L1", Index: 0, Name: "第1集", ShowName: "其他订阅"})
+
+	items, err := p.ListHistory()
+	if err != nil || len(items) != 2 {
+		t.Fatalf("ListHistory = %+v, err=%v", items, err)
+	}
+	if err := p.SetWatched("/vod", "v1", true); err != nil {
+		t.Fatal(err)
+	}
+	got := p.GetHistory("/vod", "v1")
+	if got == nil || !got.Watched || got.Position != 0 {
+		t.Fatalf("SetWatched(true) = %+v", got)
+	}
+	if err := p.RemoveHistory("/vod", "v2"); err != nil {
+		t.Fatal(err)
+	}
+	items, err = p.ListHistory()
+	if err != nil || len(items) != 1 || items[0].ID != "v1" {
+		t.Fatalf("after RemoveHistory = %+v, err=%v", items, err)
+	}
+
+	settings := p.GetSettings()
+	settings.DisableHistory = true
+	if err := p.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	p.recordHistory(idA, "/vod", "v3", HistoryEntry{Flag: "L1", Index: 0, Name: "第1集", ShowName: "不应记录"})
+	if p.GetHistory("/vod", "v3") != nil {
+		t.Fatal("history recorded while DisableHistory is true")
+	}
+
+	if err := p.ClearHistory(); err != nil {
+		t.Fatal(err)
+	}
+	items, err = p.ListHistory()
+	if err != nil || len(items) != 0 {
+		t.Fatalf("after ClearHistory = %+v, err=%v", items, err)
+	}
+	p.histMu.Lock()
+	remaining := p.loadHistoryLocked(idB)
+	p.histMu.Unlock()
+	if _, ok := remaining[historyKey(idB, "/vod", "other")]; !ok {
+		t.Fatal("ClearHistory removed another subscription's history")
+	}
+}
+
+func TestLibraryExportAndImportMerge(t *testing.T) {
+	src := newPlayer(t.TempDir())
+	defer src.StopSource()
+	s1, err := src.AddSubscription("src", "https://example.com/src.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.sites = []catvod.Site{{API: "/vod"}}
+	src.mu.Unlock()
+	if _, err := src.ToggleFavorite("/vod", "fav1", "收藏一", "https://img.example/f1.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	src.recordHistory(s1.Active, "/vod", "h1", HistoryEntry{Flag: "L1", Index: 1, Name: "第2集", ShowName: "剧集一", Position: 90, Duration: 600})
+
+	backup, err := src.ExportLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup.Version != libraryBackupVersion || len(backup.Favorites) != 1 || len(backup.History) != 1 {
+		t.Fatalf("unexpected backup: %+v", backup)
+	}
+
+	dst := newPlayer(t.TempDir())
+	defer dst.StopSource()
+	if _, err := dst.AddSubscription("dst", "https://example.com/dst.js"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := dst.ImportLibrary(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.FavoritesAdded != 1 || res.HistoryAdded != 1 {
+		t.Fatalf("unexpected import result: %+v", res)
+	}
+	favs, err := dst.GetFavorites()
+	if err != nil || len(favs) != 1 || favs[0].Name != "收藏一" {
+		t.Fatalf("imported favorites = %+v, err=%v", favs, err)
+	}
+	hist, err := dst.ListHistory()
+	if err != nil || len(hist) != 1 || hist[0].ShowName != "剧集一" || hist[0].Position != 90 {
+		t.Fatalf("imported history = %+v, err=%v", hist, err)
+	}
+	backup.Version = 99
+	if _, err := dst.ImportLibrary(backup); err == nil {
+		t.Fatal("unsupported backup version accepted")
+	}
+}
