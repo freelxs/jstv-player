@@ -255,9 +255,9 @@ jobs:
           mkdir -p out
           cd dist/linux-amd64
           cp *.deb "../../out/jstv-player_${V}_amd64.deb"
-          for f in *.rpm; do [ -e "$f" ] && cp "$f" "../../out/$f"; done
+          for f in *.rpm; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
           cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz"
-          for f in update-*.json *.delta; do [ -e "$f" ] && cp "$f" "../../out/$f"; done
+          for f in update-*.json *.delta; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
       - uses: actions/upload-artifact@v7
         with:
           name: jstv-player-${{ runner.os }}
