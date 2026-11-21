@@ -222,7 +222,7 @@ func (r *ruleSite) items(doc, page string) []any {
 }
 
 func (r *ruleSite) jsoupItems(docText, page string) []any {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(docText))
+	doc, err := parseHTMLDocument(docText)
 	if err != nil {
 		return nil
 	}

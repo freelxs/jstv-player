@@ -59,6 +59,8 @@ func Run(assets fs.FS) error {
 		Addr:              addr,
 		Handler:           newWebHandler(runtime, auth, assets),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
 	}

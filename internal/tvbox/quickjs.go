@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/freelxs/jstv-player/internal/catvod"
 	"modernc.org/quickjs"
 )
 
@@ -21,11 +22,15 @@ import (
 // The spider file is loaded from the subscription. drpy2 itself is not
 // shipped with the app. A script QuickJS cannot parse falls back to Node.
 type qjsEngine struct {
-	vm     *quickjs.VM
-	client *http.Client
-	dir    string
-	mu     sync.Mutex
-	store  map[string]string
+	vm              *quickjs.VM
+	client          *http.Client
+	reqClient       *http.Client
+	opt             Options
+	allowLAN        bool
+	allowedLoopback string
+	dir             string
+	mu              sync.Mutex
+	store           map[string]string
 }
 
 func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Source) (*qjsEngine, error) {
@@ -35,7 +40,7 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 	if client == nil {
 		client = clientFor(opt)
 	}
-	body, err := fetchURLHeaders(ctx, client, src.API, src.Header)
+	body, err := fetchScriptAsset(ctx, opt, client, src.API, src.Header)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +58,23 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 	if err != nil {
 		return nil, err
 	}
-	eng := &qjsEngine{vm: vm, client: client, dir: dir, store: map[string]string{}}
+	allowedLoopback := opt.AllowedLoopbackAddr
+	if !opt.RestrictLAN && allowedLoopback == "" {
+		if u, err := url.Parse(src.API); err == nil {
+			allowedLoopback = catvod.AllowedLoopbackAddr(u)
+		}
+	}
+	reqClient := RestrictedHTTPClient(nil, 20*time.Second, opt.AllowLAN, allowedLoopback)
+	eng := &qjsEngine{
+		vm:              vm,
+		client:          client,
+		reqClient:       reqClient,
+		opt:             opt,
+		allowLAN:        opt.AllowLAN,
+		allowedLoopback: allowedLoopback,
+		dir:             dir,
+		store:           map[string]string{},
+	}
 	if raw, err := os.ReadFile(eng.storePath()); err == nil {
 		_ = json.Unmarshal(raw, &eng.store)
 	}
@@ -163,6 +184,13 @@ func (e *qjsEngine) stop() {
 }
 
 func (e *qjsEngine) req(raw, spec string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return reqResult(0, "invalid request url", nil)
+	}
+	if !e.allowLAN && catvod.AllowedLoopbackAddr(u) != e.allowedLoopback && catvod.IsLocalNetworkURL(u.String()) {
+		return reqResult(0, "request to local/LAN address blocked", nil)
+	}
 	var opt struct {
 		Method  string            `json:"method"`
 		Headers map[string]string `json:"headers"`
@@ -195,7 +223,11 @@ func (e *qjsEngine) req(raw, spec string) string {
 			httpReq.Header.Set(k, v)
 		}
 	}
-	resp, err := e.client.Do(httpReq)
+	httpClient := e.reqClient
+	if httpClient == nil {
+		httpClient = RestrictedHTTPClient(nil, 20*time.Second, e.allowLAN, e.allowedLoopback)
+	}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return reqResult(0, err.Error(), nil)
 	}
@@ -320,8 +352,17 @@ func splitSelector(expr string) (string, string) {
 	return strings.Join(css, " "), mode
 }
 
+const maxHTMLParseBytes = 1 << 20
+
+func parseHTMLDocument(doc string) (*goquery.Document, error) {
+	if len(doc) > maxHTMLParseBytes {
+		doc = doc[:maxHTMLParseBytes]
+	}
+	return goquery.NewDocumentFromReader(strings.NewReader(doc))
+}
+
 func firstMatch(doc, selector, mode string) string {
-	q, err := goquery.NewDocumentFromReader(strings.NewReader(doc))
+	q, err := parseHTMLDocument(doc)
 	if err != nil {
 		return ""
 	}
@@ -330,7 +371,7 @@ func firstMatch(doc, selector, mode string) string {
 }
 
 func pickAll(doc, selector, mode string) string {
-	q, err := goquery.NewDocumentFromReader(strings.NewReader(doc))
+	q, err := parseHTMLDocument(doc)
 	if err != nil {
 		return "[]"
 	}

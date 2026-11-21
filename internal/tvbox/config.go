@@ -61,16 +61,18 @@ type Parser struct {
 
 // Config is a parsed TVBox subscription.
 type Config struct {
-	Origin    string
-	SpiderURL string
-	Sites     []Source
-	Lives     []LiveSource
-	Lines     []RepoLine
-	Parses    []Parser
-	Hosts     map[string]string
-	Rules     []Rule
-	Wallpaper string
-	Logo      string
+	Origin       string
+	SpiderURL    string
+	Sites        []Source
+	Lives        []LiveSource
+	Lines        []RepoLine
+	Parses       []Parser
+	Hosts        map[string]string
+	Rules        []Rule
+	Wallpaper    string
+	Logo         string
+	Scripts      map[string][]byte
+	ScriptSHA256 string
 }
 
 // Depot reports a repository document that only lists other configs.

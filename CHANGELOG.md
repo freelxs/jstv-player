@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+- TVBox 订阅确认前会预先下载并锁定 `type: 3` JavaScript 站点主脚本、`import` 依赖与远程 `ext` 规则的 SHA-256，多仓配置展示最终解析地址，且默认不再从内置 QuickJS 静默回退到宿主 Node.js。
+- 播放代理、TVBox 站点请求和 QuickJS `__req` 在连接阶段单次解析并固定 DNS，拦截 DNS 重绑定、`hosts` 私网改写与非同源本机/局域网访问。
+- 网页模式支持通过 `JSTV_WEB_TRUSTED_PROXIES` 配置受信任反向代理以按真实客户端 IP 限流，为登录失败记录表加入容量上限与过期清理，并补齐 HTTP 请求读写超时与 HTML 解析大小限制；升级 `golang.org/x/net` 至 `v0.62.0`。
+
 ## 0.6.1
 
 - macOS、Windows 和 Linux 上用 mpv 播放时，节目标题会选用系统中已有的中文字体，避免 mpv 的 OSD 把中文片名显示成方框。

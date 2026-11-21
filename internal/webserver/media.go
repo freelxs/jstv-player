@@ -67,6 +67,7 @@ func (s *webServer) serveMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	w.WriteHeader(resp.StatusCode)
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, resp.Body)

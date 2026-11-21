@@ -172,7 +172,7 @@ export JSTV_WEB_RESET_PASSWORD=1
 docker compose up -d
 ```
 
-成功登录后把 `JSTV_WEB_RESET_PASSWORD` 改回 `0`，避免每次重启都按环境变量重写密码。前面有 TLS 终结时设 `JSTV_WEB_SECURE=1`，并由反代转发到容器的 8080。反代需要把播放请求的 `Range` 原样转发，不要缓冲响应体。
+成功登录后把 `JSTV_WEB_RESET_PASSWORD` 改回 `0`，避免每次重启都按环境变量重写密码。前面有 TLS 终结时设 `JSTV_WEB_SECURE=1`，并由反代转发到容器的 8080；同时把反代地址或网段填入 `JSTV_WEB_TRUSTED_PROXIES`（例如 `127.0.0.1,172.16.0.0/12`），以便登录限流按 `X-Forwarded-For` 中的真实客户端 IP 计数，避免所有用户共用反代 IP 被连带锁死。反代需要把播放请求的 `Range` 原样转发，不要缓冲响应体。
 
 不用 compose 时：
 
