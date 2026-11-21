@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- macOS、Windows 和 Linux 上用 mpv 播放时，节目标题会选用系统中已有的中文字体，避免 mpv 的 OSD 把中文片名显示成方框。
+
 ## 0.6.0
 
 - 直播地址会区分频道列表和 HLS 播放清单。带 `#EXTINF:-1`、`group-title` 或分组行的 M3U 仍按频道解析，自定义的 `#EXT-X-` 标记不再把整份列表拒掉。`#EXT-X-STREAM-INF`、`#EXT-X-TARGETDURATION` 这类媒体或主播放列表则把该直播地址本身收成一个频道，名字用直播源的名称。`#EXTINF` 上的 `http-user-agent` 会带去播放。

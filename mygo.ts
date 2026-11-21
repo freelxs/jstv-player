@@ -16,6 +16,13 @@ export interface Episode {
   id: string;
 }
 
+/** Fallback is another address for the same stream. */
+export interface Fallback {
+  name?: string;
+  url: string;
+  headers?: Record<string, string>;
+}
+
 export interface Favorite {
   subscription: string;
   api: string;
@@ -117,7 +124,10 @@ export interface Site {
   searchable?: number;
   quickSearch?: number;
   filterable?: number;
-  /** Unsupported sites are listed so a TVBox subscription can load even when some spiders cannot run here. */
+  /**
+   * Unsupported sites stay visible so a TVBox subscription can load when
+   * some spiders cannot run here. Reason is the short explanation for the UI.
+   */
   unsupported?: boolean;
   reason?: string;
 }
@@ -140,6 +150,11 @@ export interface Stream {
   /** a web page that still needs sniffing */
   parse: boolean;
   headers?: Record<string, string>;
+  /**
+   * Fallbacks are later lines of the same item. Players try the next one
+   * when the current line errors or does not start.
+   */
+  fallbacks?: Fallback[];
 }
 
 /** Subscription is one user-supplied plugin address. */
@@ -150,7 +165,10 @@ export interface Subscription {
   name: string;
   /** index.js, a live list, or a TVBox JSON config */
   url: string;
-  /** chosen path through a multi-repository config */
+  /**
+   * Line is the chosen path through a multi-repository config.
+   * Names are separated by U+001F so a line name can contain slashes.
+   */
   line?: string;
 }
 
@@ -173,6 +191,11 @@ export interface WebPlayback {
   count: number;
   progressId?: string;
   position?: number;
+  /**
+   * Lines are alternate addresses for this playback, first one included.
+   * The page switches on error or when nothing starts within 15 seconds.
+   */
+  lines?: WebQuality[];
 }
 
 /** WebQuality is one already-proxied rendition. */
@@ -271,8 +294,8 @@ export const Player = {
     return call("Player.Play", api, flag, id);
   },
   /**
-   * PlayEpisodes plays episode start of a line. quality selects one rendition
-   * when the plugin returned several. With 连播 on and a player that takes
+   * PlayEpisodes plays episode start of a line. quality names one rendition
+   * when play() returned several. With 连播 on and a player that takes
    * playlists, the rest of the line follows automatically and nil is returned.
    * Otherwise (连播 off, the system player, SenPlayer, several qualities still
    * to choose from, or a web page) the streams of that episode are returned
@@ -321,6 +344,13 @@ export const Player = {
     return call("Player.SearchAll", wd, out);
   },
   /**
+   * SelectRepoLine appends one repository line and reloads. An empty name
+   * clears the path so the picker starts again.
+   */
+  selectRepoLine(name: string): Promise<LoadResult | null> {
+    return call("Player.SelectRepoLine", name);
+  },
+  /**
    * StartCachedSource starts a verified, approved last working copy. Refreshing
    * remains an explicit LoadSource operation and always checks configuration.
    */
@@ -329,10 +359,6 @@ export const Player = {
   },
   stopSource(): Promise<void> {
     return call("Player.StopSource");
-  },
-  /** SelectRepoLine appends one repository line and reloads. An empty name clears the path. */
-  selectRepoLine(name: string): Promise<LoadResult | null> {
-    return call("Player.SelectRepoLine", name);
   },
   /** SwitchSubscription makes id the active subscription and reloads it. */
   switchSubscription(id: string): Promise<LoadResult | null> {
@@ -352,7 +378,7 @@ export const Player = {
   webAdvance(id: string, index: number): Promise<WebPlayback | null> {
     return call("Player.WebAdvance", id, index);
   },
-  /** WebPlay resolves an episode for the browser. quality selects one rendition. It never opens a native player. */
+  /** WebPlay resolves an episode for the browser. It never opens a native player. */
   webPlay(api: string, vodID: string, show: string, flag: string, eps: Episode[], start: number, quality: string): Promise<WebPlayback | null> {
     return call("Player.WebPlay", api, vodID, show, flag, eps, start, quality);
   },

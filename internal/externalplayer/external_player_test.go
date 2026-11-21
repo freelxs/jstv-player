@@ -96,6 +96,48 @@ func TestPlayerUsesPlaylist(t *testing.T) {
 	}
 }
 
+func TestMPVOSDFontArgs(t *testing.T) {
+	if got := mpvOSDFontArgs("darwin"); len(got) != 1 || got[0] != "--osd-font=Hiragino Sans GB" {
+		t.Fatalf("darwin OSD font = %v", got)
+	}
+}
+
+func TestWindowsCJKFont(t *testing.T) {
+	root := t.TempDir()
+	if got := windowsCJKFont(root); got != "" {
+		t.Fatalf("empty font dir returned %q", got)
+	}
+	fonts := filepath.Join(root, "Fonts")
+	if err := os.MkdirAll(fonts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fonts, "simhei.ttf"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := windowsCJKFont(root); got != "SimHei" {
+		t.Fatalf("SimHei fallback = %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(fonts, "msyh.ttc"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := windowsCJKFont(root); got != "\u5fae\u8f6f\u96c5\u9ed1" {
+		t.Fatalf("preferred font = %q", got)
+	}
+}
+
+func TestPickFontconfigCJKFont(t *testing.T) {
+	out := "Baoli TC,報隸\\-繁\nNoto Sans CJK SC,Noto Sans CJK SC Thin\n"
+	if got := pickFontconfigCJKFont(out); got != "Noto Sans CJK SC" {
+		t.Fatalf("preferred family = %q", got)
+	}
+	if got := pickFontconfigCJKFont("Baoli TC,報隸\\-繁\n"); got != "Baoli TC" {
+		t.Fatalf("first family = %q", got)
+	}
+	if got := pickFontconfigCJKFont(""); got != "" {
+		t.Fatalf("empty output = %q", got)
+	}
+}
+
 func TestCustomPlayerArgv(t *testing.T) {
 	media := "http://127.0.0.1:9/p/a b;rm -rf"
 	args, err := CustomPlayerArgv("", media)

@@ -1,10 +1,13 @@
 package externalplayer
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 )
 
 // IinaArgs: options before the URL, and --no-stdin. Without it iina-cli
@@ -25,6 +28,7 @@ func MpvArgs(u, title string) []string {
 	// prefetch-playlist: open the next 连播 entry before this one ends.
 	// osd-playing-msg / term-playing-msg empty: never print the entry URL.
 	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0", "--prefetch-playlist=yes", "--osd-playing-msg=", "--term-playing-msg="}
+	args = append(args, mpvOSDFontArgs(runtime.GOOS)...)
 	if title != "" {
 		args = append(args, "--title="+title)
 	}
@@ -32,6 +36,95 @@ func MpvArgs(u, title string) []string {
 		args = append(args, "--macos-app-activation-policy=regular")
 	}
 	return append(args, "--", u)
+}
+
+// mpvOSDFontArgs pins an installed font with CJK glyphs. On macOS mpv's
+// default sans-serif resolves to Helvetica, while libass's CoreText fallback
+// points at the private PingFangUI.ttc that it cannot open. Playlist titles
+// and the OSC title therefore render Chinese, Japanese, and Korean as boxes.
+// Windows and Linux are checked for an installed CJK font before overriding
+// mpv's default.
+func mpvOSDFontArgs(goos string) []string {
+	var font string
+	switch goos {
+	case "darwin":
+		font = "Hiragino Sans GB"
+	case "windows":
+		font = windowsCJKFont(os.Getenv("WINDIR"))
+	case "linux":
+		font = fontconfigCJKFont()
+	}
+	if font == "" {
+		return nil
+	}
+	return []string{"--osd-font=" + font}
+}
+
+// windowsCJKFont checks the font files shipped with Windows. The first
+// available Chinese font wins; Japanese and Korean fallbacks cover systems
+// where the Chinese supplemental fonts are not installed.
+func windowsCJKFont(windir string) string {
+	if windir == "" {
+		windir = `C:\Windows`
+	}
+	const yaHei = "\u5fae\u8f6f\u96c5\u9ed1"
+	fonts := []struct {
+		file, family string
+	}{
+		{"msyh.ttc", yaHei},
+		{"msyhbd.ttc", yaHei},
+		{"msyhl.ttc", yaHei},
+		{"simhei.ttf", "SimHei"},
+		{"simsun.ttc", "SimSun"},
+		{"Deng.ttf", "DengXian"},
+		{"msjh.ttc", "Microsoft JhengHei"},
+		{"YuGothM.ttc", "Yu Gothic"},
+		{"meiryo.ttc", "Meiryo"},
+		{"malgun.ttf", "Malgun Gothic"},
+	}
+	dir := filepath.Join(windir, "Fonts")
+	for _, font := range fonts {
+		if _, err := os.Stat(filepath.Join(dir, font.file)); err == nil {
+			return font.family
+		}
+	}
+	return ""
+}
+
+// fontconfigCJKFont asks fontconfig for installed CJK families and prefers a
+// sans-serif family before falling back to whatever it lists first.
+func fontconfigCJKFont() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "fc-list", ":lang=zh", "family").Output()
+	if err != nil {
+		return ""
+	}
+	return pickFontconfigCJKFont(string(out))
+}
+
+func pickFontconfigCJKFont(out string) string {
+	var first string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		family := strings.TrimSpace(strings.SplitN(line, ",", 2)[0])
+		if family == "" {
+			continue
+		}
+		lower := strings.ToLower(family)
+		for _, hint := range []string{"noto sans cjk", "noto sans sc", "source han sans", "wenquanyi", "droid sans fallback", "ar pl sans"} {
+			if strings.Contains(lower, hint) {
+				return family
+			}
+		}
+		if first == "" {
+			first = family
+		}
+	}
+	return first
 }
 
 // DefaultPlayer prefers an installed external player on Windows and Linux.
