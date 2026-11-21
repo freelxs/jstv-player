@@ -168,13 +168,13 @@ func (p *Player) externalCommand(player, u, title string) (string, []string, err
 		if name == "" {
 			return "", nil, errors.New("未找到 IINA（/Applications/IINA.app）")
 		}
-		return name, externalplayer.IinaArgs(u), nil
+		return name, externalplayer.IinaArgsWithScript(u, p.mpvStopScript(u)), nil
 	case "mpv":
 		name := externalplayer.FindExe(externalplayer.MpvCandidates()...)
 		if name == "" {
 			return "", nil, errors.New(externalplayer.MpvHint())
 		}
-		return name, externalplayer.MpvArgs(u, title), nil
+		return name, externalplayer.MpvArgsWithScript(u, title, p.mpvStopScript(u)), nil
 	case "senplayer":
 		if runtime.GOOS != "darwin" {
 			return "", nil, errors.New("SenPlayer 只支持 macOS，请改用 mpv")
@@ -191,6 +191,17 @@ func (p *Player) externalCommand(player, u, title string) (string, []string, err
 	}
 }
 
+func (p *Player) mpvStopScript(u string) string {
+	if !strings.Contains(u, "/playlist/") {
+		return ""
+	}
+	script, err := externalplayer.EnsureMpvStopOnErrorScript(p.dir)
+	if err != nil {
+		p.log("写入播放器错误拦截脚本失败: " + err.Error())
+		return ""
+	}
+	return script
+}
 // playerPage is one already-resolved stream in the in-window player.
 func playerPage(u, title string) string {
 	return builtinPlayerPage([]builtinItem{{Title: title, URL: u}}, 0)

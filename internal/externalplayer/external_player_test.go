@@ -317,3 +317,39 @@ func TestCustomPlayerDialogOptions(t *testing.T) {
 		t.Fatalf("linux picker must show extensionless executables: %+v", linux.Filters)
 	}
 }
+
+func TestMpvStopOnErrorScriptAndArgs(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath, err := EnsureMpvStopOnErrorScript(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(scriptPath) != dir {
+		t.Fatalf("script written outside target dir: %s", scriptPath)
+	}
+	raw, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{`end-file`, `reason ~= "error"`, `stop`, `keep-playlist`, `播放失败，已停止连播`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stop-on-error script missing %q:\n%s", want, text)
+		}
+	}
+	secondPath, err := EnsureMpvStopOnErrorScript(dir)
+	if err != nil || secondPath != scriptPath {
+		t.Fatalf("second ensure call = %q, %v", secondPath, err)
+	}
+	url := "http://127.0.0.1:1/playlist/abc.m3u"
+	mpvArgs := MpvArgsWithScript(url, "", scriptPath)
+	joinedMpv := strings.Join(mpvArgs, "\n")
+	if !strings.Contains(joinedMpv, "--scripts-append="+scriptPath) || mpvArgs[len(mpvArgs)-1] != url {
+		t.Fatalf("mpv args missing script or url: %v", mpvArgs)
+	}
+	iinaArgs := IinaArgsWithScript(url, scriptPath)
+	joinedIina := strings.Join(iinaArgs, "\n")
+	if !strings.Contains(joinedIina, "--mpv-scripts-append="+scriptPath) || iinaArgs[len(iinaArgs)-1] != url {
+		t.Fatalf("iina args missing script or url: %v", iinaArgs)
+	}
+}

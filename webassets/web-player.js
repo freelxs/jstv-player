@@ -19,6 +19,8 @@
   let lastProgressAt = 0, pendingSeek = 0, progressReady = false;
   let token = 0;
   let suppressVideoError = false;
+  let playbackFailed = false;
+  let hasPlayed = false;
 
   function pageToast(message, isError) {
     const toast = document.querySelector('#toast');
@@ -45,6 +47,7 @@
   }
 
   function destroyHls() {
+    clearTimeout(stallTimer);
     suppressVideoError = true;
     if (hls) {
       hls.destroy();
@@ -57,6 +60,17 @@
 
   function showError(message) {
     errEl.textContent = message || '播放失败';
+  }
+
+  function failPlayback(message) {
+    playbackFailed = true;
+    clearTimeout(stallTimer);
+    if (progressReady && current?.progressId && Number.isFinite(video.duration) && video.duration > 0 && video.currentTime > 0 && video.duration - video.currentTime > 3) {
+      reportProgress(true);
+    }
+    progressReady = false;
+    destroyHls();
+    showError(message || '播放失败，已停止连播');
   }
 
   function syncButtons() {
@@ -136,32 +150,37 @@
     clearTimeout(stallTimer);
     const mine = token;
     stallTimer = setTimeout(() => {
-      if (mine !== token || video.currentTime >= 0.2) return;
+      if (mine !== token || playbackFailed || (video.paused && !goBtn.hidden) || video.currentTime >= 0.2) return;
       advanceLine();
     }, 15000);
   }
   function advanceLine() {
+    if (playbackFailed) return;
     const lines = lineChoices();
     const next = (current && current.lineIndex || 0) + 1;
     if (!current || next >= lines.length) {
-      showError('全部线路都无法播放');
+      failPlayback(lines.length > 1 ? '全部线路都无法播放，已停止连播' : '播放失败，已停止连播');
       return;
     }
     current.lineIndex = next;
+    playbackFailed = false;
+    hasPlayed = false;
     errEl.textContent = `正在切换线路 ${next + 1}/${lines.length}`;
-    attach({ url: lines[next].url, media: lines[next].media }).then(() => armStall()).catch((err) => showError(err.message || '播放失败'));
+    attach({ url: lines[next].url, media: lines[next].media }).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
   }
 
   function show(playback) {
-    reportProgress(true);
+    if (!playbackFailed) reportProgress(true);
     progressReady = false;
+    playbackFailed = false;
+    hasPlayed = false;
     current = playback;
     if (current) current.lineIndex = 0;
     lastProgressAt = 0; pendingSeek = playback.position || 0;
     titleEl.textContent = playback.title || '正在播放';
     root.hidden = false;
     syncButtons();
-    attach(playback).then(() => armStall()).catch((err) => showError(err.message || '播放失败'));
+    attach(playback).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
   }
 
   async function go(index) {
@@ -170,14 +189,17 @@
       const next = await rpc('WebAdvance', [current.playlistId, index]);
       show(next);
     } catch (err) {
-      showError(err.message || '换集失败');
+      failPlayback((err.message || '换集失败') + '，已停止连播');
     }
   }
 
   prevBtn.onclick = () => { if (current) go(current.index - 1); };
   nextBtn.onclick = () => { if (current) go(current.index + 1); };
   root.querySelector('[data-act="close"]').onclick = () => {
-    reportProgress(true); progressReady = false;
+    if (!playbackFailed) reportProgress(true);
+    progressReady = false;
+    playbackFailed = false;
+    hasPlayed = false;
     token++;
     destroyHls();
     root.hidden = true;
@@ -188,20 +210,34 @@
     if (pendingSeek > 0 && Number.isFinite(video.duration) && pendingSeek < video.duration - 3) video.currentTime = pendingSeek;
     pendingSeek = 0; progressReady = true;
   });
-  video.addEventListener('timeupdate', () => reportProgress());
-  video.addEventListener('pause', () => reportProgress(true));
-  window.addEventListener('pagehide', () => reportProgress(true));
+  video.addEventListener('timeupdate', () => {
+    if (suppressVideoError || playbackFailed) return;
+    if (video.currentTime >= 0.2) { hasPlayed = true; clearTimeout(stallTimer); }
+    reportProgress();
+  });
+  video.addEventListener('pause', () => { if (!suppressVideoError && !playbackFailed) reportProgress(true); });
+  window.addEventListener('pagehide', () => { if (!playbackFailed) reportProgress(true); });
   video.addEventListener('ended', () => {
+    if (suppressVideoError || playbackFailed || video.error) return;
+    const dur = video.duration;
+    if (!Number.isFinite(dur) || dur <= 0 || (!hasPlayed && video.currentTime <= 0)) {
+      failPlayback('播放异常中断，已停止连播');
+      return;
+    }
+    if (dur > 30 && dur - video.currentTime > 15) {
+      failPlayback('播放提前中断，已停止连播');
+      return;
+    }
     reportProgress(true);
     if (!current || !current.playlistId || current.index + 1 >= current.count) return;
     go(current.index + 1);
   });
-  video.addEventListener('timeupdate', () => { if (video.currentTime >= 0.2) clearTimeout(stallTimer); });
   video.addEventListener('error', () => {
-    if (suppressVideoError) return;
+    if (suppressVideoError || playbackFailed) return;
     if (!video.getAttribute('src') && !hls) return;
-    if (lineChoices().length > 1) { advanceLine(); return; }
-    if (!errEl.textContent) showError('浏览器无法解码这个流，请换一条线路');
+    const lines = lineChoices();
+    if (lines.length > 1 && ((current && current.lineIndex) || 0) + 1 < lines.length) { advanceLine(); return; }
+    failPlayback('浏览器无法解码这个流，已停止连播，请换一条线路');
   });
 
   window.jstvWebPlay = show;
