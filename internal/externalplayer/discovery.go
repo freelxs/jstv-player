@@ -1,6 +1,7 @@
 package externalplayer
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -10,25 +11,85 @@ import (
 	"time"
 )
 
+const mpvStopOnErrorScriptName = "jstv-stop-on-error.lua"
+
+const mpvStopOnErrorLua = `local last_title = ""
+
+mp.register_event("start-file", function()
+	last_title = mp.get_property("media-title") or ""
+end)
+
+mp.register_event("end-file", function(ev)
+	if not ev or ev.reason ~= "error" then
+		return
+	end
+	if (mp.get_property_number("playlist-count") or 0) <= 1 then
+		return
+	end
+	mp.set_property("idle", "yes")
+	mp.commandv("stop", "keep-playlist")
+	local msg = "播放失败，已停止连播"
+	if last_title ~= "" then
+		msg = msg .. "：" .. last_title
+	end
+	mp.osd_message(msg, 10)
+end)
+`
+
+// EnsureMpvStopOnErrorScript writes the mpv/IINA helper script that halts
+// playlist auto-advance and displays an OSD message when an episode fails.
+func EnsureMpvStopOnErrorScript(dir string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = os.TempDir()
+	}
+	path := filepath.Join(dir, mpvStopOnErrorScriptName)
+	want := []byte(mpvStopOnErrorLua)
+	if got, err := os.ReadFile(path); err == nil && bytes.Equal(got, want) {
+		return path, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, want, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // IinaArgs: options before the URL, and --no-stdin. Without it iina-cli
 // probes stdin, which is not a terminal when launched from an app, adds
 // --stdin, and IINA shows "Cannot open file or stream!".
 func IinaArgs(u string) []string {
+	return IinaArgsWithScript(u, "")
+}
+
+func IinaArgsWithScript(u, script string) []string {
 	// prefetch-playlist: open the next playlist entry before this one
 	// ends, so 连播 switches without a pause.
 	// IINA's CLI forwards single-dash key/value pairs to NSArgumentDomain.
 	// Keep the override scoped to this launch and avoid an empty mpv value:
 	// IINA's CLI parser drops empty values after '='.
-	return []string{"--no-stdin", "-disableOSDFileStartMsg", "YES", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes", u}
+	args := []string{"--no-stdin", "-disableOSDFileStartMsg", "YES", "--mpv-demuxer-lavf-o=extension_picky=0", "--mpv-prefetch-playlist=yes"}
+	if strings.TrimSpace(script) != "" {
+		args = append(args, "--mpv-scripts-append="+script)
+	}
+	return append(args, u)
 }
 
 func MpvArgs(u, title string) []string {
+	return MpvArgsWithScript(u, title, "")
+}
+
+func MpvArgsWithScript(u, title, script string) []string {
 	// extension_picky=0: accept HLS segments disguised as .jpg/.png.
 	// No --title for playlists: mpv then shows each entry's #EXTINF title.
 	// prefetch-playlist: open the next 连播 entry before this one ends.
 	// osd-playing-msg / term-playing-msg empty: never print the entry URL.
 	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0", "--prefetch-playlist=yes", "--osd-playing-msg=", "--term-playing-msg="}
 	args = append(args, mpvOSDFontArgs(runtime.GOOS)...)
+	if strings.TrimSpace(script) != "" {
+		args = append(args, "--scripts-append="+script)
+	}
 	if title != "" {
 		args = append(args, "--title="+title)
 	}

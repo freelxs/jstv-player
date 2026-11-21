@@ -673,3 +673,86 @@ module.exports = { start, stop };
 	}
 	return p, res.Sites[0].API
 }
+
+func TestExternalFailCascadeStopsAutoAdvanceAndPreservesHistory(t *testing.T) {
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+
+	now := time.Now()
+	pl := &playlist{
+		generation: p.generation(),
+		api:        "/spider/demo/3",
+		vodID:      "show-1",
+		show:       "测试剧集",
+		flag:       "线路A",
+		eps: []catvod.Episode{
+			{Name: "第1集", ID: "e1"},
+			{Name: "第2集", ID: "e2"},
+			{Name: "第3集", ID: "e3"},
+		},
+		start: 0,
+	}
+	p.recordHistory("", pl.api, pl.vodID, HistoryEntry{
+		Flag:     pl.flag,
+		Index:    0,
+		Name:     "第1集",
+		Position: 420,
+		Duration: 1800,
+	})
+	id := p.eps.add(pl)
+
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noRedirect.Get(p.eps.epURL(id, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 on failed episode, got %d", resp.StatusCode)
+	}
+
+	done := make(chan struct{})
+	close(done)
+	pl.mu.Lock()
+	pl.pending[2] = &resolved{done: done, st: &catvod.Stream{URL: "http://example.com/ep3.m3u8"}, at: now}
+	pl.mu.Unlock()
+
+	cascadeResp, err := noRedirect.Get(p.eps.epURL(id, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cascadeBody, _ := io.ReadAll(cascadeResp.Body)
+	cascadeResp.Body.Close()
+	if cascadeResp.StatusCode != http.StatusBadGateway || !strings.Contains(string(cascadeBody), "已停止连播") {
+		t.Fatalf("expected cascade stop 502, got %d %q", cascadeResp.StatusCode, string(cascadeBody))
+	}
+	hist := p.GetHistory(pl.api, pl.vodID)
+	if hist == nil || hist.Index != 0 || hist.Position != 420 {
+		t.Fatalf("history was overwritten after failure cascade: %+v", hist)
+	}
+
+	if blocked, _ := pl.isFailCascade(1, now.Add(time.Second)); blocked {
+		t.Fatal("retrying failed episode should not be treated as cascade")
+	}
+	pl.markFailed(1, now)
+	if blocked, _ := pl.isFailCascade(2, now.Add(externalFailCascadeWindow+time.Second)); blocked {
+		t.Fatal("manual selection after cascade window should not be blocked")
+	}
+}
+
+func TestBuiltinPlayerStopsAutoAdvanceOnFailure(t *testing.T) {
+	page := builtinPlaylistPage([]builtinItem{
+		{Title: "第1集", URL: "http://127.0.0.1:1/ep/x/0"},
+		{Title: "第2集", URL: "http://127.0.0.1:1/ep/x/1"},
+	})
+	for _, snippet := range []string{
+		"function failPlayback(",
+		"if(suppress||failed||v.error)return;",
+		"播放失败，已停止连播",
+		"播放提前中断，已停止连播",
+	} {
+		if !strings.Contains(page, snippet) {
+			t.Fatalf("builtin player page missing failure guard %q", snippet)
+		}
+	}
+}

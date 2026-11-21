@@ -38,8 +38,44 @@ type playlist struct {
 	quality                string         // rendition name to prefer; empty uses the first playable URL
 	first                  *catvod.Stream // already resolved start episode
 
-	mu      sync.Mutex
-	pending map[int]*resolved // resolved or being resolved, by index
+	mu            sync.Mutex
+	pending       map[int]*resolved // resolved or being resolved, by index
+	hasFail       bool
+	originFailIdx int
+	lastFailIdx   int
+	lastFailAt    time.Time
+}
+
+const externalFailCascadeWindow = 5 * time.Second
+
+func (pl *playlist) isFailCascade(n int, now time.Time) (bool, int) {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	if !pl.hasFail {
+		return false, 0
+	}
+	if now.Sub(pl.lastFailAt) >= externalFailCascadeWindow || n <= pl.lastFailIdx {
+		pl.hasFail = false
+		return false, 0
+	}
+	pl.lastFailIdx = n
+	pl.lastFailAt = now
+	return true, pl.originFailIdx
+}
+
+func (pl *playlist) markFailed(n int, now time.Time) {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	pl.hasFail = true
+	pl.originFailIdx = n
+	pl.lastFailIdx = n
+	pl.lastFailAt = now
+}
+
+func (pl *playlist) clearFailed() {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	pl.hasFail = false
 }
 
 // resolved is one episode's plugin answer; done closes when it is known.
@@ -197,14 +233,29 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		direct := r.URL.Query().Get("direct") == "1"
+		if !direct {
+			if blocked, failedIdx := pl.isFailCascade(n, time.Now()); blocked {
+				msg := fmt.Sprintf("第%d项播放失败，已停止连播", failedIdx+1)
+				p.log("连播: " + msg)
+				http.Error(w, msg, http.StatusBadGateway)
+				return
+			}
+		}
 		u, err := p.resolveEpisode(pl, n)
 		if err != nil {
+			if !direct {
+				pl.markFailed(n, time.Now())
+			}
 			p.log(fmt.Sprintf("连播 第%d项: %v", n+1, err))
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		if !direct {
+			pl.clearFailed()
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		if r.URL.Query().Get("direct") == "1" {
+		if direct {
 			// The video element follows this redirect unreliably, and hls.js
 			// needs the final proxy URL. External players keep the 302.
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -231,11 +282,15 @@ func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	u, err := p.wrapStream(pl, st)
+	if err != nil {
+		return "", err
+	}
 	p.recordHistory(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)})
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
-	return p.wrapStream(pl, st)
+	return u, nil
 }
 
 func (p *Player) wrapStream(pl *playlist, st *catvod.Stream) (string, error) {
@@ -592,7 +647,7 @@ button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:42%}
 const L=` + payload + `;
 const START=` + strconv.Itoa(start) + `;
 const HINT=` + string(hint) + `;
-let i=-1, token=0, hls=null, pf=-1, suppress=false, progressId='', progressAt=0, pendingSeek=0, progressReady=false;
+let i=-1, token=0, hls=null, pf=-1, suppress=false, failed=false, played=false, stallTimer=0, progressId='', progressAt=0, pendingSeek=0, progressReady=false;
 const v=document.querySelector('video');
 const err=document.getElementById('e');
 const goBtn=document.getElementById('go');
@@ -622,11 +677,23 @@ function sync(){
   if(i>=0&&L[i]) document.title=L[i].t||'';
 }
 function destroyHls(){
+  clearTimeout(stallTimer);
   suppress=true;
   if(hls){hls.destroy();hls=null;}
   v.pause();
   v.removeAttribute('src');
   try{v.load();}catch(e){}
+}
+function failPlayback(msg){
+  failed=true;
+  clearTimeout(stallTimer);
+  if(progressReady&&progressId&&Number.isFinite(v.duration)&&v.duration>0&&v.currentTime>0&&v.duration-v.currentTime>3){
+    reportProgress(true);
+  }
+  progressReady=false;
+  destroyHls();
+  showErr(msg||('播放失败，已停止连播。'+HINT.replace(/^播放失败[，,]?/,'')));
+  syncNowPlaying();
 }
 function tryPlay(){
   goBtn.hidden=true;
@@ -648,58 +715,68 @@ async function mediaURL(u){
 let lineAt=0;
 function lineList(item){return [item.u].concat(item.f||[]).filter(Boolean);}
 function arm(mine){
- const timer=setTimeout(function(){if(mine===token&&v.currentTime<0.2) failLine(mine);},15000);
- function tick(){if(v.currentTime>=0.2){clearTimeout(timer);v.removeEventListener('timeupdate',tick);}}
- v.addEventListener('timeupdate',tick);
+ clearTimeout(stallTimer);
+ stallTimer=setTimeout(function(){if(mine===token&&!failed&&!(v.paused&&!goBtn.hidden)&&v.currentTime<0.2) failLine(mine);},15000);
 }
 function failLine(mine){
- if(mine!==token) return;
+ if(mine!==token||failed) return;
  const item=L[i]; const list=item?lineList(item):[];
- if(!item||lineAt+1>=list.length){showErr(HINT);return;}
- lineAt++; err.textContent='正在切换线路 '+(lineAt+1)+'/'+list.length;
- destroyHls(); attach(list[lineAt], item.m); arm(mine);
+ if(!item||lineAt+1>=list.length){failPlayback();return;}
+ lineAt++; played=false; err.textContent='正在切换线路 '+(lineAt+1)+'/'+list.length;
+ destroyHls(); attach(list[lineAt], item.m, mine); arm(mine);
 }
-function attach(url,media){
+function attach(url,media,mine){
   const hlsLike=media==='hls'||isHls(url);
   if(hlsLike&&v.canPlayType('application/vnd.apple.mpegurl')){suppress=false;v.src=url;tryPlay();return;}
   if(hlsLike&&window.Hls&&window.Hls.isSupported()){
     hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
-    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;failLine(token);});
-    hls.on(window.Hls.Events.MANIFEST_PARSED,function(){tryPlay();});
+    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;failLine(mine);});
+    hls.on(window.Hls.Events.MANIFEST_PARSED,function(){if(mine===token)tryPlay();});
     hls.loadSource(url);
     hls.attachMedia(v);
     setTimeout(function(){suppress=false;},0);
     return;
   }
-  if(hlsLike){showErr('当前窗口不能播放 HLS（没有 Media Source Extensions）。'+HINT);return;}
+  if(hlsLike){failPlayback('当前窗口不能播放 HLS（没有 Media Source Extensions），已停止连播。'+HINT.replace(/^播放失败[，,]?/,''));return;}
   suppress=false;v.src=url;tryPlay();
 }
 async function go(k){
   if(!L.length||k<0||k>=L.length)return;
-  reportProgress(true);progressId='';progressReady=false;
+  if(!failed) reportProgress(true);
+  progressId='';progressReady=false;
   const mine=++token;
+  failed=false;played=false;pf=-1;
   i=k;sync();err.textContent='';goBtn.hidden=true;
   destroyHls();
   let result;const item=L[i];
-  try{result=await mediaURL(item.u);}catch(e){if(mine===token)showErr((e&&e.message)||HINT);return;}
+  try{result=await mediaURL(item.u);}catch(e){if(mine===token)failPlayback(((e&&e.message)||'这一集解析失败')+'，已停止连播');return;}
   if(mine!==token)return;
   progressId=item.p||result.progressId||'';pendingSeek=item.s||result.position||0;progressAt=0;
-  lineAt=0; attach(result.url,item.m||result.media); arm(mine);
+  lineAt=0; attach(result.url,item.m||result.media,mine); arm(mine);
 }
 v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;syncNowPlaying();});
 v.addEventListener('play',()=>{if(!suppress)syncNowPlaying();});
 v.addEventListener('seeked',()=>{if(!suppress)syncNowPlaying();});
-v.addEventListener('pause',()=>{if(!suppress){reportProgress(true);syncNowPlaying();}});
-window.addEventListener('pagehide',()=>reportProgress(true));
+v.addEventListener('pause',()=>{if(!suppress&&!failed){reportProgress(true);syncNowPlaying();}});
+window.addEventListener('pagehide',()=>{if(!failed)reportProgress(true);});
 v.addEventListener('timeupdate',function(){
+  if(suppress||failed)return;
+  if(v.currentTime>=0.2){played=true;clearTimeout(stallTimer);}
   reportProgress();
   if(i+1<L.length&&pf!==i+1&&v.duration&&isFinite(v.duration)&&v.duration-v.currentTime<60){
     pf=i+1;const u=L[i+1].u;
     if(isEpisode(u)) fetch(u+(u.indexOf('?')>=0?'&':'?')+'prefetch=1').catch(function(){});
   }
 });
-v.addEventListener('ended',function(){reportProgress(true);if(i+1<L.length)go(i+1);});
-v.addEventListener('error',function(){if(suppress)return;if(!v.getAttribute('src')&&!hls)return;failLine(token);});
+v.addEventListener('ended',function(){
+  if(suppress||failed||v.error)return;
+  const dur=v.duration;
+  if(!Number.isFinite(dur)||dur<=0||(!played&&v.currentTime<=0)){failPlayback('播放异常中断，已停止连播');return;}
+  if(dur>30&&dur-v.currentTime>15){failPlayback('播放提前中断，已停止连播');return;}
+  reportProgress(true);
+  if(i+1<L.length)go(i+1);
+});
+v.addEventListener('error',function(){if(suppress||failed)return;if(!v.getAttribute('src')&&!hls)return;failLine(token);});
 document.getElementById('p').onclick=function(){go(i-1);};
 document.getElementById('n').onclick=function(){go(i+1);};
 document.getElementById('c').onclick=function(){reportProgress(true);progressId='';token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
