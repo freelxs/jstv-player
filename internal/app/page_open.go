@@ -65,20 +65,56 @@ func configPageWindowOptions(title string, req mygo.WindowOpenRequest) (inApp *m
 	return nil, externalNavigationURL(req.URL)
 }
 
+// thirdPartyPageWindowOptions decides a popup from an untrusted third-party
+// page. When ad blocking is enabled, popups are denied completely; otherwise
+// only user-initiated public http(s) links open in the system browser.
+func thirdPartyPageWindowOptions(adBlock bool, req mygo.WindowOpenRequest) (inApp *mygo.WindowOptions, openExternal bool) {
+	if adBlock {
+		return nil, false
+	}
+	if req.UserInitiated && externalNavigationURL(req.URL) {
+		return nil, true
+	}
+	return nil, false
+}
+
 func (p *Player) openWebPage(title, pageURL string) {
+	local := inAppNavigationURL(pageURL)
+	adBlock := !p.GetSettings().DisableAdBlock
+	rules := p.activeContentRules()
 	mygo.RunOnMain(func() {
-		w := mygo.NewWindow(mygo.WindowOptions{Title: title, Width: 1100, Height: 700})
+		opts := mygo.WindowOptions{Title: title, Width: 1100, Height: 700}
+		if !local {
+			opts.Page = mygo.PageOptions{
+				Untrusted:    true,
+				Session:      mygo.NewEphemeralSession(),
+				ContentRules: rules,
+			}
+		}
+		w := mygo.NewWindow(opts)
 		page := w.Page()
 		page.SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOptions {
-			opts, external := configPageWindowOptions(title, req)
+			var child *mygo.WindowOptions
+			var external bool
+			if local {
+				child, external = configPageWindowOptions(title, req)
+			} else {
+				child, external = thirdPartyPageWindowOptions(adBlock, req)
+			}
 			if external {
 				go mygo.Shell.OpenExternal(req.URL)
 			}
-			return opts
+			return child
 		})
-		page.OnDidFinishLoad(func() {
-			_, _ = page.Eval(configPageFitJS)
-		})
+		if local {
+			page.OnDidFinishLoad(func() {
+				_, _ = page.Eval(configPageFitJS)
+			})
+		} else {
+			page.OnWillDownload(func(e *mygo.DownloadEvent) {
+				e.PreventDefault()
+			})
+		}
 		page.LoadURL(pageURL)
 	})
 }

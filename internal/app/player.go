@@ -27,6 +27,9 @@ func newConfiguredPlayer(dir string, assets fs.FS) *Player {
 		_ = p.writeSettings(p.settings)
 	}
 	p.startBridge(p.settings.BridgeTemplate)
+	if p.proxy != nil {
+		p.proxy.SetHLSAdFilter(!p.settings.DisableHLSAdFilter)
+	}
 	if p.settings.Player == "" {
 		p.settings.Player = externalplayer.DefaultPlayer()
 	}

@@ -55,9 +55,16 @@ func (p *Player) WebPlay(ctx context.Context, api, vodID, show, flag string, eps
 	if sub, ok := s.active(); ok {
 		subID = sub.ID
 	}
-	p.recordHistory(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name})
+	histEntry := HistoryEntry{
+		Flag:     flag,
+		Index:    start,
+		Name:     eps[start].Name,
+		ShowName: show,
+		Picture:  p.lookupVodPicture(api, vodID),
+	}
+	p.recordHistory(subID, api, vodID, histEntry)
 	title := entryTitle(show, eps[start].Name)
-	progressID, position := p.newProgressSession(subID, api, vodID, HistoryEntry{Flag: flag, Index: start, Name: eps[start].Name}, generation)
+	progressID, position := p.newProgressSession(subID, api, vodID, histEntry, generation)
 	out := &WebPlayback{Title: title, Index: start, Count: len(eps), ProgressID: progressID, Position: position}
 
 	var playable []catvod.Stream
@@ -178,7 +185,7 @@ func (p *Player) WebAdvance(ctx context.Context, id string, index int) (*WebPlay
 	if err != nil {
 		return nil, err
 	}
-	progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: index, Name: pl.eps[index].Name}, pl.generation)
+	progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: index, Name: pl.eps[index].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)}, pl.generation)
 	return &WebPlayback{ProgressID: progressID, Position: position,
 		Action:     "play",
 		Title:      entryTitle(pl.show, pl.eps[index].Name),

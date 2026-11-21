@@ -90,8 +90,12 @@ func (p *Player) ReportProgress(token string, position, duration float64, final 
 	entry := session.entry
 	entry.Duration = duration
 	entry.Position = min(position, duration)
+	if duration > 0 && entry.Position/duration >= 0.92 {
+		entry.Watched = true
+	}
 	if final && duration-entry.Position <= 3 {
 		entry.Position = 0
+		entry.Watched = true
 	}
 	p.recordHistory(session.subscription, session.api, session.vodID, entry)
 	return nil

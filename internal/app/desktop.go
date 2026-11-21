@@ -16,27 +16,29 @@ import (
 // DesktopHooks connects desktop-only MyGo APIs without invoking GUI/App
 // singletons during web mode or unit tests.
 type DesktopHooks struct {
-	KeepRunning     func(reason string) func()
-	KeepAwake       func(reason string, display bool) func()
-	NowPlayingSet   func(info mygo.NowPlayingInfo)
-	NowPlayingClear func()
-	UpdaterEnabled  func() bool
-	UpdaterCheck    func(ctx context.Context) (*mygo.Update, error)
-	Relaunch        func(args ...string)
-	OpenExternal    func(u string) error
+	KeepRunning         func(reason string) func()
+	KeepAwake           func(reason string, display bool) func()
+	NowPlayingSet       func(info mygo.NowPlayingInfo)
+	NowPlayingClear     func()
+	UpdaterEnabled      func() bool
+	UpdaterCheck        func(ctx context.Context) (*mygo.Update, error)
+	Relaunch            func(args ...string)
+	OpenExternal        func(u string) error
+	CompileContentRules func(id, rules string) (*mygo.ContentRules, error)
 }
 
 // DefaultDesktopHooks returns hooks backed by the live MyGo desktop runtime.
 func DefaultDesktopHooks() DesktopHooks {
 	return DesktopHooks{
-		KeepRunning:     mygo.Power.KeepRunning,
-		KeepAwake:       mygo.Power.KeepAwake,
-		NowPlayingSet:   mygo.NowPlaying.Set,
-		NowPlayingClear: mygo.NowPlaying.Clear,
-		UpdaterEnabled:  mygo.Updater.Enabled,
-		UpdaterCheck:    mygo.Updater.Check,
-		Relaunch:        mygo.App.Relaunch,
-		OpenExternal:    mygo.Shell.OpenExternal,
+		KeepRunning:         mygo.Power.KeepRunning,
+		KeepAwake:           mygo.Power.KeepAwake,
+		NowPlayingSet:       mygo.NowPlaying.Set,
+		NowPlayingClear:     mygo.NowPlaying.Clear,
+		UpdaterEnabled:      mygo.Updater.Enabled,
+		UpdaterCheck:        mygo.Updater.Check,
+		Relaunch:            mygo.App.Relaunch,
+		OpenExternal:        mygo.Shell.OpenExternal,
+		CompileContentRules: mygo.CompileContentRules,
 	}
 }
 

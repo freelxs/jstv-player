@@ -53,6 +53,9 @@ func (p *Player) SaveSettings(s Settings) error {
 	p.logMu.Unlock()
 	p.settingsMu.Unlock()
 	p.startBridge(s.BridgeTemplate)
+	if p.proxy != nil {
+		p.proxy.SetHLSAdFilter(!s.DisableHLSAdFilter)
+	}
 	// The plugin server binds its listen address at start; rebind on toggle.
 	if (oldLAN != s.AllowLAN || oldLANMedia != s.AllowLANMedia) && s.Active != "" {
 		// Stop synchronously before the UI attempts a reload. In particular,

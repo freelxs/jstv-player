@@ -35,6 +35,11 @@ func (r *Runtime) EnableDesktopIntegration(hooks DesktopHooks) {
 	r.Player.desktop = hooks
 }
 
+// InitPrivacyRules compiles built-in WebView content-blocking rules off the
+// main thread once the desktop runtime is ready.
+func (r *Runtime) InitPrivacyRules() {
+	r.Player.initPrivacyRules()
+}
 // HandleMediaCommand forwards a system media key or control center command to
 // the active built-in player window, if one is open.
 func (r *Runtime) HandleMediaCommand(cmd mygo.MediaCommand, pos time.Duration) {

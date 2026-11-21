@@ -5,7 +5,7 @@ const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
 const callWith = (signal, m, ...a) => (signal && window.mygo && typeof window.mygo.callWith === 'function')
   ? window.mygo.callWith('Player.' + m, a, { signal })
   : window.mygo.call('Player.' + m, ...a);
-const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0 };
+const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0, libTab: 'all', libSort: 'recent' };
 const browseRequests = BrowseRequestToken();
 let activeSearch = null;
 let trustReload = null;
@@ -97,6 +97,23 @@ function el(tag, attrs = {}, ...kids) {
   return e;
 }
 const icon = (n) => el('i', { class: 'i i-' + n });
+function formatClock(sec) {
+  const total = Math.floor(Number(sec) || 0);
+  if (total <= 0) return '';
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+function formatShortDate(unixSec) {
+  if (!unixSec) return '';
+  try {
+    return new Date(unixSec * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+  } catch (e) {
+    return '';
+  }
+}
 
 // ---- toast ----
 function toast(msg, { ms = 3500, err = false, busy = false } = {}) {
@@ -526,18 +543,22 @@ async function openDetail(site, id) {
     if (v.vod_pic) { const pic = posterURL(v.vod_pic); cover.append(el('img', { src: pic, referrerpolicy: 'no-referrer', alt: '' })); bg.style.backgroundImage = `url("${String(pic).replace(/"/g, '%22')}")`; }
     const meta = [v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).map((x) => el('span', {}, String(x)));
     const desc = String(v.vod_content || '').replace(/<[^>]+>/g, '').trim();
+    let watched = !!(hist && hist.watched);
     const hero = el('div', { class: 'hero' }, bg, cover, el('div', { class: 'info' },
       el('h2', {}, v.vod_name || ''), meta.length ? el('div', { class: 'meta' }, meta) : null,
       v.vod_actor ? el('p', { class: 'cast' }, '主演：' + v.vod_actor) : null,
       v.vod_director ? el('p', { class: 'cast' }, '导演：' + v.vod_director) : null,
       desc ? el('p', { class: 'desc', title: desc }, desc) : null,
-      el('button',{class:'btn',onclick:async(e)=>{const button=e.currentTarget;try{favorite=await call('ToggleFavorite',site.api,vodId,String(v.vod_name||vodId),String(v.vod_pic||''));button.textContent=favorite?'取消收藏':'收藏';}catch(error){toast(errMsg(error),{err:true});}}},favorite?'取消收藏':'收藏'),
+      el('div', { class: 'detail-actions' },
+        el('button',{class:'btn',onclick:async(e)=>{const button=e.currentTarget;try{favorite=await call('ToggleFavorite',site.api,vodId,String(v.vod_name||vodId),String(v.vod_pic||''));button.textContent=favorite?'取消收藏':'收藏';}catch(error){toast(errMsg(error),{err:true});}}},favorite?'取消收藏':'收藏'),
+        el('button',{class:'btn',onclick:async(e)=>{const button=e.currentTarget;try{await call('SetWatched',site.api,vodId,!watched);watched=!watched;button.textContent=watched?'已看完':'标为已看';}catch(error){toast(errMsg(error),{err:true});}}},watched?'已看完':'标为已看')),
       resumeButton()));
     function resumeButton() {
       const l = (d.lines || []).find((x) => hist && x.flag === hist.flag);
       if (!l || !l.episodes[hist.index]) return null;
       const next = hist.index;
-      return el('div', { class: 'resume' }, el('button', { class: 'primary', onclick: (e) => play(site, l, next, vodId, v.vod_name, null) }, icon('play'), `继续播放 ${l.episodes[next].name}`));
+      const pos = hist && hist.position > 0 ? ' · ' + formatClock(hist.position) : '';
+      return el('div', { class: 'resume' }, el('button', { class: 'primary', onclick: (e) => play(site, l, next, vodId, v.vod_name, null) }, icon('play'), `继续播放 ${l.episodes[next].name}${pos}`));
     }
     const lines = d.lines || [];
     const body = el('div', { id: 'lines' });
@@ -675,6 +696,9 @@ async function openSettings(tab = 'subs') {
   $('#sInheritNodeEnv').checked = !!s.inheritNodeEnv;
   $('#sInheritProxyEnv').checked = !!s.inheritProxyEnv;
   $('#sPersistLogs').checked = !!s.persistLogs;
+  $('#sHistoryEnabled').checked = !s.disableHistory;
+  $('#sAdBlock').checked = !s.disableAdBlock;
+  $('#sHlsAdFilter').checked = !s.disableHlsAdFilter;
   editSub(null); renderSubList(); setTab(tab);
   if (!$('#settings').open) $('#settings').showModal();
 }
@@ -694,7 +718,7 @@ $('#prefs').addEventListener('submit', async (e) => {
     const oldAllowLANMedia = !!st.settings?.allowLanMedia;
     const nextAllowLAN = $('#sAllowLan').checked;
     if (!oldAllowLAN && nextAllowLAN && !(await confirmLAN())) return;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked, disableHistory: !$('#sHistoryEnabled').checked, disableAdBlock: !$('#sAdBlock').checked, disableHlsAdFilter: !$('#sHlsAdFilter').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
     if ((oldAllowLAN !== nextAllowLAN || oldAllowLANMedia !== !!st.settings.allowLanMedia) && st.settings.active) {
@@ -784,18 +808,230 @@ if (btnCheckUpdate && btnInstallUpdate) {
 }
 
 $('#btnSettings').onclick = () => openSettings('subs');
-$('#btnFavorites').onclick = async () => {
-  const request=browseRequests.begin();
+function siteForAPI(api, fallbackName) {
+  return st.sites.find((x) => x.api === api) || { api, name: fallbackName || '媒体库' };
+}
+
+function continueCards(items) {
+  const grid = el('div', { class: 'grid' });
+  for (const item of items) {
+    const site = siteForAPI(item.api, '继续观看');
+    const poster = el('div', { class: 'poster' + (item.picture ? '' : ' noimg') });
+    if (item.picture) {
+      const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
+      img.onload = () => img.classList.add('loaded');
+      img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
+      img.src = posterURL(item.picture);
+      poster.append(img);
+    }
+    const pct = item.duration > 0 ? Math.max(0, Math.min(100, Math.round((item.position / item.duration) * 100))) : 0;
+    if (item.episodeName) poster.append(el('span', { class: 'badge' }, item.episodeName));
+    if (pct > 0) poster.append(el('div', { class: 'prog-bar' }, el('div', { class: 'prog-fill', style: `width:${pct}%` })));
+    poster.append(el('span', { class: 'play' }, icon('play')));
+    const timeInfo = item.position > 0 && item.duration > 0
+      ? `${formatClock(item.position)} / ${formatClock(item.duration)}`
+      : (site.name || '');
+    grid.append(el('button', { class: 'card', title: item.showName || item.id, onclick: () => openDetail(site, item.id) },
+      poster,
+      el('div', { class: 't' }, item.showName || item.id),
+      el('div', { class: 's' }, timeInfo || '\u00a0')));
+  }
+  return grid;
+}
+
+async function exportLibraryFile() {
   try {
-    const entries=await call('GetFavorites');if(!browseRequests.current(request))return;
-    st.stack=[];$('#classes').replaceChildren();$('#filters').hidden=true;
-    show(()=>{
-      if(!Array.isArray(entries)||!entries.length){setView(stateBox({title:'还没有收藏',text:'在节目或直播频道详情中点击“收藏”。'}));return;}
-      const groups=new Map();for(const item of entries){if(!groups.has(item.api))groups.set(item.api,[]);groups.get(item.api).push({vod_id:item.id,vod_name:item.name,vod_pic:item.picture});}
-      const elements=[];for(const [api,items] of groups){const site=st.sites.find((x)=>x.api===api)||{api,name:'收藏'};elements.push(el('div',{class:'section-h'},site.name),cards(items,site));}setView(...elements);
-    });
-  } catch(e){if(browseRequests.current(request))setView(errorState(e));}
-};
+    const backup = await call('ExportLibrary');
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `jstv-library-${stamp}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+    toast('媒体库备份已导出');
+  } catch (e) {
+    toast(errMsg(e), { err: true });
+  }
+}
+
+function pickImportLibraryFile(onDone) {
+  const input = el('input', { type: 'file', accept: '.json,application/json', hidden: true });
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const res = await call('ImportLibrary', parsed);
+      toast(`导入完成：收藏 +${res.favoritesAdded} / 更新 ${res.favoritesUpdated}，历史 +${res.historyAdded} / 更新 ${res.historyUpdated}`);
+      onDone();
+    } catch (e) {
+      toast('导入失败：' + errMsg(e), { err: true });
+    }
+  });
+  document.body.append(input);
+  input.click();
+}
+
+async function openLibrary() {
+  const request = browseRequests.begin();
+  try {
+    const [favoritesRaw, historyRaw] = await Promise.all([call('GetFavorites'), call('ListHistory')]);
+    if (!browseRequests.current(request)) return;
+    const favorites = Array.isArray(favoritesRaw) ? favoritesRaw : [];
+    const history = Array.isArray(historyRaw) ? historyRaw : [];
+    const inProgress = history.filter((item) => !item.watched);
+    st.stack = [];
+    $('#classes').replaceChildren();
+    $('#filters').hidden = true;
+    const render = () => {
+      const clearBtn = history.length ? el('button', {
+        class: 'btn',
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          if (!btn.dataset.confirm) {
+            btn.dataset.confirm = '1';
+            btn.textContent = '确认清空';
+            btn.classList.add('confirm');
+            setTimeout(() => { if (btn.isConnected) { delete btn.dataset.confirm; btn.textContent = '清空历史'; btn.classList.remove('confirm'); } }, 3000);
+            return;
+          }
+          try {
+            await call('ClearHistory');
+            toast('观看历史已清空');
+            openLibrary();
+          } catch (err) { toast(errMsg(err), { err: true }); }
+        },
+      }, '清空历史') : null;
+      const header = el('div', { class: 'lib-head' },
+        el('div', {},
+          el('h2', { class: 'lib-title' }, '媒体库'),
+          el('div', { class: 'hint small' }, `继续观看 ${inProgress.length} · 收藏 ${favorites.length} · 历史 ${history.length}${st.settings && st.settings.disableHistory ? '（已暂停记录历史）' : ''}`)),
+        el('div', { class: 'lib-actions' },
+          el('button', { class: 'btn', onclick: exportLibraryFile }, '导出备份'),
+          el('button', { class: 'btn', onclick: () => pickImportLibraryFile(openLibrary) }, '导入备份'),
+          clearBtn));
+
+      const tabs = [
+        ['all', '全部'],
+        ['continue', `继续观看 (${inProgress.length})`],
+        ['saved', `收藏想看 (${favorites.length})`],
+        ['history', `观看历史 (${history.length})`],
+      ];
+      const sortSelect = el('select', {
+        'aria-label': '收藏排序',
+        onchange: (e) => { st.libSort = e.target.value; render(); },
+      },
+        el('option', { value: 'recent' }, '收藏：最近添加'),
+        el('option', { value: 'title' }, '收藏：名称 A-Z'));
+      sortSelect.value = st.libSort;
+      const tabBar = el('div', { class: 'lib-tabs' },
+        el('div', { class: 'lib-tab-group' }, tabs.map(([id, label]) =>
+          el('button', { class: 'chip' + (st.libTab === id ? ' active' : ''), onclick: () => { st.libTab = id; render(); } }, label))),
+        (st.libTab === 'all' || st.libTab === 'saved') && favorites.length > 1 ? sortSelect : null);
+
+      const parts = [header, tabBar];
+      let shown = 0;
+
+      if ((st.libTab === 'all' || st.libTab === 'continue') && inProgress.length) {
+        parts.push(el('div', { 'data-lib-section': 'continue' }, el('div', { class: 'section-h' }, '继续观看'), continueCards(inProgress)));
+        shown += inProgress.length;
+      }
+
+      if ((st.libTab === 'all' || st.libTab === 'saved') && favorites.length) {
+        const sortedFavs = [...favorites];
+        if (st.libSort === 'title') sortedFavs.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'));
+        const savedSection = el('div', { 'data-lib-section': 'saved' });
+        if (st.libSort === 'recent') {
+          const groups = new Map();
+          for (const item of sortedFavs) {
+            if (!groups.has(item.api)) groups.set(item.api, []);
+            groups.get(item.api).push({ vod_id: item.id, vod_name: item.name, vod_pic: item.picture });
+          }
+          savedSection.append(el('div', { class: 'section-h' }, `收藏 / 想看 (${sortedFavs.length})`));
+          for (const [api, items] of groups) {
+            const site = siteForAPI(api, '收藏');
+            savedSection.append(el('div', { class: 'lib-sub-h' }, site.name), cards(items, site));
+          }
+        } else {
+          savedSection.append(el('div', { class: 'section-h' }, `收藏 / 想看 (${sortedFavs.length})`));
+          const grid = el('div', { class: 'grid' });
+          for (const item of sortedFavs) {
+            const site = siteForAPI(item.api, '收藏');
+            const poster = el('div', { class: 'poster' + (item.picture ? '' : ' noimg') });
+            if (item.picture) {
+              const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
+              img.onload = () => img.classList.add('loaded');
+              img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
+              img.src = posterURL(item.picture);
+              poster.append(img);
+            }
+            poster.append(el('span', { class: 'play' }, icon('play')));
+            grid.append(el('button', { class: 'card', title: item.name || item.id, onclick: () => openDetail(site, item.id) },
+              poster, el('div', { class: 't' }, item.name || item.id), el('div', { class: 's' }, site.name || '\u00a0')));
+          }
+          savedSection.append(grid);
+        }
+        parts.push(savedSection);
+        shown += sortedFavs.length;
+      }
+
+      if ((st.libTab === 'all' || st.libTab === 'history') && history.length) {
+        const list = el('div', { class: 'hist-list' });
+        for (const item of history) {
+          const site = siteForAPI(item.api, '历史');
+          const thumb = el('div', { class: 'hist-thumb' + (item.picture ? '' : ' noimg') });
+          if (item.picture) {
+            const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
+            img.onerror = () => { img.remove(); thumb.classList.add('noimg'); };
+            img.src = posterURL(item.picture);
+            thumb.append(img);
+          }
+          const metaParts = [site.name, item.episodeName];
+          if (item.position > 0 && item.duration > 0) metaParts.push(`${formatClock(item.position)} / ${formatClock(item.duration)}`);
+          if (item.time) metaParts.push(formatShortDate(item.time));
+          list.append(el('div', { class: 'hist-row', onclick: () => openDetail(site, item.id) },
+            thumb,
+            el('div', { class: 'hist-meta' },
+              el('div', { class: 'hist-title' },
+                el('span', {}, item.showName || item.id),
+                item.watched ? el('span', { class: 'badge-watched' }, '已看') : null),
+              el('div', { class: 'hist-sub' }, metaParts.filter(Boolean).join(' · '))),
+            el('div', { class: 'hist-actions', onclick: (e) => e.stopPropagation() },
+              el('button', {
+                class: 'btn',
+                onclick: async () => {
+                  try { await call('SetWatched', item.api, item.id, !item.watched); openLibrary(); }
+                  catch (err) { toast(errMsg(err), { err: true }); }
+                },
+              }, item.watched ? '标为未看' : '标为已看'),
+              el('button', {
+                class: 'btn',
+                title: '从观看历史移除',
+                onclick: async () => {
+                  try { await call('RemoveHistory', item.api, item.id); openLibrary(); }
+                  catch (err) { toast(errMsg(err), { err: true }); }
+                },
+              }, '移除'))));
+        }
+        parts.push(el('div', { 'data-lib-section': 'history' }, el('div', { class: 'section-h' }, `观看历史 (${history.length})`), list));
+        shown += history.length;
+      }
+
+      if (!shown) {
+        parts.push(stateBox({ title: '媒体库还是空的', text: '播放节目或点击“收藏”后，这里会汇总继续观看、想看清单和观看历史。' }));
+      }
+      setView(...parts);
+    };
+    show(render);
+  } catch (e) {
+    if (browseRequests.current(request)) setView(errorState(e));
+  }
+}
+$('#btnFavorites').onclick = () => openLibrary();
 $('#btnForceReload').onclick = () => { $('#settings').close(); loadSource(() => call('ForceRefreshSource')); };
 $('#btnReload').onclick = () => loadSource();
 $('#btnStartCached').onclick = () => loadSource(() => call('StartCachedSource'));
