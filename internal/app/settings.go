@@ -31,6 +31,10 @@ func (p *Player) SaveSettings(s Settings) error {
 	if s.Player == "" {
 		s.Player = externalplayer.DefaultPlayer()
 	}
+	s.BangumiToken = strings.TrimSpace(s.BangumiToken)
+	if strings.ContainsAny(s.BangumiToken, "\r\n") {
+		return errors.New("Bangumi Access Token 不能包含换行符")
+	}
 	if err := normalizeCustomPlayer(&s); err != nil {
 		return err
 	}

@@ -58,13 +58,13 @@
   </div>
 
   <div class="pane" data-pane="subs">
-    <p class="hint">支持 JS 插件、M3U/TXT 直播、含 lives 的 TVBox 直播，以及带 sites 的 TVBox 点播配置。多仓配置会先选择一条线路。直播列表不需要 Node.js；点播里的 JavaScript 站点需要 Node。csp_XBPQ、csp_XYQHiker 和 csp_AppYs / csp_AppYsV2 由 ext 规则在桌面和网页模式运行；其余 JAR、DEX 和 Python 站点只展示、不运行。</p>
+    <p class="hint">支持 JS 插件、M3U/TXT 直播、TVBox 直播/点播配置，以及 Kazumi 规则仓库（如 GitHub 仓库地址或规则 JSON）。多仓配置会先选择一条线路。直播列表与 Kazumi 规则不需要 Node.js；点播里的 JavaScript 站点需要 Node。csp_XBPQ、csp_XYQHiker 和 csp_AppYs / csp_AppYsV2 由 ext 规则在桌面和网页模式运行；其余 JAR、DEX 和 Python 站点只展示、不运行。</p>
     <ul id="subList" class="sub-list"></ul>
     <form id="subForm" class="sub-form">
       <input id="subFormId" type="hidden">
       <input id="subFormName" placeholder="名称（可选）" maxlength="40">
-      <input id="subFormURL" placeholder="插件或直播订阅的 HTTP(S) 地址" required>
-      <select id="subFormType" aria-label="订阅类型"><option value="auto">自动识别</option><option value="plugin">JS 插件</option><option value="live">M3U / TXT / TVBox 直播</option><option value="tvbox">TVBox 点播</option></select>
+      <input id="subFormURL" placeholder="插件、直播、TVBox 或 Kazumi 规则仓库地址" required>
+      <select id="subFormType" aria-label="订阅类型"><option value="auto">自动识别</option><option value="plugin">JS 插件</option><option value="live">M3U / TXT / TVBox 直播</option><option value="tvbox">TVBox 点播</option><option value="kazumi">Kazumi 规则</option></select>
       <button class="primary" id="subFormBtn">添加</button>
       <button type="button" class="ghost" id="subFormCancel" hidden>取消</button>
     </form>
@@ -98,6 +98,8 @@
       <input id="sNode" placeholder="/usr/local/bin/node" /></label>
     <label class="field"><span>播放桥模板 <em>可选，留空关闭；{vid}、{res} 会被替换</em></span>
       <input id="sBridge" placeholder="https://example.com/media/{vid}/{res}.mp4" /></label>
+    <label class="field"><span>Bangumi Access Token <em>可选，仅保存在本机 settings.json；留空也可正常使用番剧目录与简介</em></span>
+      <input id="sBangumiToken" type="password" autocomplete="off" spellcheck="false" placeholder="可选，用于解锁受限条目及提升稳定度" /></label>
     <label class="check"><input type="checkbox" id="sContinuous"> 连播：播放某一集后自动接着播放同一线路的后续剧集</label>
     <label class="check"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
     <label class="check"><input type="checkbox" id="sAllowLan"> 允许局域网访问：将插件 API 绑定到所有网络接口，局域网设备可调用插件并访问其上游代理。仅在可信网络开启；启动失败会停止旧服务。</label>
@@ -123,7 +125,7 @@
   <div class="pane" data-pane="about" hidden>
     <div class="update-box">
       <div class="update-row">
-        <p id="appVersion" class="hint small">JSTV Player 0.6.8</p>
+        <p id="appVersion" class="hint small">JSTV Player 0.6.9</p>
         <div class="update-actions">
           <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
           <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>

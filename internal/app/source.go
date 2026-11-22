@@ -62,8 +62,20 @@ func (p *Player) loadSource(useCache bool, force ...bool) (*LoadResult, error) {
 	}
 	// Each subscription keeps its own plugin copy and data files.
 	dir := filepath.Join(p.dir, "subs", sub.ID)
+	if shouldTryKazumiFirst(sub, dir, useCache) {
+		loaded, handled, err := p.tryKazumi(ctx, s, sub, dir, generation, useCache)
+		if handled || err != nil {
+			return loaded, err
+		}
+	}
 	if shouldTryTVBox(sub) {
 		loaded, handled, err := p.tryTVBox(ctx, s, sub, dir, generation, useCache)
+		if handled || err != nil {
+			return loaded, err
+		}
+	}
+	if shouldTryKazumiFallback(sub) {
+		loaded, handled, err := p.tryKazumi(ctx, s, sub, dir, generation, useCache)
 		if handled || err != nil {
 			return loaded, err
 		}

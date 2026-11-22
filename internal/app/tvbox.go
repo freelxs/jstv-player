@@ -25,7 +25,7 @@ func shouldTryTVBox(sub Subscription) bool {
 	switch sub.Type {
 	case "tvbox":
 		return true
-	case "plugin", "live":
+	case "plugin", "live", "kazumi":
 		return false
 	default:
 		return !pluginURL(sub.URL) && !playlistFile(sub.URL)

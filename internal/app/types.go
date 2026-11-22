@@ -55,6 +55,9 @@ type Settings struct {
 	DisableAdBlock bool `json:"disableAdBlock"`
 	// DisableHLSAdFilter turns off built-in HLS ad-segment filtering in the media proxy.
 	DisableHLSAdFilter bool `json:"disableHlsAdFilter"`
+	// BangumiToken is an optional personal Bangumi Access Token stored only in
+	// the user's private settings.json and sent exclusively to Bangumi APIs.
+	BangumiToken string `json:"bangumiToken,omitempty"`
 }
 
 type vodMetaEntry struct {

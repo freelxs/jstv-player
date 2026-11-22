@@ -12,7 +12,7 @@ import (
 	"github.com/freelxs/jstv-player/internal/catvod"
 )
 
-const sniffTimeout = 12 * time.Second
+const sniffTimeout = 15 * time.Second
 
 // sniffed is a media request captured from a hidden page.
 type sniffed struct {
@@ -49,6 +49,10 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 	}
 	ctx, cancel := context.WithTimeout(ctx, sniffTimeout)
 	defer cancel()
+	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	if customUA := headerFold(headers, "User-Agent"); customUA != "" {
+		ua = customUA
+	}
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title:  "JSTV",
 		Hidden: true,
@@ -63,7 +67,7 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 			BackgroundThrottling: mygo.ThrottlingOff,
 			Session:              mygo.NewEphemeralSession(),
 			ContentRules:         contentRulesFromContext(ctx),
-			UserAgent:            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+			UserAgent:            ua,
 		},
 	})
 	if w == nil {
@@ -82,20 +86,19 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 			e.PreventDefault()
 		}
 	})
-	_ = headers
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		value, err := w.Page().EvalContext(ctx, "window.__jstvMedia || null")
 		if err == nil {
-			if found, ok := decodeSniff(value); ok {
+			if found, ok := decodeSniffWithHeaders(value, headers); ok {
 				return found, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return sniffed{}, errors.New("播放页在 12 秒内没有出现可播放的视频")
+				return sniffed{}, errors.New("播放页在 15 秒内没有出现可播放的视频")
 			}
 			return sniffed{}, errors.New("播放页嗅探已取消")
 		case <-tick.C:
@@ -104,13 +107,18 @@ func sniffHidden(ctx context.Context, page string, headers map[string]string) (s
 }
 
 func decodeSniff(v any) (sniffed, bool) {
+	return decodeSniffWithHeaders(v, nil)
+}
+
+func decodeSniffWithHeaders(v any, incoming map[string]string) (sniffed, bool) {
 	m, ok := v.(map[string]any)
 	if !ok || m == nil {
 		return sniffed{}, false
 	}
 	raw, _ := m["url"].(string)
 	raw = strings.TrimSpace(raw)
-	if !catvodMedia(raw) {
+	verified, _ := m["verified"].(bool)
+	if !catvodMedia(raw) && !(verified && isHTTPSniffURL(raw)) {
 		return sniffed{}, false
 	}
 	headers := map[string]string{}
@@ -124,12 +132,31 @@ func decodeSniff(v any) (sniffed, bool) {
 			headers[k] = val
 		}
 	}
-	if ref, _ := m["referer"].(string); ref != "" {
+	if explicitRef := headerFold(incoming, "Referer"); explicitRef != "" {
+		headers["Referer"] = explicitRef
+	} else if ref, _ := m["referer"].(string); ref != "" {
 		if _, exists := headers["Referer"]; !exists {
 			headers["Referer"] = ref
 		}
 	}
+	if explicitUA := headerFold(incoming, "User-Agent"); explicitUA != "" {
+		headers["User-Agent"] = explicitUA
+	}
 	return sniffed{URL: raw, Headers: headers}, true
+}
+
+func headerFold(headers map[string]string, key string) string {
+	for k, v := range headers {
+		if strings.EqualFold(strings.TrimSpace(k), key) && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func isHTTPSniffURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func catvodMedia(raw string) bool {

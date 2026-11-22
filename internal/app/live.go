@@ -19,7 +19,7 @@ func isLiveSubscription(sub Subscription) bool {
 	if sub.Type == "live" {
 		return true
 	}
-	if sub.Type == "plugin" || sub.Type == "tvbox" {
+	if sub.Type == "plugin" || sub.Type == "tvbox" || sub.Type == "kazumi" {
 		return false
 	}
 	u, err := url.Parse(sub.URL)

@@ -126,3 +126,25 @@ func TestEncryptOneUnescapesPlayerURL(t *testing.T) {
 func fmtPage(w http.ResponseWriter, body string) {
 	_, _ = w.Write([]byte("<!doctype html><html><body>" + body + "</body></html>"))
 }
+
+func TestIframeQueryMediaExtraction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmtPage(w, `<iframe src="https://player.example/embed?url=https%3A%2F%2Fcdn.example%2Fvideo%2Findex.m3u8"></iframe>`)
+	}))
+	defer srv.Close()
+	got, err := Resolve(t.Context(), Options{URL: srv.URL + "/watch/1", AllowLAN: true})
+	if err != nil || got.URL != "https://cdn.example/video/index.m3u8" {
+		t.Fatalf("iframe query resolve failed: %+v %v", got, err)
+	}
+}
+
+func TestResolveSkipsAdPosterMedia(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmtPage(w, `<script>const ad = "https://ad.example/Play/adposter.mp4";</script>`)
+	}))
+	defer srv.Close()
+	got, err := Resolve(t.Context(), Options{URL: srv.URL + "/watch/1", AllowLAN: true})
+	if err == nil || got.URL != "" {
+		t.Fatalf("expected adposter to be skipped, got %+v %v", got, err)
+	}
+}

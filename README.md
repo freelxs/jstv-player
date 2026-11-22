@@ -14,6 +14,7 @@
 
 - **直播订阅**：支持 M3U/TXT 分组、台标、UA/Referer、`#EXTHTTP`、`proxy://do=live`、嵌套分组、TVBox lives 与图片包装配置。同名频道合并成多条线路，内置播放器和网页播放器在出错或 15 秒没有画面时自动换下一条。直播只支持 HTTP(S) 媒体，EPG 和其他传输协议尚未实现
 - **TVBox 点播**：JSON 配置可含 BOM、注释、Base64、图片外壳和 `$#key#$` AES。type 0 XML、type 1/4 JSON 采集接口直接请求；type 3 的 `.js` 站点先用内置 QuickJS 运行（不打包 drpy2，脚本从配置地址加载），跑不了再回退到 Node。`csp_`、JAR 和 Python 站点只展示原因、不执行。`urls` 多仓配置先选择一条线路，最多跟随 4 层。`hosts` 改写连接地址，`rules` 去掉匹配的 HLS 广告分片。HTTP-FLV 在安装了 ffmpeg 时转成 fMP4。Docker 镜像带 ffmpeg
+- **Kazumi 规则**：无需 Node，直接导入 Kazumi `index.json` 规则清单或单条规则 JSON，内置 HTML XPath 与 JSONPath 搜索与剧集线路提取；提供「推荐目录」（Bangumi 每日放送与热门番剧）并自动补齐封面、评分、演职员与剧情简介，支持在设置中填写本机私有的 Bangumi Access Token
 - **多订阅**：在设置里添加、重命名、删除多个插件或直播地址（`.../index.js.md5` 或 `.../index.js`），左上角随时切换；切换时停止旧插件进程、启动新的。每个订阅的插件文件和数据分开存放
 - 自动下载 `index.js`、`index.config.js`，校验发布者提供的 md5（默认不一致时只提示）；本机保存包含脚本和可执行配置的 SHA-256 TOFU 清单，首次使用、脚本或配置变化均需用户确认后才运行；完整版本成功启动后才提交
 - 站点列表、分类浏览与翻页、单站/全站搜索（逐站返回成功/失败状态，近期失败站点后置）；Home/Category 有按订阅代际隔离的短期缓存

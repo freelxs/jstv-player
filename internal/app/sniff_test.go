@@ -28,6 +28,17 @@ func TestDecodeSniffKeepsHTTPMediaAndReferer(t *testing.T) {
 	if !strings.Contains(sniffScript, "XMLHttpRequest") || !strings.Contains(sniffScript, "PerformanceObserver") || strings.Contains(sniffScript, "mygo.") {
 		t.Fatal("sniff script lost a hook or calls Go")
 	}
+	verified, ok := decodeSniffWithHeaders(map[string]any{
+		"url":      "https://cdn.example/stream/token123",
+		"referer":  "https://iframe.example/player",
+		"verified": true,
+	}, map[string]string{
+		"Referer":    "https://www.sorani.net/",
+		"User-Agent": "CustomUA/1.0",
+	})
+	if !ok || verified.URL != "https://cdn.example/stream/token123" || verified.Headers["Referer"] != "https://www.sorani.net/" || verified.Headers["User-Agent"] != "CustomUA/1.0" {
+		t.Fatalf("verified extensionless sniff with explicit headers failed: %+v %v", verified, ok)
+	}
 }
 
 func TestDesktopSniffReplacesAnUnresolvedPage(t *testing.T) {
