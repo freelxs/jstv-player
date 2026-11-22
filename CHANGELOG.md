@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.6
+
+- 修复全站搜索直接报错 `mygo: channel closed` 并提示无结果的问题：对带 `Channel` 流式参数的 `SearchAll` 改用 `window.mygo.call` 并通过 `ch.close()` 联动 `AbortSignal` 取消，避免 `mygo v0.10.0` 在 `callWith` 携带 `cancel: true` 时派生 `pageCtx` 导致通道创建即被关闭；网页模式同步支持通过 `channel.close()` 中断 `/api/stream` 搜索流。
+- 修复详情页多季/多播放源导航栏点击切换后横向滚动条回滚到最左侧的问题：复用 `.line-tabs` 容器并保留滚动偏移，同时自动聚焦并滚动定位到当前选中的季标签。
+
 ## 0.6.5
 
 - 修复剧集连播时播放失败自动跳下一集导致丢失进度的问题：内置桌面播放器与网页播放器在解码错误、线路全部失效、解析失败或视频提前中断时会先保存当前进度并停止连播提示失败。

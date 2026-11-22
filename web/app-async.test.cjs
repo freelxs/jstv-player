@@ -53,6 +53,9 @@ function makeApp(callImpl = async () => ({})) {
   const window = { mygo: {
     call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args),
     callWith: (method, args, opts) => {
+      if (opts && opts.signal && Array.isArray(args) && args.some((a) => channels.includes(a))) {
+        return Promise.reject(new Error('mygo: channel closed'));
+      }
       signals.push({ method: method.replace('Player.', ''), args, signal: opts && opts.signal });
       return callImpl(method.replace('Player.', ''), ...(args || []), opts);
     },
@@ -486,6 +489,39 @@ test('opening a newer category aborts the earlier request signal', async () => {
   second.resolve({ list: [] });
   first.resolve({ list: [] });
   await Promise.all([p1, p2]);
+});
+
+test('switching season tabs preserves line-tabs scroll position and focuses the clicked season', async () => {
+  const lines = Array.from({ length: 12 }, (_, idx) => ({
+    flag: `第${idx + 1}季`,
+    episodes: [{ name: `S${idx + 1}E1`, id: `ep-${idx + 1}-1` }],
+  }));
+  const harness = makeApp(async (method) => {
+    if (method === 'Detail') return { vod: { vod_name: '多季剧集' }, lines };
+    if (method === 'GetFavorites') return [];
+    if (method === 'GetHistory') return null;
+    return {};
+  });
+  await harness.app.openDetail(site('示例', '/demo'), 'vod-1');
+  const descendants = (element) => [element, ...(element.children || []).flatMap(descendants)];
+  const tabs = descendants(harness.el('#view')).find((node) => node.classList && node.classList.contains('line-tabs'));
+  assert.ok(tabs, 'expected .line-tabs container');
+  tabs.scrollLeft = 420;
+  const targetBtn = tabs.children[11];
+  let focused = false;
+  let scrolled = null;
+  targetBtn.focus = () => { focused = true; };
+  targetBtn.scrollIntoView = (opts) => { scrolled = opts; };
+  targetBtn.listeners.click();
+  const tabsAfter = descendants(harness.el('#view')).find((node) => node.classList && node.classList.contains('line-tabs'));
+  assert.equal(tabsAfter, tabs, 'expected .line-tabs DOM element to be reused');
+  assert.equal(tabs.scrollLeft, 420, 'expected horizontal scrollLeft to be preserved');
+  assert.equal(targetBtn.classList.contains('active'), true);
+  assert.equal(tabs.children[0].classList.contains('active'), false);
+  assert.equal(focused, true, 'expected clicked season tab to receive focus');
+  assert.equal(scrolled && scrolled.block, 'nearest');
+  assert.equal(scrolled && scrolled.inline, 'nearest');
+  assert.match(harness.el('#view').textContent, /S12E1/);
 });
 
 test('check and install update buttons reflect available release', async () => {
