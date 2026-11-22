@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -79,8 +80,70 @@ func main() {
 		mainWinMu.Lock()
 		mainWin = win
 		mainWinMu.Unlock()
+		evalMain := func(script string) {
+			mainWinMu.Lock()
+			target := mainWin
+			mainWinMu.Unlock()
+			if target == nil {
+				return
+			}
+			target.Show()
+			target.Focus()
+			_, _ = target.Page().Eval(script)
+		}
+		installDesktopMenu(evalMain)
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func installDesktopMenu(evalMain func(string)) {
+	openUpdate := func(*mygo.MenuItem, *mygo.Window) {
+		evalMain(`window.__jstvOpenUpdate && window.__jstvOpenUpdate()`)
+	}
+	openSettings := func(*mygo.MenuItem, *mygo.Window) {
+		evalMain(`window.__jstvOpenSettings && window.__jstvOpenSettings()`)
+	}
+	reloadSource := func(*mygo.MenuItem, *mygo.Window) {
+		evalMain(`window.__jstvReloadSource && window.__jstvReloadSource()`)
+	}
+	if runtime.GOOS == "darwin" {
+		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
+			{Label: "JSTV Player", Submenu: []*mygo.MenuItem{
+				{Role: mygo.RoleAbout},
+				{Label: "检查更新…", Click: openUpdate},
+				mygo.Separator(),
+				{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: openSettings},
+				mygo.Separator(),
+				{Role: mygo.RoleServices},
+				mygo.Separator(),
+				{Role: mygo.RoleHide},
+				{Role: mygo.RoleHideOthers},
+				{Role: mygo.RoleUnhide},
+				mygo.Separator(),
+				{Role: mygo.RoleQuit},
+			}},
+			{Role: mygo.RoleEditMenu},
+			{Label: "显示", Submenu: []*mygo.MenuItem{
+				{Label: "重新加载订阅", Accelerator: "CmdOrCtrl+R", Click: reloadSource},
+				mygo.Separator(),
+				{Role: mygo.RoleToggleFullScreen},
+			}},
+			{Role: mygo.RoleWindowMenu},
+		}))
+		return
+	}
+	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
+		{Label: "文件", Submenu: []*mygo.MenuItem{
+			{Label: "重新加载订阅", Accelerator: "CmdOrCtrl+R", Click: reloadSource},
+			{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: openSettings},
+			mygo.Separator(),
+			{Role: mygo.RoleQuit},
+		}},
+		{Role: mygo.RoleEditMenu},
+		{Label: "帮助", Submenu: []*mygo.MenuItem{
+			{Label: "检查更新…", Click: openUpdate},
+		}},
+	}))
 }

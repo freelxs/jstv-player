@@ -283,3 +283,65 @@ func TestHistoryCorruptionIsPreservedBeforeRecording(t *testing.T) {
 		t.Fatal("new history was not recorded")
 	}
 }
+
+func TestForceRefreshSourceBypassesConditionalCache(t *testing.T) {
+	if _, err := catvod.FindNode(""); err != nil {
+		t.Skip(err)
+	}
+	script, err := os.ReadFile("../catvod/testdata/mockspider.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seenIfNoneMatch []string
+	var seenCacheControl []string
+	version := 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.js" {
+			http.NotFound(w, r)
+			return
+		}
+		seenIfNoneMatch = append(seenIfNoneMatch, r.Header.Get("If-None-Match"))
+		seenCacheControl = append(seenCacheControl, r.Header.Get("Cache-Control"))
+		w.Header().Set("ETag", `"v1"`)
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if version == 2 {
+			w.Write(append(append([]byte(nil), script...), []byte("\n// refreshed\n")...))
+			return
+		}
+		w.Write(script)
+	}))
+	defer server.Close()
+
+	p := newPlayer(t.TempDir())
+	defer p.StopSource()
+	if _, err := p.AddSubscription("refresh test", server.URL+"/index.js"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := p.LoadSource()
+	if err != nil || !first.TrustRequired {
+		t.Fatalf("initial load: %+v %v", first, err)
+	}
+	if err := p.ApproveSource(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LoadSource(); err != nil {
+		t.Fatalf("start approved: %v", err)
+	}
+	version = 2
+	refreshed, err := p.ForceRefreshSource()
+	if err != nil || !refreshed.TrustRequired {
+		t.Fatalf("expected ForceRefreshSource to fetch updated content and require trust, got %+v err=%v", refreshed, err)
+	}
+	if refreshed.TrustSHA256 == first.TrustSHA256 {
+		t.Fatal("ForceRefreshSource returned stale cached hash")
+	}
+	if last := seenIfNoneMatch[len(seenIfNoneMatch)-1]; last != "" {
+		t.Fatalf("ForceRefreshSource sent If-None-Match %q", last)
+	}
+	if last := seenCacheControl[len(seenCacheControl)-1]; last != "no-cache" {
+		t.Fatalf("ForceRefreshSource Cache-Control = %q, want no-cache", last)
+	}
+}

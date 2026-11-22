@@ -24,9 +24,9 @@
 
   <div class="sidebar-foot">
     <button id="btnFavorites" class="ghost icon-text">媒体库</button>
-    <button id="btnStartCached" class="ghost icon-text" title="启动上次成功的缓存版本">启动缓存</button>
-    <button id="btnReload" class="ghost icon-text" title="重新加载当前订阅"><i class="i i-reload"></i>重新加载</button>
+    <button id="btnReload" class="ghost icon-text" title="重新拉取并刷新当前订阅"><i class="i i-reload"></i>重新加载</button>
     <button id="btnSettings" class="ghost icon-text" title="设置"><i class="i i-gear"></i>设置</button>
+    <button id="btnSidebarUpdate" class="ghost icon-text" title="检查应用更新"><i class="i i-update"></i>检查更新</button>
   </div>
 </aside>
 
@@ -52,6 +52,7 @@
       <button class="tab active" data-tab="subs">订阅</button>
       <button class="tab" data-tab="play">播放</button>
       <button class="tab" data-tab="logs">日志</button>
+      <button class="tab" data-tab="about">关于</button>
     </div>
     <button class="icon-btn" id="sClose" title="关闭"><i class="i i-x"></i></button>
   </div>
@@ -68,7 +69,7 @@
       <button type="button" class="ghost" id="subFormCancel" hidden>取消</button>
     </form>
     <button type="button" class="btn" id="btnForceReload">强制下载刷新当前订阅</button>
-    <p class="hint small">启动缓存不查询远端；重新加载使用服务器缓存标记；强制刷新会重新下载文件。</p>
+    <p class="hint small">应用启动时默认优先使用已校验的本地缓存；重新加载和强制刷新都会绕过缓存重新拉取最新订阅。</p>
     <p class="hint small">插件由你自行提供并负责，本应用不内置任何插件或地址。</p>
   </div>
 
@@ -111,9 +112,18 @@
     <p class="hint small">隐私说明：本应用本身零遥测、不收集使用数据；播放时上游视频源、订阅地址以及手动检查更新时的 GitHub 仍可能看到你的网络请求。</p>
     <div class="field"><button type="button" class="btn" id="probeNodePermissions">检测 Node 权限标志</button><p id="nodePermissionResult" class="hint small">检测仅查看当前 Node 的帮助信息，不启用权限限制，也不是安全沙箱。</p></div>
     <div class="actions"><button class="primary" id="sSave">保存</button></div>
+  </form>
+
+  <div class="pane" data-pane="logs" hidden>
+    <p class="hint">只显示行时间戳在最近 7 天内的脱敏日志；启动和读取时会清理过期行，容量上限可能更早淘汰日志。单文件最多 1 MiB，共 4 个文件（最多 4 MiB）。未知插件自定义秘密无法保证自动识别。清除只影响日志，不影响信任 pin、播放记录或插件配置。</p>
+    <div class="log-actions"><span id="logPersistenceState" class="hint small"></span><button class="btn" id="clearLogs">清除日志</button></div>
+    <pre id="logs" class="logs"></pre>
+  </div>
+
+  <div class="pane" data-pane="about" hidden>
     <div class="update-box">
       <div class="update-row">
-        <p id="appVersion" class="hint small">JSTV Player 0.6.7</p>
+        <p id="appVersion" class="hint small">JSTV Player 0.6.8</p>
         <div class="update-actions">
           <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
           <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>
@@ -122,12 +132,7 @@
       <p id="updateStatus" class="hint small" hidden></p>
       <pre id="updateNotes" class="update-notes" hidden></pre>
     </div>
-  </form>
-
-  <div class="pane" data-pane="logs" hidden>
-    <p class="hint">只显示行时间戳在最近 7 天内的脱敏日志；启动和读取时会清理过期行，容量上限可能更早淘汰日志。单文件最多 1 MiB，共 4 个文件（最多 4 MiB）。未知插件自定义秘密无法保证自动识别。清除只影响日志，不影响信任 pin、播放记录或插件配置。</p>
-    <div class="log-actions"><span id="logPersistenceState" class="hint small"></span><button class="btn" id="clearLogs">清除日志</button></div>
-    <pre id="logs" class="logs"></pre>
+    <p class="hint small">精简版支持 Ed25519 签名校验后原地更新；内置 Node 版本会匹配对应含 Node 安装包。</p>
   </div>
 </dialog>
 
