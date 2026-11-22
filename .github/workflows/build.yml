@@ -213,7 +213,12 @@ jobs:
             Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png') -DestinationPath $slim -Force
             $setup = Get-ChildItem $dist -Filter '*etup*.exe' | Select-Object -First 1
             if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-setup.exe") }
-            Get-ChildItem $dist -Include 'update-*.json','*.delta','*.tar.gz' -File | ForEach-Object { Copy-Item $_.FullName (Join-Path $out $_.Name) -Force }
+            Get-ChildItem (Join-Path $dist '*') -Include 'update-*.json','*.delta','*.tar.gz' -File | ForEach-Object { Copy-Item $_.FullName (Join-Path $out $_.Name) -Force }
+            if ($env:MYGO_UPDATER_PRIVATE_KEY) {
+              $manifest = Join-Path $out 'update-windows-amd64.json'
+              $archive = Join-Path $out "jstv-player-$version-windows-amd64.tar.gz"
+              if (-not (Test-Path $manifest) -or -not (Test-Path $archive)) { throw 'Signed Windows update artifacts are missing from out/' }
+            }
             $check = Join-Path $env:RUNNER_TEMP 'slim-check'
             Expand-Archive $slim $check -Force
             if (Test-Path (Join-Path $check 'node')) { throw 'Slim Windows package unexpectedly contains Node' }
@@ -258,6 +263,12 @@ jobs:
           for f in *.rpm; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
           cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz"
           for f in update-*.json *.delta; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
+          if [ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]; then
+            if [ ! -s "../../out/update-linux-amd64.json" ] || [ ! -s "../../out/jstv-player-$V-linux-amd64.tar.gz" ]; then
+              echo "Signed Linux update artifacts are missing from out/" >&2
+              exit 1
+            fi
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: jstv-player-${{ runner.os }}
@@ -280,6 +291,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/download-artifact@v8
         with:
+          pattern: jstv-player-*
           path: release-assets
           merge-multiple: true
       - name: Publish GitHub Release
@@ -316,4 +328,5 @@ jobs:
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "refs/tags/$TAG"
           fi
+          bash scripts/generate-checksums.sh release-assets
           gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"

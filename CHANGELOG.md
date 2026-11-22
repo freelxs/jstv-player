@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.7
+
+- 开启 Ed25519 应用内自动更新签名：在 `mygo.json` 配置 `updates.publicKey` 与 GitHub 发布源，精简版桌面客户端现已支持通过签名清单（`update-*.json`）完成校验后的原地更新与增量更新；内置 Node 版本（`-with-node`）自动回退到 GitHub Releases 匹配对应含 Node 安装包，避免原地更新丢失内置 Node 运行时。
+- 发布流水线自动生成并校验 `SHA256SUMS` 校验清单，修复 Windows CI 签名更新产物收集遗漏，并过滤浏览器测试截图等非发布文件，确保 GitHub Release 仅包含安装包、签名更新清单及校验文件。
+
 ## 0.6.6
 
 - 修复全站搜索直接报错 `mygo: channel closed` 并提示无结果的问题：对带 `Channel` 流式参数的 `SearchAll` 改用 `window.mygo.call` 并通过 `ch.close()` 联动 `AbortSignal` 取消，避免 `mygo v0.10.0` 在 `callWith` 携带 `cancel: true` 时派生 `pageCtx` 导致通道创建即被关闭；网页模式同步支持通过 `channel.close()` 中断 `/api/stream` 搜索流。

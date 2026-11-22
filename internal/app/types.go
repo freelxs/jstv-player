@@ -156,6 +156,7 @@ type Player struct {
 	pendingUpdateURL string
 	updateAPIURL     string
 	updateHTTP       *http.Client
+	bundledNodeCheck func() bool
 
 	contentRulesMu sync.Mutex
 	contentRules   *mygo.ContentRules

@@ -304,4 +304,31 @@ assert_file "$ROOT/out/JSTV-Player-$APP_VERSION-windows-amd64.zip"
 assert_contains "$ROOT/build.log" "app 保留在"
 [[ -n "$(find "$ROOT/out" -path '*/JSTV Player.app/Contents/Info.plist' -print -quit)" ]] || fail "unexpected unregister error did not retain app"
 
+# Checksum generation creates deterministic SHA256SUMS excluding itself.
+SUM_DIR="$FIXTURE/checksums"
+mkdir -p "$SUM_DIR"
+printf 'alpha\n' > "$SUM_DIR/b-file.bin"
+printf 'beta\n' > "$SUM_DIR/a-file.bin"
+printf 'stale\n' > "$SUM_DIR/SHA256SUMS"
+printf 'hidden\n' > "$SUM_DIR/.hidden"
+bash "$SOURCE_ROOT/scripts/generate-checksums.sh" "$SUM_DIR"
+assert_file "$SUM_DIR/SHA256SUMS"
+[[ "$(wc -l < "$SUM_DIR/SHA256SUMS" | tr -d ' ')" -eq 2 ]] || fail "SHA256SUMS line count mismatch"
+first_file="$(awk 'NR==1 {print $2}' "$SUM_DIR/SHA256SUMS")"
+second_file="$(awk 'NR==2 {print $2}' "$SUM_DIR/SHA256SUMS")"
+[[ "$first_file" == "a-file.bin" && "$second_file" == "b-file.bin" ]] || fail "SHA256SUMS must be deterministically sorted"
+if grep -Fq 'SHA256SUMS' "$SUM_DIR/SHA256SUMS"; then fail "SHA256SUMS must not hash itself"; fi
+if grep -Fq '.hidden' "$SUM_DIR/SHA256SUMS"; then fail "SHA256SUMS must ignore dotfiles"; fi
+EMPTY_SUM_DIR="$FIXTURE/checksums-empty"
+mkdir -p "$EMPTY_SUM_DIR"
+if bash "$SOURCE_ROOT/scripts/generate-checksums.sh" "$EMPTY_SUM_DIR" >/dev/null 2>&1; then
+  fail "generate-checksums.sh must fail on empty directory"
+fi
+
+# Release workflow filters only build artifacts and generates SHA256SUMS.
+grep -Fq 'pattern: jstv-player-*' "$SOURCE_ROOT/.github/workflows/build.yml" || fail "release job must filter jstv-player-* artifacts"
+grep -Fq 'bash scripts/generate-checksums.sh release-assets' "$SOURCE_ROOT/.github/workflows/build.yml" || fail "release job must generate SHA256SUMS"
+grep -Fq '"updates"' "$SOURCE_ROOT/mygo.json" || fail "mygo.json must configure signed updates"
+grep -Fq '"publicKey"' "$SOURCE_ROOT/mygo.json" || fail "mygo.json must configure updates.publicKey"
+
 echo "PASS: build script fixture tests"
