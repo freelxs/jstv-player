@@ -509,6 +509,8 @@ func fetchOnce(ctx context.Context, client *http.Client, raw string, limit int64
 		return nil, "", err
 	}
 	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err

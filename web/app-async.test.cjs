@@ -548,3 +548,34 @@ test('check and install update buttons reflect available release', async () => {
   await harness.el('#btnInstallUpdate').onclick();
   assert.deepEqual(calls, ['CheckUpdate', 'InstallUpdate']);
 });
+
+test('reload button forces fresh subscription fetch instead of conditional cache', async () => {
+  const calls = [];
+  const harness = makeApp(async (method) => {
+    calls.push(method);
+    if (method === 'GetSettings') {
+      return { active: 'sub1', subscriptions: [{ id: 'sub1', name: '示例', url: 'https://example.com/sub.json' }] };
+    }
+    if (method === 'ForceRefreshSource') return { sites: [] };
+    return {};
+  });
+  await harness.el('#btnReload').onclick();
+  assert.ok(calls.includes('ForceRefreshSource'), `expected ForceRefreshSource, got ${calls}`);
+  assert.ok(!calls.includes('LoadSource'), `expected reload not to call LoadSource, got ${calls}`);
+});
+
+test('sidebar update button opens settings and triggers update check', async () => {
+  const calls = [];
+  const harness = makeApp(async (method) => {
+    calls.push(method);
+    if (method === 'GetSettings') return { subscriptions: [] };
+    if (method === 'CheckUpdate') {
+      return { currentVersion: '0.6.7', latestVersion: '0.6.7', available: false, source: 'mygo' };
+    }
+    return {};
+  });
+  await harness.el('#btnSidebarUpdate').onclick();
+  assert.equal(harness.el('#settings').open, true);
+  assert.ok(calls.includes('CheckUpdate'), `expected CheckUpdate call, got ${calls}`);
+  assert.match(harness.el('#updateStatus').textContent, /已是最新版本/);
+});

@@ -73,6 +73,8 @@ func (l Loader) load(ctx context.Context, raw string, headers map[string]string,
 		return err
 	}
 	req.Header.Set("User-Agent", "okhttp/4.12.0 JSTVPlayer")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}

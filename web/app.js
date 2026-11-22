@@ -249,7 +249,7 @@ async function loadSource(fn = () => call('LoadSource')) {
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
     $('#sites').replaceChildren(); setDot('err'); $('#status').textContent = '';
     setView(stateBox({ ico: 'alert', error: true, title: `「${activeSub()?.name || ''}」加载失败`, text: errMsg(e),
-      actions: [el('button', { class: 'btn', onclick: () => loadSource() }, icon('reload'), '重试'), el('button', { class: 'btn', onclick: () => openSettings('subs') }, '管理订阅'), el('button', { class: 'btn', onclick: () => openSettings('logs') }, '查看日志')] }));
+      actions: [el('button', { class: 'btn', onclick: () => loadSource(fn) }, icon('reload'), '重试'), el('button', { class: 'btn', onclick: () => openSettings('subs') }, '管理订阅'), el('button', { class: 'btn', onclick: () => openSettings('logs') }, '查看日志')] }));
   }
 }
 $('#trustReject').onclick = () => {
@@ -791,39 +791,48 @@ $('#probeNodePermissions').onclick = async () => {
 const btnCheckUpdate = $('#btnCheckUpdate');
 const btnInstallUpdate = $('#btnInstallUpdate');
 let latestUpdateInfo = null;
-if (btnCheckUpdate && btnInstallUpdate) {
-  btnCheckUpdate.onclick = async () => {
-    const status = $('#updateStatus');
-    const notes = $('#updateNotes');
-    btnCheckUpdate.disabled = true;
-    btnCheckUpdate.textContent = '检查中…';
-    btnInstallUpdate.hidden = true;
-    if (notes) { notes.hidden = true; notes.textContent = ''; }
-    if (status) { status.hidden = false; status.textContent = '正在检查最新版本…'; }
-    try {
-      const info = await call('CheckUpdate');
-      latestUpdateInfo = info;
-      if (info && info.available) {
-        const label = info.canAutoInstall
-          ? `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}），可一键更新并重启。`
-          : `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}）${info.assetName ? '：' + info.assetName : ''}。`;
-        if (status) status.textContent = label;
-        if (notes && info.notes) { notes.textContent = info.notes; notes.hidden = false; }
-        btnInstallUpdate.textContent = info.canAutoInstall ? '立即更新并重启' : (info.downloadUrl ? '一键下载更新' : '打开发布页');
-        btnInstallUpdate.hidden = false;
-      } else {
-        const ver = (info && (info.currentVersion || info.latestVersion)) || '';
-        if (status) status.textContent = ver ? `已是最新版本（v${ver}）。` : '已是最新版本。';
-      }
-    } catch (e) {
-      latestUpdateInfo = null;
-      if (status) status.textContent = errMsg(e);
-      toast(errMsg(e), { err: true });
-    } finally {
-      btnCheckUpdate.disabled = false;
-      btnCheckUpdate.textContent = '检查更新';
+let checkingUpdate = false;
+async function runCheckUpdate() {
+  if (!btnCheckUpdate || !btnInstallUpdate || checkingUpdate) return;
+  const status = $('#updateStatus');
+  const notes = $('#updateNotes');
+  checkingUpdate = true;
+  btnCheckUpdate.disabled = true;
+  btnCheckUpdate.textContent = '检查中…';
+  btnInstallUpdate.hidden = true;
+  if (notes) { notes.hidden = true; notes.textContent = ''; }
+  if (status) { status.hidden = false; status.textContent = '正在检查最新版本…'; }
+  try {
+    const info = await call('CheckUpdate');
+    latestUpdateInfo = info;
+    if (info && info.available) {
+      const label = info.canAutoInstall
+        ? `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}），可一键更新并重启。`
+        : `发现新版本 v${info.latestVersion}（当前 v${info.currentVersion}）${info.assetName ? '：' + info.assetName : ''}。`;
+      if (status) status.textContent = label;
+      if (notes && info.notes) { notes.textContent = info.notes; notes.hidden = false; }
+      btnInstallUpdate.textContent = info.canAutoInstall ? '立即更新并重启' : (info.downloadUrl ? '一键下载更新' : '打开发布页');
+      btnInstallUpdate.hidden = false;
+    } else {
+      const ver = (info && (info.currentVersion || info.latestVersion)) || '';
+      if (status) status.textContent = ver ? `已是最新版本（v${ver}）。` : '已是最新版本。';
     }
-  };
+  } catch (e) {
+    latestUpdateInfo = null;
+    if (status) status.textContent = errMsg(e);
+    toast(errMsg(e), { err: true });
+  } finally {
+    checkingUpdate = false;
+    btnCheckUpdate.disabled = false;
+    btnCheckUpdate.textContent = '检查更新';
+  }
+}
+async function openUpdateDialog(autoCheck = true) {
+  await openSettings('about');
+  if (autoCheck) await runCheckUpdate();
+}
+if (btnCheckUpdate && btnInstallUpdate) {
+  btnCheckUpdate.onclick = () => runCheckUpdate();
   btnInstallUpdate.onclick = async () => {
     const status = $('#updateStatus');
     const auto = !!(latestUpdateInfo && latestUpdateInfo.canAutoInstall);
@@ -853,6 +862,11 @@ if (btnCheckUpdate && btnInstallUpdate) {
 }
 
 $('#btnSettings').onclick = () => openSettings('subs');
+const btnSidebarUpdate = $('#btnSidebarUpdate');
+if (btnSidebarUpdate) btnSidebarUpdate.onclick = () => openUpdateDialog(true);
+window.__jstvOpenUpdate = () => openUpdateDialog(true);
+window.__jstvOpenSettings = () => openSettings('subs');
+window.__jstvReloadSource = () => loadSource(() => call('ForceRefreshSource'));
 function siteForAPI(api, fallbackName) {
   return st.sites.find((x) => x.api === api) || { api, name: fallbackName || '媒体库' };
 }
@@ -1078,8 +1092,7 @@ async function openLibrary() {
 }
 $('#btnFavorites').onclick = () => openLibrary();
 $('#btnForceReload').onclick = () => { $('#settings').close(); loadSource(() => call('ForceRefreshSource')); };
-$('#btnReload').onclick = () => loadSource();
-$('#btnStartCached').onclick = () => loadSource(() => call('StartCachedSource'));
+$('#btnReload').onclick = () => loadSource(() => call('ForceRefreshSource'));
 $('#back').onclick = back;
 $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') search(e.target.value.trim()); });
 function setSiteOnlySearch(on) {

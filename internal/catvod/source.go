@@ -326,6 +326,9 @@ func downloadTempContext(ctx context.Context, c *http.Client, u, dir string, lim
 		} else if validator.Modified != "" {
 			req.Header.Set("If-Modified-Since", validator.Modified)
 		}
+	} else {
+		req.Header.Set("Cache-Control", "no-cache")
+		req.Header.Set("Pragma", "no-cache")
 	}
 	resp, err := c.Do(req)
 	if err != nil {
@@ -414,6 +417,8 @@ func getContext(ctx context.Context, c *http.Client, u string, limit int64) ([]b
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
