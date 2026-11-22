@@ -44,9 +44,49 @@ browseRequests.invalidate = () => { closeActiveSearch(); invalidateBrowse(); };
 const errMsg = (e) => (e && (e.message || e.toString())) || String(e);
 // Web deployment loads posters through the authenticated image proxy. Desktop
 // keeps the original address because __JSTV_WEB__ is unset.
+function normalizePosterURL(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw);
+    if (/(?:^|\.)baidu\.com$/i.test(u.hostname) && u.pathname.includes('/gimg/')) {
+      const idx = raw.indexOf('src=');
+      if (idx >= 0) {
+        let inner = raw.slice(idx + 4);
+        const amp = inner.indexOf('&');
+        if (amp >= 0 && !inner.slice(0, amp).includes('?')) inner = inner.slice(0, amp);
+        try {
+          const decoded = decodeURIComponent(inner);
+          if (/^https?:\/\//i.test(decoded)) inner = decoded;
+        } catch (e) {}
+        if (/^https?:\/\//i.test(inner)) return inner;
+      }
+    }
+  } catch (e) {}
+  return raw;
+}
 function posterURL(url) {
-  if (!window.__JSTV_WEB__ || !url) return url;
-  return '/poster?u=' + encodeURIComponent(String(url));
+  const clean = normalizePosterURL(url);
+  if (!window.__JSTV_WEB__ || !clean) return clean;
+  return '/poster?u=' + encodeURIComponent(clean);
+}
+
+function attachPosterImage(container, url, { fade = true } = {}) {
+  const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
+  const markLoaded = () => {
+    if (img.naturalWidth && img.naturalWidth <= 2 && img.naturalHeight && img.naturalHeight <= 2) {
+      img.remove();
+      container.classList.add('noimg');
+      return;
+    }
+    if (fade) img.classList.add('loaded');
+  };
+  img.onload = markLoaded;
+  img.onerror = () => { img.remove(); container.classList.add('noimg'); };
+  img.src = posterURL(url);
+  container.append(img);
+  if (img.complete && img.naturalWidth) markLoaded();
+  return img;
 }
 
 // A configuration page lives on the plugin's own /website/ route. Other http
@@ -232,7 +272,7 @@ async function loadSource(fn = () => call('LoadSource')) {
       setView(stateBox({ title: '插件尚未启动', text: '首次使用或检测到内容变化。请确认 SHA-256 后再运行。' }));
       return;
     }
-    if (r.warnings && r.warnings.length) toast(`部分直播源未加载：${r.warnings.join('；')}`, { err: true, ms: 8000 });
+    if (r.warnings && r.warnings.length) toast(`部分规则或源未加载：${r.warnings.join('；')}`, { err: true, ms: 8000 });
     const reloadedSettings = await call('GetSettings');
     if (!browseRequests.current(request) || seq !== st.loadSeq) return;
     st.settings = reloadedSettings;
@@ -279,7 +319,7 @@ function showUnsupported(s) {
   renderSites();
   setView(stateBox({ title: s.name || s.key || '不支持的站点', text: s.reason || '这个站点不能在桌面或网页模式运行。' }));
 }
-const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '支持 JS 插件、M3U/TXT 直播、TVBox 直播和 TVBox 点播配置，可添加多个并随时切换。',
+const noSubState = () => stateBox({ ico: 'plug', title: '添加你的第一个订阅', text: '支持 JS 插件、M3U/TXT 直播、TVBox 配置和 Kazumi 规则仓库，可添加多个并随时切换。',
   actions: [el('button', { class: 'primary', onclick: () => openSettings('subs') }, icon('plus'), '添加订阅')] });
 
 const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
@@ -336,6 +376,20 @@ async function selectSite(s) {
       openCategory(cls[0].type_id, 1);
     } else if (/liveSource/i.test(s.key || '') || /直播/.test(s.name || '')) {
       setView(stateBox({ico:'search',title:'暂无直播源',text:'请在插件配置页添加直播源，然后刷新站点。也可在订阅管理中直接添加 M3U/TXT。',actions:[el('button',{class:'btn',onclick:()=>call('OpenConfigPage',s.api).then((u)=>{if(window.__JSTV_WEB__)openWebPage(u,'直播配置');}).catch((e)=>toast(errMsg(e),{err:true}))},'配置直播源'),el('button',{class:'btn',onclick:()=>selectSite(s)},'刷新站点')]}));
+    } else if (home.kazumi) {
+      const k = home.kazumi;
+      const mode = `搜索 ${String(k.searchMode || 'xpath').toUpperCase()} · 剧集 ${String(k.chapterMode || 'xpath').toUpperCase()}`;
+      const ver = k.version ? ` v${k.version}` : '';
+      const note = k.antiCrawler ? '（该规则开启了反爬验证，搜索可能触发人机验证）' : '';
+      setView(stateBox({
+        ico: 'search',
+        title: `Kazumi 规则：${k.name || s.name}${ver}`,
+        text: `${mode}${note}。Kazumi 规则通过关键词搜索解析剧集并嗅探播放。`,
+        actions: [
+          el('button', { class: 'primary', onclick: () => { setSiteOnlySearch(true); $('#q').focus(); } }, icon('search'), '搜索当前规则'),
+          el('button', { class: 'btn', onclick: () => { setSiteOnlySearch(false); $('#q').focus(); } }, '搜索全部规则'),
+        ],
+      }));
     } else setView(youtubeLoginHint(s), stateBox({ ico: 'search', title: '这个站点没有分类', text: '可以在上方直接搜索。' }));
   } catch (e) { if (browseRequests.current(request) && seq === st.loadSeq && st.site === s) setView(errorState(e, () => selectSite(s))); }
 }
@@ -456,10 +510,7 @@ function cards(list, site) {
   for (const v of list) {
     const poster = el('div', { class: 'poster' + (v.vod_pic ? '' : ' noimg') + (isConfigImage(v.vod_pic) ? ' code' : '') });
     if (v.vod_pic) {
-      const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
-      img.onload = () => img.classList.add('loaded');
-      img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
-      img.src = posterURL(v.vod_pic); poster.append(img);
+      attachPosterImage(poster, v.vod_pic);
     }
     if (v.vod_remarks) poster.append(el('span', { class: 'badge' }, v.vod_remarks));
     poster.append(el('span', { class: 'play' }, icon('play')));
@@ -478,6 +529,13 @@ function cards(list, site) {
         // also clear the "current site only" hint, which a bare checked=false
         // does not, because it does not fire the checkbox change listener.
         setSiteOnlySearch(false);
+        $('#q').value = v.vod_name;
+        search(v.vod_name);
+        return;
+      }
+      if (String(v.vod_id).startsWith('ssearch:')) {
+        st.site = site;
+        setSiteOnlySearch(true);
         $('#q').value = v.vod_name;
         search(v.vod_name);
         return;
@@ -505,7 +563,12 @@ async function search(wd) {
       if (!browseRequests.current(request)) return;
       st.stack = [];
       show(() => setView(el('div', { class: 'section-h' }, `“${wd}”`, el('span', { class: 'n' }, st.site.name)),
-        (r.list || []).length ? cards(r.list, st.site) : stateBox({ ico: 'search', title: '没有找到结果', text: '可以关闭“仅当前站点”搜索全部站点。' })));
+        (r.list || []).length ? cards(r.list, st.site) : stateBox({
+          ico: 'search',
+          title: '没有找到结果',
+          text: '可以切换到全部站点继续搜索。',
+          actions: [el('button', { class: 'primary', onclick: () => { setSiteOnlySearch(false); search(wd); } }, icon('search'), '搜索全部站点')],
+        })));
     } catch (e) { if (browseRequests.current(request)) setView(errorState(e, () => search(wd))); }
     return;
   }
@@ -513,8 +576,11 @@ async function search(wd) {
   const render = () => {
     const kids = [];
     for (const r of results) {
-      kids.push(el('div', { class: 'section-h' }, r.site.name, r.error ? el('span', { class: 'e' }, '出错') : el('span', { class: 'n' }, `${r.list.length} 个结果`)));
-      kids.push(r.error ? el('p', { class: 'hint' }, r.error) : cards(r.list, r.site));
+      if (!r._head) {
+        r._head = el('div', { class: 'section-h' }, r.site.name, r.error ? el('span', { class: 'e' }, '出错') : el('span', { class: 'n' }, `${r.list.length} 个结果`));
+        r._body = r.error ? el('p', { class: 'hint' }, r.error) : cards(r.list, r.site);
+      }
+      kids.push(r._head, r._body);
     }
     if (!done) kids.push(results.length ? el('div', { class: 'section-h' }, el('span', { class: 'n' }, '其余站点搜索中…')) : skeletonGrid(12));
     else if (results.length && results.every((r) => r.error)) kids.unshift(stateBox({ ico: 'alert', title: '所有站点搜索失败', text: '请检查网络或稍后重试。各站点的诊断信息如下。', error: true }));
@@ -736,6 +802,7 @@ async function openSettings(tab = 'subs') {
   $('#sCustomPlayer').value = s.customPlayer || ''; $('#sCustomArgs').value = s.customArgs || '';
   syncCustomPlayerFields();
   $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
+  $('#sBangumiToken').value = s.bangumiToken || '';
   $('#sAllowLan').checked = !!s.allowLan;
   $('#sAllowLanMedia').checked = !!s.allowLanMedia;
   $('#sInheritNodeEnv').checked = !!s.inheritNodeEnv;
@@ -763,7 +830,7 @@ $('#prefs').addEventListener('submit', async (e) => {
     const oldAllowLANMedia = !!st.settings?.allowLanMedia;
     const nextAllowLAN = $('#sAllowLan').checked;
     if (!oldAllowLAN && nextAllowLAN && !(await confirmLAN())) return;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked, disableHistory: !$('#sHistoryEnabled').checked, disableAdBlock: !$('#sAdBlock').checked, disableHlsAdFilter: !$('#sHlsAdFilter').checked });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), bangumiToken: $('#sBangumiToken').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked, disableHistory: !$('#sHistoryEnabled').checked, disableAdBlock: !$('#sAdBlock').checked, disableHlsAdFilter: !$('#sHlsAdFilter').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
     if ((oldAllowLAN !== nextAllowLAN || oldAllowLANMedia !== !!st.settings.allowLanMedia) && st.settings.active) {
@@ -877,11 +944,7 @@ function continueCards(items) {
     const site = siteForAPI(item.api, '继续观看');
     const poster = el('div', { class: 'poster' + (item.picture ? '' : ' noimg') });
     if (item.picture) {
-      const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
-      img.onload = () => img.classList.add('loaded');
-      img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
-      img.src = posterURL(item.picture);
-      poster.append(img);
+      attachPosterImage(poster, item.picture);
     }
     const pct = item.duration > 0 ? Math.max(0, Math.min(100, Math.round((item.position / item.duration) * 100))) : 0;
     if (item.episodeName) poster.append(el('span', { class: 'badge' }, item.episodeName));
@@ -1022,11 +1085,7 @@ async function openLibrary() {
             const site = siteForAPI(item.api, '收藏');
             const poster = el('div', { class: 'poster' + (item.picture ? '' : ' noimg') });
             if (item.picture) {
-              const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
-              img.onload = () => img.classList.add('loaded');
-              img.onerror = () => { img.remove(); poster.classList.add('noimg'); };
-              img.src = posterURL(item.picture);
-              poster.append(img);
+              attachPosterImage(poster, item.picture);
             }
             poster.append(el('span', { class: 'play' }, icon('play')));
             grid.append(el('button', { class: 'card', title: item.name || item.id, onclick: () => openDetail(site, item.id) },
@@ -1044,10 +1103,7 @@ async function openLibrary() {
           const site = siteForAPI(item.api, '历史');
           const thumb = el('div', { class: 'hist-thumb' + (item.picture ? '' : ' noimg') });
           if (item.picture) {
-            const img = el('img', { loading: 'lazy', referrerpolicy: 'no-referrer', alt: '' });
-            img.onerror = () => { img.remove(); thumb.classList.add('noimg'); };
-            img.src = posterURL(item.picture);
-            thumb.append(img);
+            attachPosterImage(thumb, item.picture, { fade: false });
           }
           const metaParts = [site.name, item.episodeName];
           if (item.position > 0 && item.duration > 0) metaParts.push(`${formatClock(item.position)} / ${formatClock(item.duration)}`);

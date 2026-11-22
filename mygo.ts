@@ -157,6 +157,11 @@ export interface Settings {
   disableAdBlock: boolean;
   /** DisableHLSAdFilter turns off built-in HLS ad-segment filtering in the media proxy. */
   disableHlsAdFilter: boolean;
+  /**
+   * BangumiToken is an optional personal Bangumi Access Token stored only in
+   * the user's private settings.json and sent exclusively to Bangumi APIs.
+   */
+  bangumiToken?: string;
 }
 
 /** Site is one entry of GET /config → video.sites. */
@@ -204,7 +209,7 @@ export interface Stream {
 /** Subscription is one user-supplied plugin address. */
 export interface Subscription {
   id: string;
-  /** auto | plugin | live | tvbox */
+  /** auto | plugin | live | tvbox | kazumi */
   type?: string;
   name: string;
   /** index.js, a live list, or a TVBox JSON config */

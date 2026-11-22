@@ -305,7 +305,11 @@ func pageCandidates(body []byte, base *url.URL) []string {
 				}
 			case "iframe":
 				if src := tagAttr(z, "src"); src != "" {
-					frames = append(frames, resolveRef(base, src))
+					resolved := resolveRef(base, src)
+					if embedded := iframeQueryMedia(resolved); embedded != "" {
+						tags = append(tags, embedded)
+					}
+					frames = append(frames, resolved)
 				}
 			}
 		case html.TextToken:
@@ -315,7 +319,25 @@ func pageCandidates(body []byte, base *url.URL) []string {
 		}
 	}
 	literals = append(literals, mediaLiterals(string(body), base)...)
-	return unique(append(append(append(tags, absolutize(base, players)...), literals...), frames...))
+	all := append(append(append(tags, absolutize(base, players)...), literals...), frames...)
+	filtered := make([]string, 0, len(all))
+	for _, item := range all {
+		if isLikelyAdMedia(item) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return unique(filtered)
+}
+
+func isLikelyAdMedia(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	for _, pat := range []string{"adposter", "preroll", "pre-roll", "googleads", "googlesyndication.com", "doubleclick.net", "adtrafficquality"} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
 }
 
 func tagAttr(z *html.Tokenizer, key string) string {
@@ -451,6 +473,30 @@ func mediaLiterals(text string, base *url.URL) []string {
 		out = append(out, resolveRef(base, strings.ReplaceAll(match, `\`, "")))
 	}
 	return out
+}
+
+// iframeQueryMedia extracts a direct media URL embedded in an iframe's query
+// parameters (e.g. ?url=https://.../index.m3u8), mirroring Kazumi's legacy parser.
+func iframeQueryMedia(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.RawQuery == "" {
+		return ""
+	}
+	for _, vals := range u.Query() {
+		for _, v := range vals {
+			v = strings.TrimSpace(v)
+			if isHTTP(v) && mediaPath(v) {
+				return v
+			}
+			if decoded, err := url.QueryUnescape(v); err == nil && decoded != v {
+				decoded = strings.TrimSpace(decoded)
+				if isHTTP(decoded) && mediaPath(decoded) {
+					return decoded
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func absolutize(base *url.URL, refs []string) []string {

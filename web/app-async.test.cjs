@@ -67,7 +67,7 @@ function makeApp(callImpl = async () => ({})) {
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const startup = src.lastIndexOf('\n(async () => {');
   assert.ok(startup > 0, 'find application startup block');
-  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, play, filtersForCategory, cards };`;
+  const code = `${fs.readFileSync(path.join(__dirname, 'request-token.js'), 'utf8')}\n${fs.readFileSync(path.join(__dirname, 'youtube-help.js'), 'utf8')}\n${src.slice(0, startup)}\nglobalThis.app = { st, selectSite, openCategory, loadSource, search, openDetail, play, filtersForCategory, cards, posterURL };`;
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     AbortController, setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
@@ -578,4 +578,90 @@ test('sidebar update button opens settings and triggers update check', async () 
   assert.equal(harness.el('#settings').open, true);
   assert.ok(calls.includes('CheckUpdate'), `expected CheckUpdate call, got ${calls}`);
   assert.match(harness.el('#updateStatus').textContent, /已是最新版本/);
+});
+
+test('selecting a Kazumi rule renders rule info and quick search actions', async () => {
+  const harness = makeApp(async (method) => {
+    if (method === 'GetSettings') {
+      return { active: 'k1', subscriptions: [{ id: 'k1', name: 'Kazumi', url: 'https://github.com/Predidit/KazumiRules', type: 'kazumi' }] };
+    }
+    if (method === 'LoadSource') {
+      return { sites: [{ key: 'kazumi:AGE', name: 'AGE', type: 3, api: '/kazumi/r0', searchable: 1 }] };
+    }
+    if (method === 'Home') {
+      return { class: [], list: [], kazumi: { name: 'AGE', version: '1.6', searchMode: 'xpath', chapterMode: 'xpath', antiCrawler: false } };
+    }
+    return {};
+  });
+  await harness.app.loadSource();
+  await settle();
+  assert.match(harness.el('#view').textContent, /Kazumi 规则：AGE v1\.6/);
+  assert.match(harness.el('#view').textContent, /搜索 XPATH · 剧集 XPATH/);
+  const descendants = (element) => [element, ...element.children.flatMap(descendants)];
+  const buttons = descendants(harness.el('#view')).filter((element) => element.tagName === 'BUTTON');
+  const onlyBtn = buttons.find((element) => element.textContent.includes('搜索当前规则'));
+  assert.ok(onlyBtn);
+  onlyBtn.listeners.click();
+  assert.equal(harness.el('#onlySite').checked, true);
+});
+
+test('ssearch catalog card searches only the active rule and offers all-site fallback when empty', async () => {
+  const searched = [];
+  const harness = makeApp(async (method, ...args) => {
+    if (method === 'Search') {
+      searched.push(['Search', args[0], args[1]]);
+      return { list: [] };
+    }
+    if (method === 'SearchAll') {
+      searched.push(['SearchAll', args[0]]);
+      return {};
+    }
+    return {};
+  });
+  const age = { key: 'kazumi:AGE', name: 'AGE', type: 3, api: '/kazumi/r0', searchable: 1 };
+  harness.app.st.sites = [age];
+  harness.app.st.site = age;
+  const grid = harness.app.cards([{ vod_id: 'ssearch:bgm:515759', vod_name: '葬送的芙莉莲 第二季' }], age);
+  grid.children[0].listeners.click();
+  await settle();
+  assert.equal(harness.el('#onlySite').checked, true);
+  assert.equal(harness.el('#q').value, '葬送的芙莉莲 第二季');
+  assert.deepEqual(searched[0], ['Search', '/kazumi/r0', '葬送的芙莉莲 第二季']);
+  const descendants = (element) => [element, ...element.children.flatMap(descendants)];
+  const fallbackBtn = descendants(harness.el('#view')).find((e) => e.tagName === 'BUTTON' && e.textContent.includes('搜索全部站点'));
+  assert.ok(fallbackBtn);
+  fallbackBtn.listeners.click();
+  await settle();
+  assert.equal(harness.el('#onlySite').checked, false);
+  assert.deepEqual(searched[1], ['SearchAll', '葬送的芙莉莲 第二季']);
+});
+
+test('posterURL unwraps legacy Baidu gimg proxy cover URLs', () => {
+  const harness = makeApp(async () => ({}));
+  const baidu = 'https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https://cdn.aqdstatic.com:966/age/covers/20260200.jpg';
+  assert.equal(harness.app.posterURL(baidu), 'https://cdn.aqdstatic.com:966/age/covers/20260200.jpg');
+  const encoded = 'https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260200.jpg';
+  assert.equal(harness.app.posterURL(encoded), 'https://cdn.aqdstatic.com:966/age/covers/20260200.jpg');
+});
+
+test('SearchAll reuses already rendered site grids across streaming chunks', async () => {
+  let finish;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  const harness = makeApp(async (method) => {
+    if (method === 'SearchAll') return pending;
+    return {};
+  });
+  const s1 = site('AGE', '/kazumi/r0');
+  const s2 = site('baimao', '/kazumi/r1');
+  harness.app.st.sites = [s1, s2];
+  const done = harness.app.search('芙莉莲');
+  await settle();
+  const ch = harness.channels[0];
+  ch.onmessage({ site: s1, list: [{ vod_id: '1', vod_name: '葬送的芙莉莲', vod_pic: 'https://cdn.example.com/1.jpg' }] });
+  const firstGrid = harness.el('#view').children[1];
+  ch.onmessage({ site: s2, list: [{ vod_id: '2', vod_name: '葬送的芙莉莲', vod_pic: 'https://cdn.example.com/2.jpg' }] });
+  assert.equal(harness.el('#view').children[1], firstGrid);
+  finish();
+  await done;
+  assert.equal(harness.el('#view').children[1], firstGrid);
 });

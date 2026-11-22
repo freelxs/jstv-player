@@ -11,7 +11,7 @@ import (
 // Subscription is one user-supplied plugin address.
 type Subscription struct {
 	ID   string `json:"id"`
-	Type string `json:"type,omitempty"` // auto | plugin | live | tvbox
+	Type string `json:"type,omitempty"` // auto | plugin | live | tvbox | kazumi
 	Name string `json:"name"`
 	URL  string `json:"url"` // index.js, a live list, or a TVBox JSON config
 	// Line is the chosen path through a multi-repository config.
@@ -123,7 +123,7 @@ func (s *Settings) update(id, name, url string) error {
 
 func validSubType(kind string) bool {
 	switch kind {
-	case "auto", "plugin", "live", "tvbox":
+	case "auto", "plugin", "live", "tvbox", "kazumi":
 		return true
 	default:
 		return false

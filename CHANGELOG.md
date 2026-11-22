@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.9
+
+- 新增 **Kazumi 规则** 订阅支持：兼容 Kazumi `index.json` 规则仓库与单条规则 JSON（内置 GitHub raw / jsDelivr 镜像回退、本地磁盘缓存与 ETag 条件刷新），实现 HTML XPath 与 JSON API 规则搜索、多线路剧集解析、规则信息面板，以及「推荐目录」（Bangumi 每日放送与当季热门番剧）虚拟站点与单站/全站搜索联动。
+- 接入 **Bangumi 番剧元数据** 与本机私有 **Bangumi Access Token** 设置：自动为番剧条目补齐封面、评分、年份、导演/制作/角色声优及剧情简介（搜索摘要缺少 `infobox` 时自动回查 `/v0/subjects/{id}` 详情接口），并支持在「设置 → 常规」中配置个人 Access Token（仅保存在本机 `settings.json` 并仅向官方域名发送 `Authorization: Bearer` 头）。
+- 增强网页视频直链解析与桌面 WebView 媒体嗅探：支持提取 `iframe` URL 参数中的嵌套直链、自动过滤 `adposter` / `preroll` 等广告视频流，并在桌面隐藏嗅探器中支持全 frame 脚本注入、Blob 播放页的嵌套 `iframe` 递归嗅探与前置广告跳过。
+
 ## 0.6.8
 
 - 修复点击「重新加载」未绕过条件缓存重新拉取订阅的问题：改为调用强制刷新并统一附带 `Cache-Control: no-cache` / `Pragma: no-cache`，确保 JS 插件、TVBox 配置与直播订阅都能立即拉取远端最新内容。
