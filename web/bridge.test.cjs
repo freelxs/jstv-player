@@ -40,3 +40,34 @@ test('web bridge forwards AbortSignal through callWith', async () => {
   assert.equal(seen[0].url, '/api/call');
   assert.equal(seen[0].opts.signal, ac.signal);
 });
+
+test('web bridge aborts SearchAll stream when channel.close() is called', async () => {
+  const seen = [];
+  const window = {};
+  let channel;
+  const fetch = async (url, opts) => {
+    seen.push({ url, opts });
+    channel.close();
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return { done: true, value: undefined };
+            },
+          };
+        },
+      },
+    };
+  };
+  vm.runInNewContext(bridge, { window, fetch, AbortController, TextDecoder, location: { origin: 'http://player.local' } }, { filename: 'bridge.js' });
+  channel = window.mygo.channel(() => {});
+  await window.mygo.call('Player.SearchAll', '没有灵根 45季', channel);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, '/api/stream');
+  assert.ok(seen[0].opts.signal, 'expected stream fetch to carry channel abort signal');
+  assert.equal(seen[0].opts.signal.aborted, true);
+  assert.equal(channel.closed, true);
+});

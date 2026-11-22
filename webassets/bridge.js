@@ -40,32 +40,54 @@
   }
 
   async function streamSearch(wd, channel, options) {
-    const response = await fetch('/api/stream', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', 'X-JSTV-Request': '1' },
-      body: JSON.stringify({ method: 'SearchAll', args: [wd] }),
-      signal: options && options.signal,
-    });
-    if (!response.ok || !response.body) {
-      throw apiError(response.status, await readBody(response));
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const step = await reader.read();
-      if (step.done) break;
-      buf += decoder.decode(step.value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line);
-        if (msg.type === 'error') throw new Error(msg.error || '搜索失败');
-        if (msg.type === 'item' && channel && typeof channel.onmessage === 'function') channel.onmessage(msg.data);
+    const extSignal = options && options.signal;
+    const chSignal = channel && channel._signal;
+    let signal = extSignal || chSignal;
+    let cleanup = null;
+    if (extSignal && chSignal && typeof AbortController === 'function') {
+      const merged = new AbortController();
+      const abort = () => merged.abort();
+      if (extSignal.aborted || chSignal.aborted) merged.abort();
+      else {
+        extSignal.addEventListener('abort', abort, { once: true });
+        chSignal.addEventListener('abort', abort, { once: true });
+        cleanup = () => {
+          extSignal.removeEventListener('abort', abort);
+          chSignal.removeEventListener('abort', abort);
+        };
       }
+      signal = merged.signal;
+    }
+    try {
+      const response = await fetch('/api/stream', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', 'X-JSTV-Request': '1' },
+        body: JSON.stringify({ method: 'SearchAll', args: [wd] }),
+        signal,
+      });
+      if (!response.ok || !response.body) {
+        throw apiError(response.status, await readBody(response));
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const step = await reader.read();
+        if (step.done) break;
+        buf += decoder.decode(step.value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const msg = JSON.parse(line);
+          if (msg.type === 'error') throw new Error(msg.error || '搜索失败');
+          if (msg.type === 'item' && channel && !channel.closed && typeof channel.onmessage === 'function') channel.onmessage(msg.data);
+        }
+      }
+    } finally {
+      if (cleanup) cleanup();
     }
   }
 
@@ -122,7 +144,19 @@
 
   window.mygo = {
     channel(onmessage) {
-      return { __channel: true, onmessage, close() {} };
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const ch = {
+        __channel: true,
+        onmessage,
+        closed: false,
+        _signal: controller ? controller.signal : undefined,
+        close() {
+          if (ch.closed) return;
+          ch.closed = true;
+          if (controller) controller.abort();
+        },
+      };
+      return ch;
     },
     call(method, ...args) {
       return invoke(method, args);

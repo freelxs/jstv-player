@@ -1,10 +1,30 @@
 // Plain JS frontend; calls Go through window.mygo.call("Player.Method", …).
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
+const isChannelArg = (v) => Boolean(v && typeof v === 'object' && typeof v.close === 'function' && 'onmessage' in v);
 const call = (m, ...a) => window.mygo.call('Player.' + m, ...a);
-const callWith = (signal, m, ...a) => (signal && window.mygo && typeof window.mygo.callWith === 'function')
-  ? window.mygo.callWith('Player.' + m, a, { signal })
-  : window.mygo.call('Player.' + m, ...a);
+const callWith = (signal, m, ...a) => {
+  // mygo v0.10.0 channel methods cancel via ch.close(); passing { signal }
+  // (cancel: true) wraps w.pageCtx in handleCall and causes w.newChannel's
+  // w.pageCtx == page check to mark the channel closed immediately.
+  if (a.some(isChannelArg)) {
+    const chs = a.filter(isChannelArg);
+    const closeAll = () => chs.forEach((ch) => { try { ch.close(); } catch (e) { /* already closed */ } });
+    if (signal && signal.aborted) {
+      closeAll();
+      return Promise.reject(signal.reason || new Error('Aborted'));
+    }
+    const p = window.mygo.call('Player.' + m, ...a);
+    if (signal && typeof signal.addEventListener === 'function') {
+      signal.addEventListener('abort', closeAll, { once: true });
+      return Promise.resolve(p).finally(() => signal.removeEventListener('abort', closeAll));
+    }
+    return p;
+  }
+  return (signal && window.mygo && typeof window.mygo.callWith === 'function')
+    ? window.mygo.callWith('Player.' + m, a, { signal })
+    : window.mygo.call('Player.' + m, ...a);
+};
 const st = { settings: null, sites: [], site: null, home: null, tid: null, page: 1, filters: {}, stack: [], loadSeq: 0, libTab: 'all', libSort: 'recent' };
 const browseRequests = BrowseRequestToken();
 let activeSearch = null;
@@ -562,14 +582,39 @@ async function openDetail(site, id) {
     }
     const lines = d.lines || [];
     const body = el('div', { id: 'lines' });
-    const drawLine = () => {
-      const tabs = lines.length > 1 ? el('div', { class: 'line-tabs' }, lines.map((l, i) => el('button', { class: i === lineIdx ? 'active' : '', onclick: () => { lineIdx = i; drawLine(); } }, l.flag))) : el('div', { class: 'section-h' }, lines[0].flag);
-      const line = lines[lineIdx];
-      const eps = el('div', { class: 'eps' }, line.episodes.map((ep, i) => el('button', { class: 'ep' + (hist && hist.flag === line.flag && hist.index === i ? ' last' : ''), title: ep.name, onclick: (e) => play(site, line, i, vodId, v.vod_name, e.currentTarget) }, ep.name)));
-      body.replaceChildren(tabs, eps);
-    };
-    if (lines.length) drawLine(); else body.append(stateBox({ title: '没有播放列表', text: '插件没有返回任何剧集。' }));
-    setView(hero, body);
+    if (lines.length) {
+      const tabButtons = lines.length > 1
+        ? lines.map((l, i) => el('button', { class: i === lineIdx ? 'active' : '', onclick: () => { lineIdx = i; drawLine(true); } }, l.flag))
+        : [];
+      const tabs = lines.length > 1 ? el('div', { class: 'line-tabs' }, tabButtons) : el('div', { class: 'section-h' }, lines[0].flag);
+      const eps = el('div', { class: 'eps' });
+      body.append(tabs, eps);
+      const focusActiveTab = (clicked) => {
+        const activeBtn = tabButtons[lineIdx];
+        if (!activeBtn) return;
+        if (clicked && typeof activeBtn.focus === 'function') {
+          try { activeBtn.focus({ preventScroll: true }); } catch (e) { activeBtn.focus(); }
+        }
+        if (typeof activeBtn.scrollIntoView === 'function') {
+          activeBtn.scrollIntoView({ block: 'nearest', inline: clicked ? 'nearest' : 'center' });
+        }
+      };
+      const drawLine = (clicked = false) => {
+        const prevScroll = tabs.scrollLeft || 0;
+        tabButtons.forEach((btn, i) => btn.classList.toggle('active', i === lineIdx));
+        body.querySelector?.('.quality-pick')?.remove();
+        const line = lines[lineIdx];
+        eps.replaceChildren(...line.episodes.map((ep, i) => el('button', { class: 'ep' + (hist && hist.flag === line.flag && hist.index === i ? ' last' : ''), title: ep.name, onclick: (e) => play(site, line, i, vodId, v.vod_name, e.currentTarget) }, ep.name)));
+        tabs.scrollLeft = prevScroll;
+        focusActiveTab(clicked);
+      };
+      drawLine(false);
+      setView(hero, body);
+      focusActiveTab(false);
+    } else {
+      body.append(stateBox({ title: '没有播放列表', text: '插件没有返回任何剧集。' }));
+      setView(hero, body);
+    }
   });
 }
 
