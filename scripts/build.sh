@@ -263,6 +263,12 @@ build_darwin() {
       cp "$update_file" "$OUT/$(basename "$update_file")"
     done
     shopt -u nullglob
+    if [[ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]]; then
+      [[ -s "$OUT/update-darwin-universal.json" && -s "$OUT/jstv-player-$VERSION-darwin-universal.tar.gz" ]] || {
+        echo "macOS 签名更新产物缺失: update-darwin-universal.json 或 jstv-player-$VERSION-darwin-universal.tar.gz" >&2
+        return 1
+      }
+    fi
   fi
 
   echo "==> macOS 归档已验证并发布:"
@@ -327,6 +333,20 @@ build_windows() {
     return 1
   fi
   mv -f "$zip_tmp" "$zip_final"
+  if [[ "$WITH_NODE" -eq 0 ]]; then
+    shopt -s nullglob
+    local update_file
+    for update_file in "$platform_dir"/update-*.json "$platform_dir"/*.delta "$platform_dir"/*.tar.gz; do
+      cp "$update_file" "$OUT/$(basename "$update_file")"
+    done
+    shopt -u nullglob
+    if [[ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]]; then
+      [[ -s "$OUT/update-windows-amd64.json" && -s "$OUT/jstv-player-$VERSION-windows-amd64.tar.gz" ]] || {
+        echo "Windows 签名更新产物缺失: update-windows-amd64.json 或 jstv-player-$VERSION-windows-amd64.tar.gz" >&2
+        return 1
+      }
+    fi
+  fi
   echo "==> Windows 产物:"
   ls -lh "$zip_final"
 }

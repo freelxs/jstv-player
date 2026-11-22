@@ -71,7 +71,7 @@ func (p *Player) CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
 		ctx = context.Background()
 	}
 	current := p.currentAppVersion()
-	if !p.webMode.Load() && p.desktop.UpdaterEnabled != nil && p.desktop.UpdaterCheck != nil && p.desktop.UpdaterEnabled() {
+	if !p.webMode.Load() && !p.isBundledNode() && p.desktop.UpdaterEnabled != nil && p.desktop.UpdaterCheck != nil && p.desktop.UpdaterEnabled() {
 		upd, err := p.desktop.UpdaterCheck(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("检查更新失败: %w", err)
@@ -150,7 +150,7 @@ func (p *Player) checkGitHubUpdate(ctx context.Context, current string) (*Update
 	if !validUpdateURL(releaseURL, customEndpoint, apiURL) {
 		releaseURL = githubReleasesPrefix + "tag/v" + latest
 	}
-	assetName, downloadURL := selectReleaseAsset(rel.Assets, runtime.GOOS, runtime.GOARCH, hasBundledNode())
+	assetName, downloadURL := selectReleaseAsset(rel.Assets, runtime.GOOS, runtime.GOARCH, p.isBundledNode())
 	if !validUpdateURL(downloadURL, customEndpoint, apiURL) {
 		assetName, downloadURL = "", ""
 	}
@@ -235,6 +235,13 @@ func validUpdateURL(raw string, allowCustomOrigin bool, apiURL string) bool {
 		}
 	}
 	return false
+}
+
+func (p *Player) isBundledNode() bool {
+	if p != nil && p.bundledNodeCheck != nil {
+		return p.bundledNodeCheck()
+	}
+	return hasBundledNode()
 }
 
 func hasBundledNode() bool {

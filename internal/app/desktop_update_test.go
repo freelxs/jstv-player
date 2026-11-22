@@ -131,6 +131,52 @@ func TestCheckUpdateMyGoSignedHook(t *testing.T) {
 	}
 }
 
+func TestCheckUpdateBundledNodeSkipsSignedSlimUpdater(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(githubReleaseResponse{
+			TagName:     "v0.7.0",
+			HTMLURL:     srv.URL + "/releases/tag/v0.7.0",
+			Body:        "## 0.7.0\n- Bundled Node test",
+			PublishedAt: "2026-11-22T00:00:00Z",
+			Assets: []githubReleaseAsset{
+				{Name: "JSTV-Player-0.7.0-macos-universal.dmg", BrowserDownloadURL: srv.URL + "/download/mac-slim.dmg"},
+				{Name: "JSTV-Player-0.7.0-macos-universal-with-node.dmg", BrowserDownloadURL: srv.URL + "/download/mac-node.dmg"},
+				{Name: "JSTV-Player-0.7.0-windows-amd64-setup.exe", BrowserDownloadURL: srv.URL + "/download/win-slim.exe"},
+				{Name: "JSTV-Player-0.7.0-windows-amd64-with-node-setup.exe", BrowserDownloadURL: srv.URL + "/download/win-node.exe"},
+				{Name: "jstv-player_0.7.0_amd64.deb", BrowserDownloadURL: srv.URL + "/download/linux.deb"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	rt := New(t.TempDir(), nil, false)
+	rt.SetAppVersion("0.6.6")
+	signedChecked := false
+	rt.EnableDesktopIntegration(DesktopHooks{
+		UpdaterEnabled: func() bool { return true },
+		UpdaterCheck: func(ctx context.Context) (*mygo.Update, error) {
+			signedChecked = true
+			return &mygo.Update{Version: "0.7.0"}, nil
+		},
+	})
+	rt.Player.updateAPIURL = srv.URL
+	rt.Player.updateHTTP = srv.Client()
+	rt.Player.bundledNodeCheck = func() bool { return true }
+
+	info, err := rt.Player.CheckUpdate(context.Background())
+	if err != nil {
+		t.Fatalf("CheckUpdate: %v", err)
+	}
+	if signedChecked {
+		t.Fatal("expected bundled-node build to skip slim signed updater")
+	}
+	if !info.Available || info.CanAutoInstall || info.Source != "github" {
+		t.Fatalf("unexpected update info: %+v", info)
+	}
+}
+
 func TestKeepRunningAndNowPlayingHooks(t *testing.T) {
 	rt := New(t.TempDir(), nil, false)
 	var acquires, releases atomic.Int32
