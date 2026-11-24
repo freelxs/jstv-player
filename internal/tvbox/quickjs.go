@@ -1,7 +1,9 @@
 package tvbox
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,8 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/freelxs/jstv-player/internal/catvod"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
+	"golang.org/x/text/transform"
 	"modernc.org/quickjs"
 )
 
@@ -64,7 +68,7 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 			allowedLoopback = catvod.AllowedLoopbackAddr(u)
 		}
 	}
-	reqClient := RestrictedHTTPClient(nil, 20*time.Second, opt.AllowLAN, allowedLoopback)
+	reqClient := RestrictedHTTPClient(opt.Hosts, 20*time.Second, opt.AllowLAN, allowedLoopback)
 	eng := &qjsEngine{
 		vm:              vm,
 		client:          client,
@@ -104,7 +108,7 @@ func startQuickJS(ctx context.Context, opt Options, client *http.Client, src Sou
 		return nil, err
 	}
 	ext := absolutizeExtJSON(src.API, src.Ext)
-	if _, err := vm.Call("__init", ext); err != nil {
+	if _, err := eng.callJS(ctx, "__init", ext, src.Key, src.Type); err != nil {
 		vm.Close()
 		return nil, err
 	}
@@ -124,7 +128,7 @@ func (e *qjsEngine) installHost() error {
 	if err := e.vm.RegisterFunc("__pdfa", pdfa, false); err != nil {
 		return err
 	}
-	if err := e.vm.RegisterFunc("__pd", pd, false); err != nil {
+	if err := e.vm.RegisterFunc("__pd", pdWithBase, false); err != nil {
 		return err
 	}
 	if err := e.vm.RegisterFunc("__localGet", e.localGet, false); err != nil {
@@ -133,15 +137,22 @@ func (e *qjsEngine) installHost() error {
 	if err := e.vm.RegisterFunc("__localSet", e.localSet, false); err != nil {
 		return err
 	}
+	if err := e.vm.RegisterFunc("__cryptoHash", cryptoHashHost, false); err != nil {
+		return err
+	}
+	if err := e.vm.RegisterFunc("__cryptoAES", cryptoAESHost, false); err != nil {
+		return err
+	}
+	if err := e.vm.RegisterFunc("__b64EncodeHex", b64EncodeHexHost, false); err != nil {
+		return err
+	}
+	if err := e.vm.RegisterFunc("__b64DecodeHex", b64DecodeHexHost, false); err != nil {
+		return err
+	}
 	return e.vm.RegisterFunc("__localDelete", e.localDelete, false)
 }
 
-func (e *qjsEngine) call(ctx context.Context, fn string, args map[string]any) (any, error) {
-	if e == nil || e.vm == nil {
-		return nil, errors.New("站点未启动")
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *qjsEngine) callJS(ctx context.Context, fn string, args ...any) (string, error) {
 	vm := e.vm
 	if ctx == nil {
 		ctx = context.Background()
@@ -160,12 +171,62 @@ func (e *qjsEngine) call(ctx context.Context, fn string, args map[string]any) (a
 		}
 	}()
 	defer close(done)
+	raw, err := vm.Call(fn, args...)
+	if err != nil {
+		return "", err
+	}
+	text, _ := raw.(string)
+	if text != "__PROMISE__" {
+		return text, nil
+	}
+	for {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		n, err := vm.ExecutePendingJobs()
+		if err != nil {
+			return "", err
+		}
+		if n == 0 {
+			break
+		}
+	}
+	finRaw, err := vm.Call("__asyncFinish")
+	if err != nil {
+		return "", err
+	}
+	var state struct {
+		Done  bool   `json:"done"`
+		OK    bool   `json:"ok"`
+		Value string `json:"value"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(scalar(finRaw)), &state); err != nil {
+		return "", err
+	}
+	if !state.Done {
+		return "", errors.New("异步调用未完成")
+	}
+	if !state.OK {
+		if state.Error == "" {
+			state.Error = "站点异步调用失败"
+		}
+		return "", errors.New(state.Error)
+	}
+	return state.Value, nil
+}
+
+func (e *qjsEngine) call(ctx context.Context, fn string, args map[string]any) (any, error) {
+	if e == nil || e.vm == nil {
+		return nil, errors.New("站点未启动")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	payload, _ := json.Marshal(args)
-	raw, err := vm.Call("__call", fn, string(payload))
+	text, err := e.callJS(ctx, "__call", fn, string(payload))
 	if err != nil {
 		return nil, err
 	}
-	text, _ := raw.(string)
 	return interpretDrpy(json.RawMessage(strconvQuote(text))), nil
 }
 
@@ -186,60 +247,196 @@ func (e *qjsEngine) stop() {
 func (e *qjsEngine) req(raw, spec string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
-		return reqResult(0, "invalid request url", nil)
+		return reqResult(0, "", nil)
 	}
 	if !e.allowLAN && catvod.AllowedLoopbackAddr(u) != e.allowedLoopback && catvod.IsLocalNetworkURL(u.String()) {
-		return reqResult(0, "request to local/LAN address blocked", nil)
+		return reqResult(0, "", nil)
 	}
 	var opt struct {
-		Method  string            `json:"method"`
-		Headers map[string]string `json:"headers"`
-		Body    string            `json:"body"`
-		Data    string            `json:"data"`
-		Timeout int               `json:"timeout"`
+		Method   string          `json:"method"`
+		Headers  map[string]any  `json:"headers"`
+		Body     json.RawMessage `json:"body"`
+		Data     json.RawMessage `json:"data"`
+		Timeout  flexInt         `json:"timeout"`
+		Redirect any             `json:"redirect"`
+		Buffer   flexInt         `json:"buffer"`
+		PostType string          `json:"postType"`
 	}
 	_ = json.Unmarshal([]byte(spec), &opt)
 	method := strings.ToUpper(strings.TrimSpace(opt.Method))
 	if method == "" {
 		method = http.MethodGet
 	}
-	body := opt.Body
-	if body == "" {
-		body = opt.Data
+	if method == http.MethodGet && e.opt.PinnedScripts != nil {
+		if cached, ok := e.opt.PinnedScripts[raw]; ok && len(cached) > 0 {
+			return reqResult(http.StatusOK, string(cached), map[string]string{"content-type": "application/javascript"})
+		}
+		if unescaped, err := url.PathUnescape(raw); err == nil && unescaped != raw {
+			if cached, ok := e.opt.PinnedScripts[unescaped]; ok && len(cached) > 0 {
+				return reqResult(http.StatusOK, string(cached), map[string]string{"content-type": "application/javascript"})
+			}
+		}
+	}
+	reqHeaders := map[string]string{}
+	reqCharset := ""
+	contentType := ""
+	for k, v := range opt.Headers {
+		val := scalar(v)
+		if strings.TrimSpace(k) == "" || strings.ContainsAny(k+val, "\r\n") {
+			continue
+		}
+		reqHeaders[k] = val
+		if strings.EqualFold(k, "Content-Type") {
+			contentType = val
+			reqCharset = extractCharset(val)
+		}
+	}
+	body, inferredCT := encodeReqBody(opt.Body, opt.Data, contentType, opt.PostType)
+	if inferredCT != "" && contentType == "" {
+		reqHeaders["Content-Type"] = inferredCT
 	}
 	var reader io.Reader
-	if body != "" && method != http.MethodGet {
+	if body != "" && method != http.MethodGet && method != http.MethodHead {
 		reader = strings.NewReader(body)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(reqTimeout(opt.Timeout))*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(reqTimeout(opt.Timeout.N))*time.Millisecond)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(ctx, method, raw, reader)
 	if err != nil {
-		return reqResult(0, err.Error(), nil)
+		return reqResult(0, "", nil)
 	}
 	httpReq.Header.Set("User-Agent", "Mozilla/5.0 JSTVPlayer")
-	for k, v := range opt.Headers {
-		if strings.TrimSpace(k) != "" && !strings.ContainsAny(k+v, "\r\n") {
-			httpReq.Header.Set(k, v)
+	for k, v := range reqHeaders {
+		if method == http.MethodGet && strings.EqualFold(k, "Content-Type") && strings.HasPrefix(strings.ToLower(v), "text/html") {
+			continue
 		}
+		httpReq.Header.Set(k, v)
 	}
 	httpClient := e.reqClient
 	if httpClient == nil {
-		httpClient = RestrictedHTTPClient(nil, 20*time.Second, e.allowLAN, e.allowedLoopback)
+		httpClient = RestrictedHTTPClient(e.opt.Hosts, 20*time.Second, e.allowLAN, e.allowedLoopback)
+	}
+	if isRedirectDisabled(opt.Redirect) {
+		cloned := *httpClient
+		cloned.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		httpClient = &cloned
 	}
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		return reqResult(0, err.Error(), nil)
+		return reqResult(0, "", nil)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		if len(v) > 0 {
-			headers[k] = v[0]
+			lowerKey := strings.ToLower(k)
+			if lowerKey == "set-cookie" && len(v) > 1 {
+				headers[lowerKey] = strings.Join(v, "; ")
+			} else {
+				headers[lowerKey] = v[0]
+			}
 		}
 	}
-	return reqResult(resp.StatusCode, string(b), headers)
+	if opt.Buffer.N == 2 {
+		return reqResult(resp.StatusCode, base64.StdEncoding.EncodeToString(b), headers)
+	}
+	respCharset := extractCharset(headers["content-type"])
+	if respCharset == "" {
+		respCharset = reqCharset
+	}
+	if respCharset == "" {
+		respCharset = sniffHTMLCharset(b)
+	}
+	return reqResult(resp.StatusCode, decodeBodyCharset(b, respCharset), headers)
+}
+
+func encodeReqBody(rawBody, rawData json.RawMessage, contentType, postType string) (string, string) {
+	raw := bytes.TrimSpace(rawBody)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		raw = bytes.TrimSpace(rawData)
+	}
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", ""
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return str, ""
+	}
+	if strings.Contains(strings.ToLower(contentType), "application/json") || strings.EqualFold(postType, "json") {
+		return string(raw), "application/json"
+	}
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) == nil {
+		vals := url.Values{}
+		for k, v := range obj {
+			vals.Set(k, scalar(v))
+		}
+		return vals.Encode(), "application/x-www-form-urlencoded"
+	}
+	return string(raw), ""
+}
+
+func isRedirectDisabled(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return !t
+	case float64:
+		return t == 0
+	case int:
+		return t == 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(t))
+		return s == "0" || s == "false"
+	default:
+		return false
+	}
+}
+
+func extractCharset(ct string) string {
+	lower := strings.ToLower(ct)
+	idx := strings.Index(lower, "charset=")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(lower[idx+len("charset="):])
+	if semi := strings.IndexAny(rest, "; \t\r\n"); semi >= 0 {
+		rest = rest[:semi]
+	}
+	return strings.Trim(rest, `"'`)
+}
+
+func sniffHTMLCharset(b []byte) string {
+	head := b
+	if len(head) > 2048 {
+		head = head[:2048]
+	}
+	lower := strings.ToLower(string(head))
+	idx := strings.Index(lower, "charset=")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(lower[idx+len("charset="):])
+	if end := strings.IndexAny(rest, `"' ;/>`); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.Trim(rest, `"'`)
+}
+
+func decodeBodyCharset(b []byte, charset string) string {
+	switch strings.ToLower(strings.TrimSpace(charset)) {
+	case "gbk", "gb2312", "gb18030", "gb_2312", "gb_2312-80":
+		if decoded, _, err := transform.Bytes(simplifiedchinese.GB18030.NewDecoder(), b); err == nil {
+			return string(decoded)
+		}
+	case "big5":
+		if decoded, _, err := transform.Bytes(traditionalchinese.Big5.NewDecoder(), b); err == nil {
+			return string(decoded)
+		}
+	}
+	return string(b)
 }
 
 func reqTimeout(v int) int {
@@ -253,6 +450,9 @@ func reqTimeout(v int) int {
 }
 
 func reqResult(code int, content string, headers map[string]string) string {
+	if headers == nil {
+		headers = map[string]string{}
+	}
 	b, _ := json.Marshal(map[string]any{"code": code, "content": content, "headers": headers})
 	return string(b)
 }
@@ -297,113 +497,6 @@ func joinURL(base, rel string) string {
 	return b.ResolveReference(r).String()
 }
 
-func pdfh(doc, expr string) string { return pickHTML(doc, expr, "text", true) }
-func pdfa(doc, expr string) string {
-	sel, mode := splitSelector(expr)
-	if mode == "" {
-		mode = "html"
-	}
-	return pickAll(doc, sel, mode)
-}
-func pd(doc, expr string) string {
-	sel, mode := splitSelector(expr)
-	if mode == "" || mode == "text" {
-		mode = "href"
-	}
-	return firstMatch(doc, sel, mode)
-}
-
-func pickHTML(doc, expr, fallback string, first bool) string {
-	sel, mode := splitSelector(expr)
-	if mode == "" {
-		mode = fallback
-	}
-	if first {
-		return firstMatch(doc, sel, mode)
-	}
-	return pickAll(doc, sel, mode)
-}
-
-func splitSelector(expr string) (string, string) {
-	parts := strings.Split(expr, "&&")
-	if len(parts) == 1 {
-		return strings.TrimSpace(expr), ""
-	}
-	last := strings.TrimSpace(parts[len(parts)-1])
-	head := parts[:len(parts)-1]
-	mode := ""
-	switch strings.ToLower(last) {
-	case "text", "html":
-		mode = strings.ToLower(last)
-	default:
-		if last != "" && !strings.ContainsAny(last, ".#[]>: ") {
-			mode = last
-		} else {
-			head = parts
-		}
-	}
-	var css []string
-	for _, part := range head {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			css = append(css, part)
-		}
-	}
-	return strings.Join(css, " "), mode
-}
-
-const maxHTMLParseBytes = 1 << 20
-
-func parseHTMLDocument(doc string) (*goquery.Document, error) {
-	if len(doc) > maxHTMLParseBytes {
-		doc = doc[:maxHTMLParseBytes]
-	}
-	return goquery.NewDocumentFromReader(strings.NewReader(doc))
-}
-
-func firstMatch(doc, selector, mode string) string {
-	q, err := parseHTMLDocument(doc)
-	if err != nil {
-		return ""
-	}
-	node := q.Find(selector).First()
-	return nodeValue(node, mode)
-}
-
-func pickAll(doc, selector, mode string) string {
-	q, err := parseHTMLDocument(doc)
-	if err != nil {
-		return "[]"
-	}
-	out := []string{}
-	q.Find(selector).Each(func(_ int, node *goquery.Selection) {
-		if v := nodeValue(node, mode); v != "" {
-			out = append(out, v)
-		}
-	})
-	b, _ := json.Marshal(out)
-	return string(b)
-}
-
-func nodeValue(node *goquery.Selection, mode string) string {
-	if node == nil || node.Length() == 0 {
-		return ""
-	}
-	switch strings.ToLower(mode) {
-	case "", "text":
-		return strings.TrimSpace(node.Text())
-	case "html":
-		html, _ := node.Html()
-		return html
-	default:
-		v, _ := node.Attr(mode)
-		if v == "" {
-			v, _ = node.Attr(strings.ToLower(mode))
-		}
-		return v
-	}
-}
-
 func adaptSpider(src string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(src, "\n") {
@@ -430,16 +523,51 @@ function req(url, obj) { return JSON.parse(__req(String(url), JSON.stringify(obj
 function joinUrl(base, rel) { return __joinUrl(String(base || ''), String(rel || '')); }
 function pdfh(html, expr) { return __pdfh(String(html || ''), String(expr || '')); }
 function pdfa(html, expr) { return JSON.parse(__pdfa(String(html || ''), String(expr || '')) || '[]'); }
-function pd(html, expr) { return __pd(String(html || ''), String(expr || '')); }
+function pd(html, expr, base) { return __pd(String(html || ''), String(expr || ''), String(base || '')); }
 const local = {
-  get(key, fallback) { return __localGet(String(key), fallback == null ? '' : String(fallback)); },
-  set(key, value) { return __localSet(String(key), value == null ? '' : String(value)); },
-  delete(key) { return __localDelete(String(key)); }
+  get(scope, key) {
+    if (arguments.length >= 2) {
+      const scoped = __localGet(String(scope) + '\0' + String(key), '\0__MISS__');
+      if (scoped !== '\0__MISS__') return scoped;
+      const plain = __localGet(String(scope), '\0__MISS__');
+      if (plain !== '\0__MISS__') return plain;
+      return '';
+    }
+    return __localGet(String(scope), '');
+  },
+  set(scope, key, value) {
+    if (arguments.length >= 3) {
+      return __localSet(String(scope) + '\0' + String(key), value == null ? '' : String(value));
+    }
+    return __localSet(String(scope), key == null ? '' : String(key));
+  },
+  delete(scope, key) {
+    if (arguments.length >= 2) {
+      return __localDelete(String(scope) + '\0' + String(key));
+    }
+    return __localDelete(String(scope));
+  }
 };
-function __init(raw) {
+globalThis.__asyncState = { done: false, ok: false, value: '', error: '' };
+function __wrapResult(result) {
+  if (result && typeof result.then === 'function') {
+    globalThis.__asyncState = { done: false, ok: false, value: '', error: '' };
+    result.then(
+      (v) => { globalThis.__asyncState = { done: true, ok: true, value: typeof v === 'string' ? v : JSON.stringify(v === undefined ? null : v), error: '' }; },
+      (e) => { globalThis.__asyncState = { done: true, ok: false, value: '', error: String(e && e.message || e) }; }
+    );
+    return '__PROMISE__';
+  }
+  if (typeof result === 'string') return result;
+  return JSON.stringify(result === undefined ? null : result);
+}
+function __asyncFinish() { return JSON.stringify(globalThis.__asyncState); }
+function __init(raw, skey, stype) {
   let ext = raw;
   try { ext = JSON.parse(raw); } catch (e) {}
-  if (globalThis.__drpy && typeof globalThis.__drpy.init === 'function') globalThis.__drpy.init(ext);
+  if (!globalThis.__drpy || typeof globalThis.__drpy.init !== 'function') return '';
+  const arg = globalThis.__catvodInit ? { skey: skey || '', stype: stype || 3, ext: ext == null ? '' : ext } : ext;
+  return __wrapResult(globalThis.__drpy.init(arg));
 }
 function __call(fn, payload) {
   const body = JSON.parse(payload || '{}');
@@ -454,14 +582,21 @@ function __call(fn, payload) {
     case 'play': result = eng.play(String(body.flag ?? ''), String(body.id ?? ''), body.flags || []); break;
     default: throw new Error('未知调用 ' + fn);
   }
-  if (typeof result === 'string') return result;
-  return JSON.stringify(result === undefined ? null : result);
+  return __wrapResult(result);
 }
 `
 
 const qjsBind = `
 (() => {
   if (globalThis.__drpy && typeof globalThis.__drpy.init === 'function') return 'ok';
+  if (typeof __jsEvalReturn === 'function') {
+    const exp = __jsEvalReturn();
+    if (exp && typeof exp === 'object') {
+      globalThis.__drpy = exp;
+      globalThis.__catvodInit = true;
+      return 'ok';
+    }
+  }
   if (typeof init === 'function' && typeof home === 'function') {
     globalThis.__drpy = { init, home, homeVod, category, detail, search, play };
     return 'ok';

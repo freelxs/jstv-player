@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+- 增强 **TVBox 订阅源与内置 QuickJS 运行时兼容**：
+  - 新增轻量本地 **PythonHost** 运行时（复用系统/内置 Python 3，单进程多站点复用 + `localProxy` 代理路由），内置 TVBox `base.spider.Spider` 基类及纯标准库回退垫片（`requests`/`urllib3`/`bs4`/`lxml`/`pyquery`/`Crypto`），零依赖开箱解锁 `.py` 爬虫站点。
+  - 重写 QuickJS 宿主 HTML 选择器引擎（`pdfa`/`pdfh`/`pd`），支持 jQuery/DRPY2 伪类（`:gt`/`:lt`/`:eq`/`:first`/`:last`/`:even`/`:odd`/`:contains`）、外层 HTML 输出、`&&` 链式定位、`||` 回退、`--tag` 排除与相对地址解析。
+  - 修复 QuickJS 宿主 `local` 存储的双/三参协议（消除 `Cookie: cookie` 误传）与 `req` 请求能力（支持对象表单/JSON 体、禁用重定向、Base64 返回、GBK/Big5 解码、小写响应头与自定义 `hosts`）。
+  - 支持 CatVod JS 独立爬虫（前导注释后的 `import`、别名解构、`export function __jsEvalReturn()`、`async`/Promise 调度，以及内置 `assets://js/lib/cat.js` 虚拟模块）。
+  - 新增 `csp_Bili` / `csp_BiliGuard` 原生 Go 支持（含 B 站公开搜索、分 P 详情与 HTML5 直链播放）以及通用 `Guard` 后缀识别，不再使用静态假平替掩盖失效站点。
+  - 优化 TVBox 脚本预取器为并发去重且单站点失败弹性降级，避免个别脚本 404 拖垮整份订阅。
+  - 增强 `followDepot` 线路解析支持，兼容在包含站点的配置中直接选择并跟随后续推荐线路。
+
 ## 0.6.9
 
 - 新增 **Kazumi 规则** 订阅支持：兼容 Kazumi `index.json` 规则仓库与单条规则 JSON（内置 GitHub raw / jsDelivr 镜像回退、本地磁盘缓存与 ETag 条件刷新），实现 HTML XPath 与 JSON API 规则搜索、多线路剧集解析、规则信息面板，以及「推荐目录」（Bangumi 每日放送与当季热门番剧）虚拟站点与单站/全站搜索联动。

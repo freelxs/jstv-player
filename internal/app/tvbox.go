@@ -136,7 +136,30 @@ func readTVBoxDocument(ctx context.Context, client *http.Client, sub Subscriptio
 }
 
 func followDepot(ctx context.Context, client *http.Client, cfg *tvbox.Config, body []byte, final string, path []string, depth int) (*tvbox.Config, []byte, string, *tvbox.Config, error) {
-	if cfg == nil || !cfg.Depot() {
+	if cfg == nil {
+		return nil, body, final, nil, nil
+	}
+	if len(path) > 0 && len(cfg.Lines) > 0 {
+		var chosen *tvbox.RepoLine
+		for i := range cfg.Lines {
+			if cfg.Lines[i].Name == path[0] || cfg.Lines[i].URL == path[0] {
+				chosen = &cfg.Lines[i]
+				break
+			}
+		}
+		if chosen != nil && chosen.URL != cfg.Origin {
+			nextBody, nextURL, err := tvbox.FetchContext(ctx, client, chosen.URL, 8<<20)
+			if err != nil {
+				return nil, nil, "", nil, err
+			}
+			next, err := tvbox.Parse(nextBody, nextURL)
+			if err != nil {
+				return nil, nil, "", nil, err
+			}
+			return followDepot(ctx, client, next, nextBody, nextURL, path[1:], depth+1)
+		}
+	}
+	if !cfg.Depot() {
 		return cfg, body, final, nil, nil
 	}
 	if depth >= 4 {
@@ -215,6 +238,7 @@ func (p *Player) activateTVBox(ctx context.Context, s Settings, sub Subscription
 	}
 	srv := tvbox.NewServer(cfg, tvbox.Options{
 		Node:                node,
+		Python:              tvbox.FindPython(""),
 		Dir:                 filepath.Join(dir, "runtime"),
 		Log:                 p.log,
 		InheritEnv:          s.InheritNodeEnv,
