@@ -1,4 +1,4 @@
-# JSTV Player
+# XsPlayer（空播）
 
 [![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/jstv-player)
 
@@ -48,24 +48,24 @@
 
 | 平台 | 文件 |
 |---|---|
-| macOS | `JSTV-Player-<版本>-macos-universal.dmg` 或 `.zip` |
-| Windows | `JSTV-Player-<版本>-windows-amd64-setup.exe`（安装包）或 `.zip`（免安装） |
-| macOS（可选内置 Node） | `JSTV-Player-<版本>-macos-universal-with-node.dmg` 或 `.zip` |
-| Windows（可选内置 Node） | `JSTV-Player-<版本>-windows-amd64-with-node.zip` |
-| Ubuntu / Debian | `jstv-player_<版本>_amd64.deb`（`sudo apt install ./jstv-player_*.deb`） |
-| 其他 Linux | `jstv-player-<版本>-linux-amd64.tar.gz` |
+| macOS | `XsPlayer-<版本>-macos-universal.dmg` 或 `.zip` |
+| Windows | `XsPlayer-<版本>-windows-amd64-setup.exe`（安装包）或 `.zip`（免安装） |
+| macOS（可选内置 Node） | `XsPlayer-<版本>-macos-universal-with-node.dmg` 或 `.zip` |
+| Windows（可选内置 Node） | `XsPlayer-<版本>-windows-amd64-with-node.zip` |
+| Ubuntu / Debian | `xsplayer_<版本>_amd64.deb`（`sudo apt install ./xsplayer_*.deb`） |
+| 其他 Linux | `xsplayer-<版本>-linux-amd64.tar.gz` |
 
 推送到 `main` 后，CI 会对该次推送的 commit 运行测试和三平台构建；全部成功后，使用 `mygo.json` 中的版本创建 `v<版本>` Git 标签并发布 GitHub Release。功能或行为修改在合并进 `main` 之前必须先升应用版本，并让这三处保持一致：`mygo.json` 的 `version`、设置页关于标签（`web/index.html` 的 `appVersion`）和 `CHANGELOG.md`。发布自动化拒绝已存在的同版本标签或 Release，不会移动旧标签，也不会覆盖已发布资产；沿用已发布版本号合并到 `main` 会让这次发布失败。Pull request 和其他分支推送不会自动发布。推送 `vMAJOR.MINOR.PATCH` 标签仍可从该标签源码构建并发布；也可在 Actions 手动运行工作流并填写已有标签，以恢复发布。
 
 当前仓库未配置 Developer ID 代码签名或公证；本地构建的 app 可能带 ad-hoc 签名，但它不认证发布者。macOS 首次打开请右键 → 打开，或执行：
 
 ```sh
-xattr -dr com.apple.quarantine "/Applications/JSTV Player.app"
+xattr -dr com.apple.quarantine "/Applications/XsPlayer.app"
 ```
 
-macOS DMG 提供将 App 拖入 Applications 的常规方式，但拖放没有安装后脚本钩子；Launchpad/搜索结果可能异步更新。若需要在复制时精确刷新 LaunchServices，可在确认将要复制的源路径和目标路径后，手动运行仓库中的 `scripts/install-macos.sh "/path/to/JSTV Player.app"`。脚本只操作 `/Applications/JSTV Player.app`，检查现有与新 bundle ID，覆盖前把旧 app 存为脚本显示的校验过 ZIP 回滚档，并只对目标 app 调用 `lsregister -f`；它不重建全局索引、不关闭 Dock，也不清理其他副本。脚本只校验 bundle 元数据，不认证发布者；仓库未配置 Developer ID 签名或公证。此脚本不会由构建或 DMG 自动运行。不要对未知开发构建使用该脚本。
+macOS DMG 提供将 App 拖入 Applications 的常规方式，但拖放没有安装后脚本钩子；Launchpad/搜索结果可能异步更新。若需要在复制时精确刷新 LaunchServices，可在确认将要复制的源路径和目标路径后，手动运行仓库中的 `scripts/install-macos.sh "/path/to/XsPlayer.app"`。脚本只操作 `/Applications/XsPlayer.app`，检查现有与新 bundle ID，覆盖前把旧 app 存为脚本显示的校验过 ZIP 回滚档，并只对目标 app 调用 `lsregister -f`；它不重建全局索引、不关闭 Dock，也不清理其他副本。脚本只校验 bundle 元数据，不认证发布者；仓库未配置 Developer ID 签名或公证。此脚本不会由构建或 DMG 自动运行。不要对未知开发构建使用该脚本。
 
-macOS 发布脚本在 `out/.jstv-build-*` 下使用唯一隔离目录，验证 ZIP 和 DMG 后才发布归档；成功时只将本轮生成的 app 精确传给 `lsregister -u`，再删除本轮目录。构建或验证失败时保留该目录并报告路径，既有归档不替换；若注销工具不可用或失败，归档仍保留但 app 也保留。`--keep-app` 会保留并报告隔离目录。脚本不安装 app、不重建全局索引、不关闭 Dock；既有 `dist/darwin-universal/JSTV Player.app` 不会自动注销或删除，需用户单独决定处理。系统 App 列表是否依据 `LSApplicationCategoryType`、何时刷新尚无项目可验证依据；Spotlight 可搜索不保证 App 列表分类或出现。
+macOS 发布脚本在 `out/.jstv-build-*` 下使用唯一隔离目录，验证 ZIP 和 DMG 后才发布归档；成功时只将本轮生成的 app 精确传给 `lsregister -u`，再删除本轮目录。构建或验证失败时保留该目录并报告路径，既有归档不替换；若注销工具不可用或失败，归档仍保留但 app 也保留。`--keep-app` 会保留并报告隔离目录。脚本不安装 app、不重建全局索引、不关闭 Dock；既有 `dist/darwin-universal/XsPlayer.app` 不会自动注销或删除，需用户单独决定处理。系统 App 列表是否依据 `LSApplicationCategoryType`、何时刷新尚无项目可验证依据；Spotlight 可搜索不保证 App 列表分类或出现。
 
 需要比较已安装 bundle 与项目 `dist/` 副本时，可运行 `scripts/diagnose-macos-apps.sh`。该诊断只读输出两个固定路径的 bundle 元数据、`mdls` 结果和 Launch Services 中的文本匹配；没有匹配不等于未注册。它不刷新/注销/注册应用、不清缓存、不启动应用，也不能证明 App 列表依赖类别键。
 
@@ -103,7 +103,7 @@ go tool mygo dev                                # 开发模式
 3. 点剧集播放。设置 → 播放里选「内置播放器（窗口内 HLS / MP4）」时，画面留在应用窗口里，可以用上一集、下一集和关闭。放不了时换 mpv / IINA / SenPlayer，或指定自定义播放器。选了外部播放器之后，仍然由那个程序打开，不会改回窗口内播放。
 4. 设置 → 日志 可查看插件进程输出；播放 → 持久化脱敏日志默认关闭，开启后写入应用数据目录 `logs/`。日志页只显示行时间戳在最近 7 天内的日志，启动和读取时清理过期行；4 MiB 容量上限可能导致更早淘汰。清除日志不影响 pin、播放记录或插件配置。
 
-数据目录：macOS `~/Library/Application Support/JSTV Player/`，Windows `%APPDATA%\JSTV Player\`，Linux `~/.config/JSTV Player/`（以 MyGo 的用户数据目录为准）。里面有 `settings.json`，以及每个订阅各自的 `subs/<id>/`（插件文件和插件数据）。
+数据目录：macOS `~/Library/Application Support/XsPlayer/`（旧版本兼容 `JSTV Player/`），Windows `%APPDATA%\XsPlayer\`，Linux `~/.config/XsPlayer/`（以 MyGo 的用户数据目录为准）。里面有 `settings.json`，以及每个订阅各自的 `subs/<id>/`（插件文件和插件数据）。
 
 每个订阅在 `subs/<id>/source/pin.json` 保存首次确认的源 URL 与 SHA-256。改源地址会重新要求确认；拒绝或未完成确认时新脚本不会运行。这个 TOFU 机制只能提示已确认之后的内容变化，不验证发布者身份，也不能保护首次下载免受被攻陷的源站或中间人影响。MD5 仍按插件源协议使用，不当作发布者认证。
 

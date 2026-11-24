@@ -14,7 +14,7 @@ PLISTBUDDY="/usr/libexec/PlistBuddy"
 echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 echo "Diagnostic mode: read-only; no registration, reset, cache deletion, or app launch."
 
-APP_PATHS=("/Applications/JSTV Player.app" "$ROOT/dist/darwin-universal/JSTV Player.app")
+APP_PATHS=("/Applications/XsPlayer.app" "$ROOT/dist/darwin-universal/XsPlayer.app" "/Applications/JSTV Player.app" "$ROOT/dist/darwin-universal/JSTV Player.app")
 for app in "${APP_PATHS[@]}"; do
   echo
   echo "Bundle path: $app"

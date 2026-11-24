@@ -130,13 +130,13 @@ var loginPage = []byte(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>登录 · JSTV Player</title>
+<title>登录 · XsPlayer</title>
 <link rel="stylesheet" href="/login.css">
 </head>
 <body>
 <main class="login">
   <div class="mark" aria-hidden="true"></div>
-  <h1>JSTV Player</h1>
+  <h1>XsPlayer</h1>
   <p class="lead">网页模式需要登录后才能浏览和播放。</p>
   <form id="login-form">
     <label>用户名<input name="username" autocomplete="username" required maxlength="64"></label>

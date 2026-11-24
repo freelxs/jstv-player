@@ -1,8 +1,17 @@
 dist/
 build/
 .mygo/
+out/
+test-logs/
 *.dmg
 .env
 
 # Local browser profiles, downloaded reference data and test tools
 .tmp/
+
+# Agent workspace metadata
+.agents/
+.codebase-memory/
+skills-lock.json
+AGENTS.md
+docs/agents/

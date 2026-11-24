@@ -75,8 +75,9 @@ func (p *Player) Open(st catvod.Stream, title string) error {
 		}
 	}
 	if player == "builtin" || player == "" {
+		s := p.GetSettings()
 		item := builtinItem{Title: title, URL: u, Media: kind, ProgressID: st.ProgressID, Position: st.Position, Fallbacks: p.proxiedFallbacks(st.Fallbacks)}
-		p.openBuiltin(title, builtinPlayerPage([]builtinItem{item}, 0))
+		p.openBuiltin(title, builtinPlayerPage([]builtinItem{item}, 0, s.SkipIntro, s.SkipOutro))
 		return nil
 	}
 	return p.launch(player, u, title)
@@ -204,7 +205,7 @@ func (p *Player) mpvStopScript(u string) string {
 }
 // playerPage is one already-resolved stream in the in-window player.
 func playerPage(u, title string) string {
-	return builtinPlayerPage([]builtinItem{{Title: title, URL: u}}, 0)
+	return builtinPlayerPage([]builtinItem{{Title: title, URL: u}}, 0, 0, 0)
 }
 
 // builtinPlaybackHint names a player the current OS can actually launch.

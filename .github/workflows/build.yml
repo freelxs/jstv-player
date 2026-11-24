@@ -188,6 +188,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          $appName = (Get-Content mygo.json -Raw | ConvertFrom-Json).name
+          $appSlug = (Get-Content mygo.json -Raw | ConvertFrom-Json).slug
           $nodeVersion = '24.21.0'
           $nodeArchive = "node-v$nodeVersion-win-x64.zip"
           $nodeBase = "https://nodejs.org/dist/v$nodeVersion"
@@ -209,14 +211,14 @@ jobs:
             go tool mygo build -platform windows/amd64
             if ($LASTEXITCODE -ne 0) { throw "Slim Windows build failed with exit code $LASTEXITCODE" }
             $dist = Join-Path $PWD 'dist/windows-amd64'
-            $slim = Join-Path $out "JSTV-Player-$version-windows-amd64.zip"
-            Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png') -DestinationPath $slim -Force
+            $slim = Join-Path $out "$appName-$version-windows-amd64.zip"
+            Compress-Archive -Path (Join-Path $dist "$appName.exe"), (Join-Path $dist 'icon.png') -DestinationPath $slim -Force
             $setup = Get-ChildItem $dist -Filter '*etup*.exe' | Select-Object -First 1
-            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-setup.exe") }
+            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "$appName-$version-windows-amd64-setup.exe") }
             Get-ChildItem (Join-Path $dist '*') -Include 'update-*.json','*.delta','*.tar.gz' -File | ForEach-Object { Copy-Item $_.FullName (Join-Path $out $_.Name) -Force }
             if ($env:MYGO_UPDATER_PRIVATE_KEY) {
               $manifest = Join-Path $out 'update-windows-amd64.json'
-              $archive = Join-Path $out "jstv-player-$version-windows-amd64.tar.gz"
+              $archive = Join-Path $out "$appSlug-$version-windows-amd64.tar.gz"
               if (-not (Test-Path $manifest) -or -not (Test-Path $archive)) { throw 'Signed Windows update artifacts are missing from out/' }
             }
             $check = Join-Path $env:RUNNER_TEMP 'slim-check'
@@ -236,14 +238,14 @@ jobs:
             go tool mygo build -platform windows/amd64
             if ($LASTEXITCODE -ne 0) { throw "Bundled Node Windows build failed with exit code $LASTEXITCODE" }
             $dist = Join-Path $PWD 'dist/windows-amd64'
-            $fat = Join-Path $out "JSTV-Player-$version-windows-amd64-with-node.zip"
-            Compress-Archive -Path (Join-Path $dist 'JSTV Player.exe'), (Join-Path $dist 'icon.png'), (Join-Path $dist 'node') -DestinationPath $fat -Force
+            $fat = Join-Path $out "$appName-$version-windows-amd64-with-node.zip"
+            Compress-Archive -Path (Join-Path $dist "$appName.exe"), (Join-Path $dist 'icon.png'), (Join-Path $dist 'node') -DestinationPath $fat -Force
             $fatCheck = Join-Path $env:RUNNER_TEMP 'fat-check'
             Expand-Archive $fat $fatCheck -Force
             if (-not (Test-Path (Join-Path $fatCheck 'node/bin/node.exe')) -or -not (Test-Path (Join-Path $fatCheck 'node/LICENSE'))) { throw 'Bundled Node files missing from Windows package' }
             if ((Get-Item (Join-Path $fatCheck 'node/bin/node.exe')).Length -lt 1000000) { throw 'Bundled Node executable is unexpectedly small' }
             $setup = Get-ChildItem $dist -Filter '*etup*.exe' | Select-Object -First 1
-            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "JSTV-Player-$version-windows-amd64-with-node-setup.exe") }
+            if ($setup) { Copy-Item $setup.FullName (Join-Path $out "$appName-$version-windows-amd64-with-node-setup.exe") }
           }
           finally {
             if ($ownsResourceRoot -and (Test-Path $resourceRoot)) { Remove-Item $resourceRoot -Recurse -Force }
@@ -256,15 +258,16 @@ jobs:
         run: |
           set -euo pipefail
           V=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          SLUG=$(sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' mygo.json)
           go tool mygo build -platform linux/amd64
           mkdir -p out
           cd dist/linux-amd64
-          cp *.deb "../../out/jstv-player_${V}_amd64.deb"
+          for f in *.deb; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
           for f in *.rpm; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
-          cp *.tar.gz "../../out/jstv-player-$V-linux-amd64.tar.gz"
+          for f in *.tar.gz; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
           for f in update-*.json *.delta; do if [ -e "$f" ]; then cp "$f" "../../out/$f"; fi; done
           if [ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]; then
-            if [ ! -s "../../out/update-linux-amd64.json" ] || [ ! -s "../../out/jstv-player-$V-linux-amd64.tar.gz" ]; then
+            if [ ! -s "../../out/update-linux-amd64.json" ] || [ ! -s "../../out/${SLUG}-$V-linux-amd64.tar.gz" ]; then
               echo "Signed Linux update artifacts are missing from out/" >&2
               exit 1
             fi

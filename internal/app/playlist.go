@@ -242,7 +242,7 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		u, err := p.resolveEpisode(pl, n)
+		u, st, err := p.resolveEpisodeStream(pl, n)
 		if err != nil {
 			if !direct {
 				pl.markFailed(n, time.Now())
@@ -264,7 +264,11 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 				kind = mediaKind(u)
 			}
 			progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)}, pl.generation)
-			_ = json.NewEncoder(w).Encode(map[string]any{"url": u, "media": kind, "progressId": progressID, "position": position})
+			var fallbacks []string
+			if st != nil && len(st.Fallbacks) > 0 {
+				fallbacks = p.proxiedFallbacks(st.Fallbacks)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"url": u, "media": kind, "progressId": progressID, "position": position, "fallbacks": fallbacks})
 			return
 		}
 		http.Redirect(w, r, u, http.StatusFound)
@@ -278,19 +282,24 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 // fresh one, and starts resolving episode n+1 in the background so the
 // switch to it does not wait on the plugin.
 func (p *Player) resolveEpisode(pl *playlist, n int) (string, error) {
+	u, _, err := p.resolveEpisodeStream(pl, n)
+	return u, err
+}
+
+func (p *Player) resolveEpisodeStream(pl *playlist, n int) (string, *catvod.Stream, error) {
 	st, err := p.episodeStream(pl, n, true)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	u, err := p.wrapStream(pl, st)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	p.recordHistory(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: n, Name: pl.eps[n].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)})
 	if n+1 < len(pl.eps) {
 		go p.prefetchEpisode(pl, n+1)
 	}
-	return u, nil
+	return u, st, nil
 }
 
 func (p *Player) wrapStream(pl *playlist, st *catvod.Stream) (string, error) {
@@ -561,7 +570,7 @@ func (p *Player) PlayEpisodes(ctx context.Context, api, vodID, show, flag string
 		items[start].Media = kind
 		items[start].ProgressID, items[start].Position = progressID, position
 		items[start].Fallbacks = p.proxiedFallbacks(first.Fallbacks)
-		return nil, startContinuousPlayback(p, s.Player, "", title, builtinPlayerPage(items, start))
+		return nil, startContinuousPlayback(p, s.Player, "", title, builtinPlayerPage(items, start, s.SkipIntro, s.SkipOutro))
 	}
 	return nil, startContinuousPlayback(p, s.Player, p.eps.playlistURL(id), "", "")
 }
@@ -611,7 +620,7 @@ func playbackPageBase(loopback string) string {
 
 // builtinPlaylistPage is the in-window player starting at the first item.
 func builtinPlaylistPage(items []builtinItem) string {
-	return builtinPlayerPage(items, 0)
+	return builtinPlayerPage(items, 0, 0, 0)
 }
 
 // builtinPlayerPage is the desktop built-in player: the same HTML5 video and
@@ -620,7 +629,7 @@ func builtinPlaylistPage(items []builtinItem) string {
 // resolve there. macOS can play HLS natively; other web views use hls.js
 // (enableWorker false, because a blob worker is not required and is easier
 // to block). Episode-server URLs are resolved with ?direct=1 first.
-func builtinPlayerPage(items []builtinItem, start int) string {
+func builtinPlayerPage(items []builtinItem, start int, skipIntro, skipOutro int) string {
 	if items == nil {
 		items = []builtinItem{}
 	}
@@ -637,20 +646,24 @@ func builtinPlayerPage(items []builtinItem, start int) string {
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
 <style>html,body{margin:0;height:100%;background:#000;color:#fff;font:13px system-ui,sans-serif}video{width:100%;height:100%;background:#000}
 #bar{position:fixed;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;padding:8px 12px;background:linear-gradient(#000c,#0000);z-index:2}
-#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button{background:#fff2;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
+#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button,#ls{background:#fff2;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
+#ls{outline:none;font:inherit}#ls option{background:#222;color:#fff}
 button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:42%}
 #go{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);background:#fff;color:#111;font-size:15px;padding:10px 18px;z-index:3}</style></head>
 <body><video controls autoplay playsinline crossorigin="anonymous"></video><button id="go" type="button" hidden>点击播放</button>
-<div id="bar"><span id="t"></span><span id="e"></span><button id="p" type="button">上一集</button><button id="n" type="button">下一集</button><button id="c" type="button">关闭</button></div>
+<div id="bar"><span id="t"></span><span id="e"></span><select id="ls" title="切换线路" hidden></select><button id="p" type="button">上一集</button><button id="n" type="button">下一集</button><button id="c" type="button">关闭</button></div>
 <script src="hls.min.js"></script>
 <script>
 const L=` + payload + `;
 const START=` + strconv.Itoa(start) + `;
 const HINT=` + string(hint) + `;
-let i=-1, token=0, hls=null, pf=-1, suppress=false, failed=false, played=false, stallTimer=0, progressId='', progressAt=0, pendingSeek=0, progressReady=false;
+const SKIP_INTRO=` + strconv.Itoa(skipIntro) + `;
+const SKIP_OUTRO=` + strconv.Itoa(skipOutro) + `;
+let i=-1, token=0, hls=null, pf=-1, suppress=false, failed=false, played=false, stallTimer=0, progressId='', progressAt=0, pendingSeek=0, progressReady=false, outroTriggered=false;
 const v=document.querySelector('video');
 const err=document.getElementById('e');
 const goBtn=document.getElementById('go');
+const lineSel=document.getElementById('ls');
 function showErr(m){err.textContent=m||HINT;}
 function reportProgress(final=false){
  if(!progressReady||!progressId||!Number.isFinite(v.duration)||v.duration<=0)return;
@@ -714,6 +727,31 @@ async function mediaURL(u){
 }
 let lineAt=0;
 function lineList(item){return [item.u].concat(item.f||[]).filter(Boolean);}
+function syncLines(){
+  const item=(i>=0&&L[i])?L[i]:null;
+  const list=item?lineList(item):[];
+  if(!lineSel)return;
+  if(list.length<=1){lineSel.hidden=true;lineSel.replaceChildren();return;}
+  lineSel.hidden=false;
+  lineSel.replaceChildren(...list.map(function(_,idx){
+    const opt=document.createElement('option');
+    opt.value=idx;
+    opt.textContent='线路 '+(idx+1)+(idx===0?' (默认)':'');
+    opt.selected=idx===lineAt;
+    return opt;
+  }));
+}
+if(lineSel){
+  lineSel.onchange=function(){
+    const idx=parseInt(this.value,10);
+    const item=(i>=0&&L[i])?L[i]:null; const list=item?lineList(item):[];
+    if(!item||idx<0||idx>=list.length||idx===lineAt)return;
+    lineAt=idx;played=false;
+    if(Number.isFinite(v.currentTime)&&v.currentTime>0)pendingSeek=v.currentTime;
+    err.textContent='已切换至线路 '+(lineAt+1)+'/'+list.length;
+    destroyHls();attach(list[lineAt],item.m,token);arm(token);
+  };
+}
 function arm(mine){
  clearTimeout(stallTimer);
  stallTimer=setTimeout(function(){if(mine===token&&!failed&&!(v.paused&&!goBtn.hidden)&&v.currentTime<0.2) failLine(mine);},15000);
@@ -723,6 +761,7 @@ function failLine(mine){
  const item=L[i]; const list=item?lineList(item):[];
  if(!item||lineAt+1>=list.length){failPlayback();return;}
  lineAt++; played=false; err.textContent='正在切换线路 '+(lineAt+1)+'/'+list.length;
+ syncLines();
  destroyHls(); attach(list[lineAt], item.m, mine); arm(mine);
 }
 function attach(url,media,mine){
@@ -745,16 +784,24 @@ async function go(k){
   if(!failed) reportProgress(true);
   progressId='';progressReady=false;
   const mine=++token;
-  failed=false;played=false;pf=-1;
+  failed=false;played=false;pf=-1;outroTriggered=false;
   i=k;sync();err.textContent='';goBtn.hidden=true;
   destroyHls();
   let result;const item=L[i];
   try{result=await mediaURL(item.u);}catch(e){if(mine===token)failPlayback(((e&&e.message)||'这一集解析失败')+'，已停止连播');return;}
   if(mine!==token)return;
   progressId=item.p||result.progressId||'';pendingSeek=item.s||result.position||0;progressAt=0;
-  lineAt=0; attach(result.url,item.m||result.media,mine); arm(mine);
+  if(result.fallbacks&&result.fallbacks.length) item.f=result.fallbacks;
+  lineAt=0; syncLines(); attach(result.url,item.m||result.media,mine); arm(mine);
 }
-v.addEventListener('loadedmetadata',function(){if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3)v.currentTime=pendingSeek;pendingSeek=0;progressReady=true;syncNowPlaying();});
+v.addEventListener('loadedmetadata',function(){
+  if(pendingSeek>0&&Number.isFinite(v.duration)&&pendingSeek<v.duration-3){
+    v.currentTime=pendingSeek;
+  }else if(SKIP_INTRO>0&&Number.isFinite(v.duration)&&SKIP_INTRO<v.duration-3){
+    v.currentTime=SKIP_INTRO;
+  }
+  pendingSeek=0;progressReady=true;syncNowPlaying();
+});
 v.addEventListener('play',()=>{if(!suppress)syncNowPlaying();});
 v.addEventListener('seeked',()=>{if(!suppress)syncNowPlaying();});
 v.addEventListener('pause',()=>{if(!suppress&&!failed){reportProgress(true);syncNowPlaying();}});
@@ -763,6 +810,13 @@ v.addEventListener('timeupdate',function(){
   if(suppress||failed)return;
   if(v.currentTime>=0.2){played=true;clearTimeout(stallTimer);}
   reportProgress();
+  if(!outroTriggered&&SKIP_OUTRO>0&&Number.isFinite(v.duration)&&v.duration>SKIP_OUTRO+10){
+    if(v.duration-v.currentTime<=SKIP_OUTRO){
+      outroTriggered=true;
+      reportProgress(true);
+      if(i+1<L.length)go(i+1);
+    }
+  }
   if(i+1<L.length&&pf!==i+1&&v.duration&&isFinite(v.duration)&&v.duration-v.currentTime<60){
     pf=i+1;const u=L[i+1].u;
     if(isEpisode(u)) fetch(u+(u.indexOf('?')>=0?'&':'?')+'prefetch=1').catch(function(){});

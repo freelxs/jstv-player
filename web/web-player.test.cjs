@@ -39,6 +39,13 @@ function createWebPlayerHarness() {
   const prevBtn = { disabled: false, onclick: null };
   const nextBtn = { disabled: false, onclick: null };
   const closeBtn = { onclick: null };
+  const lineSel = {
+    hidden: true,
+    value: '0',
+    children: [],
+    replaceChildren(...items) { this.children = items; },
+    onchange: null,
+  };
   const rootEl = {
     className: '',
     hidden: true,
@@ -48,6 +55,7 @@ function createWebPlayerHarness() {
       if (sel === '.web-player-title') return titleEl;
       if (sel === '.web-player-err') return errEl;
       if (sel === '.web-player-go') return goBtn;
+      if (sel === '.web-player-line') return lineSel;
       if (sel === '[data-act="prev"]') return prevBtn;
       if (sel === '[data-act="next"]') return nextBtn;
       if (sel === '[data-act="close"]') return closeBtn;
@@ -104,7 +112,7 @@ function createWebPlayerHarness() {
     Error,
   };
   vm.runInNewContext(scriptSource, ctx);
-  return { windowObj, video, errEl, closeBtn, rpcCalls };
+  return { windowObj, video, errEl, closeBtn, lineSel, rpcCalls };
 }
 
 test('web player stops auto-advance and preserves progress when playback errors', async () => {
@@ -184,5 +192,78 @@ test('web player advances to next episode on normal completion', async () => {
   const adv = rpcCalls.filter((c) => c.method === 'WebAdvance');
   assert.equal(adv.length, 1);
   assert.deepEqual(adv[0].args, ['pl1', 1]);
+  closeBtn.onclick();
+});
+
+test('web player skips intro when skipIntro is configured and no resume position exists', async () => {
+  const { windowObj, video, closeBtn } = createWebPlayerHarness();
+  windowObj.jstvWebPlay({
+    title: 'Show - Ep1',
+    url: '/media/ep1.mp4',
+    media: 'mp4',
+    playlistId: 'pl1',
+    index: 0,
+    count: 3,
+    skipIntro: 90,
+  });
+  await new Promise((r) => setImmediate(r));
+
+  video.duration = 600;
+  video.emit('loadedmetadata');
+  assert.equal(video.currentTime, 90);
+  closeBtn.onclick();
+});
+
+test('web player skips outro and advances to next episode', async () => {
+  const { windowObj, video, closeBtn, rpcCalls } = createWebPlayerHarness();
+  windowObj.jstvWebPlay({
+    title: 'Show - Ep1',
+    url: '/media/ep1.mp4',
+    media: 'mp4',
+    playlistId: 'pl1',
+    index: 0,
+    count: 3,
+    progressId: 'prog1',
+    skipOutro: 60,
+  });
+  await new Promise((r) => setImmediate(r));
+
+  video.duration = 600;
+  video.emit('loadedmetadata');
+  video.currentTime = 545; // 55s remaining <= 60s
+  video.emit('timeupdate');
+  await new Promise((r) => setImmediate(r));
+
+  const adv = rpcCalls.filter((c) => c.method === 'WebAdvance');
+  assert.equal(adv.length, 1);
+  assert.deepEqual(adv[0].args, ['pl1', 1]);
+  closeBtn.onclick();
+});
+
+test('web player allows switching line and preserves playback position', async () => {
+  const { windowObj, video, closeBtn, lineSel } = createWebPlayerHarness();
+  windowObj.jstvWebPlay({
+    title: 'Show - Ep1',
+    url: '/media/l1.mp4',
+    media: 'mp4',
+    lines: [
+      { name: '线路 1', url: '/media/l1.mp4', media: 'mp4' },
+      { name: '线路 2', url: '/media/l2.mp4', media: 'mp4' },
+    ],
+  });
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(lineSel.hidden, false);
+  assert.equal(lineSel.children.length, 2);
+
+  video.duration = 300;
+  video.currentTime = 125;
+  lineSel.value = '1';
+  lineSel.onchange();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(video.src, '/media/l2.mp4');
+  video.emit('loadedmetadata');
+  assert.equal(video.currentTime, 125);
   closeBtn.onclick();
 });

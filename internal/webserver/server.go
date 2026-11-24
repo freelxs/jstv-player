@@ -73,7 +73,7 @@ func RunWithVersion(assets fs.FS, appVersion string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("JSTV Player web listening on %s", addr)
+		log.Printf("XsPlayer web listening on %s", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

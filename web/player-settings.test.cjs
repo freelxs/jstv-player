@@ -13,10 +13,16 @@ test('playback settings offer SenPlayer and a custom player', () => {
   assert.match(html, /id="sCustomPlayer"/);
   assert.match(html, /id="sCustomArgs"/);
   assert.match(html, /id="sBrowsePlayer"/);
+  assert.match(html, /id="sSkipIntro"/);
+  assert.match(html, /id="sSkipOutro"/);
+  assert.match(html, /id="searchKbd"/);
   assert.match(html, /\{url\}/);
   assert.match(js, /o\.remove\(\)/);
   assert.match(js, /function syncCustomPlayerFields\(\)/);
   assert.match(js, /call\('PickCustomPlayer'\)/);
   assert.ok(js.includes("customPlayer: $('#sCustomPlayer').value.trim()"));
   assert.ok(js.includes("customArgs: $('#sCustomArgs').value.trim()"));
+  assert.ok(js.includes("skipIntro: parseInt($('#sSkipIntro').value, 10) || 0"));
+  assert.ok(js.includes("skipOutro: parseInt($('#sSkipOutro').value, 10) || 0"));
+  assert.match(js, /e\.key\.toLowerCase\(\) === 'k'/);
 });

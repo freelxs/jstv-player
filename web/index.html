@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>JSTV Player</title>
+<title>XsPlayer · 空播</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <aside class="sidebar">
-  <div class="brand"><span class="logo" aria-hidden="true"></span><span>JSTV Player</span></div>
+  <div class="brand"><span class="logo" aria-hidden="true"></span><span>XsPlayer</span></div>
 
   <div class="switcher">
     <div class="label">订阅</div>
@@ -36,7 +36,7 @@
     <label class="search">
       <i class="i i-search"></i>
       <input id="q" placeholder="搜索全部站点" autocomplete="off" spellcheck="false" />
-      <kbd>↵</kbd>
+      <kbd id="searchKbd">⌘K</kbd>
     </label>
     <label class="toggle" title="只在当前站点搜索"><input type="checkbox" id="onlySite"><span class="track"></span><span>仅当前站点</span></label>
   </header>
@@ -100,6 +100,12 @@
       <input id="sBridge" placeholder="https://example.com/media/{vid}/{res}.mp4" /></label>
     <label class="field"><span>Bangumi Access Token <em>可选，仅保存在本机 settings.json；留空也可正常使用番剧目录与简介</em></span>
       <input id="sBangumiToken" type="password" autocomplete="off" spellcheck="false" placeholder="可选，用于解锁受限条目及提升稳定度" /></label>
+    <div class="field-row">
+      <label class="field"><span>跳过片头（秒） <em>从头播放时自动快进，0 为不跳过</em></span>
+        <input id="sSkipIntro" type="number" min="0" max="600" step="1" placeholder="0"></label>
+      <label class="field"><span>跳过片尾（秒） <em>距离结尾少于此秒数时自动连播下一集，0 为不跳过</em></span>
+        <input id="sSkipOutro" type="number" min="0" max="600" step="1" placeholder="0"></label>
+    </div>
     <label class="check"><input type="checkbox" id="sContinuous"> 连播：播放某一集后自动接着播放同一线路的后续剧集</label>
     <label class="check"><input type="checkbox" id="sStrict"> md5 不一致时拒绝加载</label>
     <label class="check"><input type="checkbox" id="sAllowLan"> 允许局域网访问：将插件 API 绑定到所有网络接口，局域网设备可调用插件并访问其上游代理。仅在可信网络开启；启动失败会停止旧服务。</label>
@@ -125,7 +131,7 @@
   <div class="pane" data-pane="about" hidden>
     <div class="update-box">
       <div class="update-row">
-        <p id="appVersion" class="hint small">JSTV Player 0.7.0</p>
+        <p id="appVersion" class="hint small">XsPlayer 0.7.1</p>
         <div class="update-actions">
           <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
           <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>

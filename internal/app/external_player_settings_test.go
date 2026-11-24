@@ -50,3 +50,15 @@ func TestCustomPlayerSettingsRoundTrip(t *testing.T) {
 		t.Fatal("non-executable saved")
 	}
 }
+
+func TestSkipIntroOutroSettings(t *testing.T) {
+	dir := t.TempDir()
+	p := newPlayer(dir)
+	if err := p.SaveSettings(Settings{SkipIntro: -10, SkipOutro: 90}); err != nil {
+		t.Fatal(err)
+	}
+	s := p.GetSettings()
+	if s.SkipIntro != 0 || s.SkipOutro != 90 {
+		t.Fatalf("unexpected skip settings: %+v", s)
+	}
+}

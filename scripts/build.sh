@@ -59,6 +59,10 @@ export GOPROXY="${GOPROXY:-$DEFAULT_GOPROXY}"
 
 VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
 [[ -n "$VERSION" ]] || { echo "无法从 mygo.json 读取版本。" >&2; exit 1; }
+NAME="$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' mygo.json)"
+[[ -n "$NAME" ]] || { echo "无法从 mygo.json 读取应用名称。" >&2; exit 1; }
+SLUG="$(sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' mygo.json)"
+[[ -n "$SLUG" ]] || { echo "无法从 mygo.json 读取 slug。" >&2; exit 1; }
 OUT="$ROOT/out"
 mkdir -p "$OUT"
 [[ ! -L "$OUT" ]] || { echo "拒绝使用符号链接 out 目录: $OUT" >&2; exit 1; }
@@ -202,13 +206,13 @@ build_darwin() {
     stage_node_macos
   fi
   platform_dir="$build_root/dist/darwin-universal"
-  app_dir="$platform_dir/JSTV Player.app"
+  app_dir="$platform_dir/$NAME.app"
   local suffix=""
   [[ "$WITH_NODE" -eq 1 ]] && suffix="-with-node"
-  zip_final="$OUT/JSTV-Player-$VERSION-macos-universal$suffix.zip"
-  dmg_final="$OUT/JSTV-Player-$VERSION-macos-universal$suffix.dmg"
-  zip_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal$suffix.zip.$$"
-  dmg_tmp="$OUT/.JSTV-Player-$VERSION-macos-universal$suffix.dmg.$$"
+  zip_final="$OUT/$NAME-$VERSION-macos-universal$suffix.zip"
+  dmg_final="$OUT/$NAME-$VERSION-macos-universal$suffix.dmg"
+  zip_tmp="$OUT/.$NAME-$VERSION-macos-universal$suffix.zip.$$"
+  dmg_tmp="$OUT/.$NAME-$VERSION-macos-universal$suffix.dmg.$$"
 
   if ! "$GO_BIN" tool mygo build -platform darwin/universal -o "$build_root/dist"; then
     echo "macOS 构建失败；隔离输出保留在: $build_root" >&2
@@ -264,8 +268,8 @@ build_darwin() {
     done
     shopt -u nullglob
     if [[ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]]; then
-      [[ -s "$OUT/update-darwin-universal.json" && -s "$OUT/jstv-player-$VERSION-darwin-universal.tar.gz" ]] || {
-        echo "macOS 签名更新产物缺失: update-darwin-universal.json 或 jstv-player-$VERSION-darwin-universal.tar.gz" >&2
+      [[ -s "$OUT/update-darwin-universal.json" && -s "$OUT/$SLUG-$VERSION-darwin-universal.tar.gz" ]] || {
+        echo "macOS 签名更新产物缺失: update-darwin-universal.json 或 $SLUG-$VERSION-darwin-universal.tar.gz" >&2
         return 1
       }
     fi
@@ -312,9 +316,9 @@ build_windows() {
   platform_dir="$ROOT/dist/windows-amd64"
   local suffix=""
   [[ "$WITH_NODE" -eq 1 ]] && suffix="-with-node"
-  zip_final="$OUT/JSTV-Player-$VERSION-windows-amd64$suffix.zip"
-  zip_tmp="$OUT/.JSTV-Player-$VERSION-windows-amd64$suffix.zip.$$"
-  [[ -f "$platform_dir/JSTV Player.exe" && -f "$platform_dir/icon.png" ]] || {
+  zip_final="$OUT/$NAME-$VERSION-windows-amd64$suffix.zip"
+  zip_tmp="$OUT/.$NAME-$VERSION-windows-amd64$suffix.zip.$$"
+  [[ -f "$platform_dir/$NAME.exe" && -f "$platform_dir/icon.png" ]] || {
     echo "Windows 构建缺少 exe/icon: $platform_dir" >&2
     return 1
   }
@@ -322,8 +326,8 @@ build_windows() {
     [[ -f "$platform_dir/node/bin/node.exe" && -f "$platform_dir/node/LICENSE" ]] || { echo "Windows build lacks bundled Node files" >&2; return 1; }
   fi
   if [[ "$WITH_NODE" -eq 1 ]]; then
-    if ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "JSTV Player.exe" icon.png node); then rm -f "$zip_tmp"; return 1; fi
-  elif ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "JSTV Player.exe" icon.png); then
+    if ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "$NAME.exe" icon.png node); then rm -f "$zip_tmp"; return 1; fi
+  elif ! (cd "$platform_dir" && zip -X -r "$zip_tmp" "$NAME.exe" icon.png); then
     rm -f "$zip_tmp"
     return 1
   fi
@@ -341,8 +345,8 @@ build_windows() {
     done
     shopt -u nullglob
     if [[ -n "${MYGO_UPDATER_PRIVATE_KEY:-}" ]]; then
-      [[ -s "$OUT/update-windows-amd64.json" && -s "$OUT/jstv-player-$VERSION-windows-amd64.tar.gz" ]] || {
-        echo "Windows 签名更新产物缺失: update-windows-amd64.json 或 jstv-player-$VERSION-windows-amd64.tar.gz" >&2
+      [[ -s "$OUT/update-windows-amd64.json" && -s "$OUT/$SLUG-$VERSION-windows-amd64.tar.gz" ]] || {
+        echo "Windows 签名更新产物缺失: update-windows-amd64.json 或 $SLUG-$VERSION-windows-amd64.tar.gz" >&2
         return 1
       }
     fi

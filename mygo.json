@@ -1,12 +1,13 @@
 {
-  "name": "JSTV Player",
-  "slug": "jstv-player",
-  "identifier": "com.freelxs.jstvplayer",
-  "version": "0.7.0",
+  "name": "XsPlayer",
+  "slug": "xsplayer",
+  "identifier": "com.freelxs.xsplayer",
+  "version": "0.7.1",
   "frontendDist": "web",
   "updates": {
     "publicKey": "CwckqwPqaQychkQ/tSB10IpfVm7db5q+ZpPtO+Vp9H4=",
-    "github": "freelxs/jstv-player"
+    "github": "freelxs/jstv-player",
+    "deltas": 0
   },
   "macos": {
     "infoPlist": {

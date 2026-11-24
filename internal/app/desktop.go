@@ -53,7 +53,7 @@ func (p *Player) setKeepRunning(active bool) {
 			return
 		}
 		p.powerMu.Unlock()
-		release := p.desktop.KeepRunning("JSTV Player 本地媒体代理运行中")
+		release := p.desktop.KeepRunning("XsPlayer 本地媒体代理运行中")
 		if release == nil {
 			return
 		}
@@ -87,7 +87,7 @@ func (p *Player) setBuiltinAwake(active bool) {
 			return
 		}
 		p.powerMu.Unlock()
-		release := p.desktop.KeepAwake("JSTV Player 正在播放视频", true)
+		release := p.desktop.KeepAwake("XsPlayer 正在播放视频", true)
 		if release == nil {
 			return
 		}
@@ -125,7 +125,7 @@ func (p *Player) updateNowPlaying(state builtinPlayerState) {
 	}
 	title := strings.TrimSpace(state.Title)
 	if title == "" {
-		title = "JSTV Player"
+		title = "XsPlayer"
 	}
 	pbState := mygo.PlaybackPaused
 	if state.Playing {
@@ -151,7 +151,7 @@ func (p *Player) updateNowPlaying(state builtinPlayerState) {
 	}
 	p.desktop.NowPlayingSet(mygo.NowPlayingInfo{
 		Title:    title,
-		Artist:   "JSTV Player",
+		Artist:   "XsPlayer",
 		Duration: dur,
 		Position: pos,
 		State:    pbState,

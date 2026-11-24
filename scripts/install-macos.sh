@@ -2,14 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-TARGET="/Applications/JSTV Player.app"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 PLISTBUDDY="/usr/libexec/PlistBuddy"
+EXPECTED_NAME="$(sed -n 's/^[[:space:]]*"name":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/mygo.json")"
 EXPECTED_ID="$(sed -n 's/^[[:space:]]*"identifier":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/mygo.json")"
 EXPECTED_VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/mygo.json")"
+TARGET="/Applications/$EXPECTED_NAME.app"
 
 usage() {
-  echo "Usage: $0 [--dry-run] \"/path/to/JSTV Player.app\"" >&2
+  echo "Usage: $0 [--dry-run] \"/path/to/$EXPECTED_NAME.app\"" >&2
   exit 2
 }
 
@@ -21,8 +22,8 @@ fi
 [[ $# -eq 1 ]] || usage
 SOURCE="$1"
 [[ -d "$SOURCE" && ! -L "$SOURCE" ]] || { echo "Source must be an existing, non-symlink .app directory: $SOURCE" >&2; exit 1; }
-[[ "$(basename "$SOURCE")" == "JSTV Player.app" ]] || { echo "Source bundle must be named JSTV Player.app" >&2; exit 1; }
-SOURCE="$(cd "$(dirname "$SOURCE")" && pwd -P)/JSTV Player.app"
+[[ "$(basename "$SOURCE")" == "$EXPECTED_NAME.app" ]] || { echo "Source bundle must be named $EXPECTED_NAME.app" >&2; exit 1; }
+SOURCE="$(cd "$(dirname "$SOURCE")" && pwd -P)/$EXPECTED_NAME.app"
 
 bundle_value() {
   "$PLISTBUDDY" -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null
@@ -60,9 +61,9 @@ fi
 echo "Source:  $SOURCE ($EXPECTED_ID $EXPECTED_VERSION)"
 echo "Target:  $TARGET"
 if [[ -e "$TARGET" ]]; then
-  BACKUP_ROOT="$HOME/Library/Application Support/JSTV Player/install-backups"
+  BACKUP_ROOT="$HOME/Library/Application Support/$EXPECTED_NAME/install-backups"
   BACKUP_DIR="$BACKUP_ROOT/$(/bin/date -u '+%Y%m%dT%H%M%SZ')-$$"
-  BACKUP="$BACKUP_DIR/JSTV Player.app.zip"
+  BACKUP="$BACKUP_DIR/$EXPECTED_NAME.app.zip"
   echo "Existing target matches the expected bundle ID. Rollback archive path: $BACKUP"
 else
   echo "Target does not exist; this will install a new app bundle."
@@ -76,8 +77,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 [[ -w /Applications ]] || { echo "No write access to /Applications. Run this from an account allowed to install apps there." >&2; exit 1; }
 [[ "$EUID" -ne 0 ]] || { echo "Do not run as root/sudo; use the logged-in account so rollback is kept in its own home directory." >&2; exit 1; }
-if /usr/bin/pgrep -x "JSTV Player" >/dev/null 2>&1; then
-  echo "JSTV Player appears to be running. Quit it before installing." >&2
+if /usr/bin/pgrep -x "$EXPECTED_NAME" >/dev/null 2>&1 || /usr/bin/pgrep -x "JSTV Player" >/dev/null 2>&1; then
+  echo "$EXPECTED_NAME appears to be running. Quit it before installing." >&2
   exit 1
 fi
 
@@ -112,7 +113,7 @@ if [[ -e "$TARGET" ]]; then
   /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$TARGET" "$BACKUP"
   /usr/bin/unzip -tq "$BACKUP"
   PREVIOUS_STAGE="$(/usr/bin/mktemp -d /Applications/.jstv-player-previous.XXXXXX)"
-  PREVIOUS_APP="$PREVIOUS_STAGE/JSTV Player.app"
+  PREVIOUS_APP="$PREVIOUS_STAGE/$EXPECTED_NAME.app"
   /bin/mv "$TARGET" "$PREVIOUS_APP"
   MOVED_OLD=1
 fi

@@ -225,7 +225,20 @@ function openMenu() { renderSubMenu(); $('#subMenu').hidden = false; $('#subBtn'
 function closeMenu() { $('#subMenu').hidden = true; $('#subBtn').setAttribute('aria-expanded', 'false'); }
 $('#subBtn').onclick = (e) => { e.stopPropagation(); $('#subMenu').hidden ? openMenu() : closeMenu(); };
 document.addEventListener('click', (e) => { if (!e.target.closest('.switcher')) closeMenu(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeMenu();
+    if (document.activeElement === $('#q')) $('#q').blur();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    const q = $('#q');
+    if (q) {
+      q.focus();
+      q.select();
+    }
+  }
+});
 
 async function switchSub(id) {
   if (id === st.settings.active && st.sites.length) return;
@@ -801,6 +814,8 @@ async function openSettings(tab = 'subs') {
   $('#sNode').value = s.nodePath || ''; $('#sPlayer').value = s.player || 'builtin';
   $('#sCustomPlayer').value = s.customPlayer || ''; $('#sCustomArgs').value = s.customArgs || '';
   syncCustomPlayerFields();
+  $('#sSkipIntro').value = s.skipIntro || 0;
+  $('#sSkipOutro').value = s.skipOutro || 0;
   $('#sStrict').checked = !!s.strictMd5; $('#sContinuous').checked = !s.disableContinuous; $('#sBridge').value = s.bridgeTemplate || '';
   $('#sBangumiToken').value = s.bangumiToken || '';
   $('#sAllowLan').checked = !!s.allowLan;
@@ -830,7 +845,7 @@ $('#prefs').addEventListener('submit', async (e) => {
     const oldAllowLANMedia = !!st.settings?.allowLanMedia;
     const nextAllowLAN = $('#sAllowLan').checked;
     if (!oldAllowLAN && nextAllowLAN && !(await confirmLAN())) return;
-    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), bangumiToken: $('#sBangumiToken').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked, disableHistory: !$('#sHistoryEnabled').checked, disableAdBlock: !$('#sAdBlock').checked, disableHlsAdFilter: !$('#sHlsAdFilter').checked });
+    await call('SaveSettings', { nodePath: $('#sNode').value.trim(), player: $('#sPlayer').value, customPlayer: $('#sCustomPlayer').value.trim(), customArgs: $('#sCustomArgs').value.trim(), skipIntro: parseInt($('#sSkipIntro').value, 10) || 0, skipOutro: parseInt($('#sSkipOutro').value, 10) || 0, strictMd5: $('#sStrict').checked, disableContinuous: !$('#sContinuous').checked, bridgeTemplate: $('#sBridge').value.trim(), bangumiToken: $('#sBangumiToken').value.trim(), allowLan: $('#sAllowLan').checked, allowLanMedia: $('#sAllowLanMedia').checked, inheritProxyEnv: $('#sInheritProxyEnv').checked, inheritNodeEnv: $('#sInheritNodeEnv').checked, persistLogs: $('#sPersistLogs').checked, disableHistory: !$('#sHistoryEnabled').checked, disableAdBlock: !$('#sAdBlock').checked, disableHlsAdFilter: !$('#sHlsAdFilter').checked });
     st.settings = await call('GetSettings');
     toast('设置已保存');
     if ((oldAllowLAN !== nextAllowLAN || oldAllowLANMedia !== !!st.settings.allowLanMedia) && st.settings.active) {
@@ -1156,6 +1171,10 @@ function setSiteOnlySearch(on) {
   $('#q').placeholder = on ? '搜索当前站点' : '搜索全部站点';
 }
 $('#onlySite').addEventListener('change', (e) => setSiteOnlySearch(e.target.checked));
+
+const isMac = typeof navigator !== 'undefined' && (/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent));
+const searchKbd = $('#searchKbd');
+if (searchKbd) searchKbd.textContent = isMac ? '⌘K' : 'Ctrl+K';
 
 (async () => {
   st.settings = await call('GetSettings'); renderSwitcher();

@@ -110,9 +110,15 @@ func TestBuiltinPlaylistPage(t *testing.T) {
 	if !strings.Contains(page, "const START=0") {
 		t.Fatal("playlist page should start at the first item")
 	}
-	started := builtinPlayerPage([]builtinItem{{Title: "a", URL: "http://127.0.0.1/a.m3u8"}, {Title: "b", URL: "http://127.0.0.1/b.m3u8"}}, 1)
+	started := builtinPlayerPage([]builtinItem{{Title: "a", URL: "http://127.0.0.1/a.m3u8"}, {Title: "b", URL: "http://127.0.0.1/b.m3u8"}}, 1, 90, 80)
 	if !strings.Contains(started, "const START=1") || strings.Contains(started, "a</script>") {
 		t.Fatal(started)
+	}
+	if !strings.Contains(started, "const SKIP_INTRO=90") || !strings.Contains(started, "const SKIP_OUTRO=80") {
+		t.Fatal("missing skip intro/outro constants")
+	}
+	if !strings.Contains(started, `id="ls"`) {
+		t.Fatal("missing line select in builtin player")
 	}
 	single := playerPage("http://127.0.0.1/a.m3u8", "movie")
 	if !strings.Contains(single, "hls.min.js") || !strings.Contains(single, "enableWorker:false") {

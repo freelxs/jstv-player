@@ -76,7 +76,7 @@ func main() {
 	})
 	mygo.App.WhenReady(func() {
 		go rt.InitPrivacyRules()
-		win := mygo.NewWindow(mygo.WindowOptions{Title: "JSTV Player", URL: "/", Width: 1280, Height: 820, MinWidth: 900, MinHeight: 600})
+		win := mygo.NewWindow(mygo.WindowOptions{Title: "XsPlayer", URL: "/", Width: 1280, Height: 820, MinWidth: 900, MinHeight: 600})
 		mainWinMu.Lock()
 		mainWin = win
 		mainWinMu.Unlock()
@@ -110,7 +110,7 @@ func installDesktopMenu(evalMain func(string)) {
 	}
 	if runtime.GOOS == "darwin" {
 		mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-			{Label: "JSTV Player", Submenu: []*mygo.MenuItem{
+			{Label: "XsPlayer", Submenu: []*mygo.MenuItem{
 				{Role: mygo.RoleAbout},
 				{Label: "检查更新…", Click: openUpdate},
 				mygo.Separator(),

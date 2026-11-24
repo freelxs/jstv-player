@@ -39,6 +39,10 @@ type Settings struct {
 	// BridgeTemplate is where the built-in play bridge (/play?vid=) finds
 	// media: {vid} and {res} are substituted. Empty disables the bridge.
 	BridgeTemplate string `json:"bridgeTemplate"`
+	// SkipIntro is the number of seconds to skip from the beginning of an episode (0 disables).
+	SkipIntro int `json:"skipIntro,omitempty"`
+	// SkipOutro is the number of seconds before the end of an episode to advance to the next (0 disables).
+	SkipOutro int `json:"skipOutro,omitempty"`
 	// DisableContinuous turns off 连播 (playing the following episodes).
 	DisableContinuous bool `json:"disableContinuous"`
 	// AllowLAN binds the plugin's HTTP server to all interfaces so its

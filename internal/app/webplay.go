@@ -24,6 +24,8 @@ type WebPlayback struct {
 	Count      int          `json:"count"`
 	ProgressID string       `json:"progressId,omitempty"`
 	Position   float64      `json:"position,omitempty"`
+	SkipIntro  int          `json:"skipIntro,omitempty"`
+	SkipOutro  int          `json:"skipOutro,omitempty"`
 	// Lines are alternate addresses for this playback, first one included.
 	// The page switches on error or when nothing starts within 15 seconds.
 	Lines []WebQuality `json:"lines,omitempty"`
@@ -65,7 +67,7 @@ func (p *Player) WebPlay(ctx context.Context, api, vodID, show, flag string, eps
 	p.recordHistory(subID, api, vodID, histEntry)
 	title := entryTitle(show, eps[start].Name)
 	progressID, position := p.newProgressSession(subID, api, vodID, histEntry, generation)
-	out := &WebPlayback{Title: title, Index: start, Count: len(eps), ProgressID: progressID, Position: position}
+	out := &WebPlayback{Title: title, Index: start, Count: len(eps), ProgressID: progressID, Position: position, SkipIntro: s.SkipIntro, SkipOutro: s.SkipOutro}
 
 	var playable []catvod.Stream
 	var page *catvod.Stream
@@ -186,6 +188,7 @@ func (p *Player) WebAdvance(ctx context.Context, id string, index int) (*WebPlay
 		return nil, err
 	}
 	progressID, position := p.newProgressSession(pl.subID, pl.api, pl.vodID, HistoryEntry{Flag: pl.flag, Index: index, Name: pl.eps[index].Name, ShowName: pl.show, Picture: p.lookupVodPicture(pl.api, pl.vodID)}, pl.generation)
+	settings := p.GetSettings()
 	return &WebPlayback{ProgressID: progressID, Position: position,
 		Action:     "play",
 		Title:      entryTitle(pl.show, pl.eps[index].Name),
@@ -194,6 +197,8 @@ func (p *Player) WebAdvance(ctx context.Context, id string, index int) (*WebPlay
 		PlaylistID: id,
 		Index:      index,
 		Count:      len(pl.eps),
+		SkipIntro:  settings.SkipIntro,
+		SkipOutro:  settings.SkipOutro,
 	}, nil
 }
 

@@ -5,12 +5,13 @@
   const root = document.createElement('div');
   root.className = 'web-player';
   root.hidden = true;
-  root.innerHTML = '<div class="web-player-bar"><strong class="web-player-title"></strong><span class="web-player-err"></span><button type="button" data-act="prev">上一集</button><button type="button" data-act="next">下一集</button><button type="button" data-act="close">关闭</button></div><video controls playsinline></video><button type="button" class="web-player-go" hidden>点击播放</button>';
+  root.innerHTML = '<div class="web-player-bar"><strong class="web-player-title"></strong><span class="web-player-err"></span><select class="web-player-line" hidden></select><button type="button" data-act="prev">上一集</button><button type="button" data-act="next">下一集</button><button type="button" data-act="close">关闭</button></div><video controls playsinline></video><button type="button" class="web-player-go" hidden>点击播放</button>';
   document.body.append(root);
   const video = root.querySelector('video');
   const titleEl = root.querySelector('.web-player-title');
   const errEl = root.querySelector('.web-player-err');
   const goBtn = root.querySelector('.web-player-go');
+  const lineSel = root.querySelector('.web-player-line');
   const prevBtn = root.querySelector('[data-act="prev"]');
   const nextBtn = root.querySelector('[data-act="next"]');
   let hls = null;
@@ -21,6 +22,7 @@
   let suppressVideoError = false;
   let playbackFailed = false;
   let hasPlayed = false;
+  let outroTriggered = false;
 
   function pageToast(message, isError) {
     const toast = document.querySelector('#toast');
@@ -146,6 +148,39 @@
     if (current && Array.isArray(current.lines) && current.lines.length > 1) return current.lines;
     return [];
   }
+  function syncLines() {
+    if (!lineSel) return;
+    const lines = lineChoices();
+    if (lines.length <= 1) {
+      lineSel.hidden = true;
+      lineSel.replaceChildren();
+      return;
+    }
+    lineSel.hidden = false;
+    const cur = (current && current.lineIndex) || 0;
+    lineSel.replaceChildren(...lines.map((l, idx) => {
+      const opt = document.createElement('option');
+      opt.value = idx;
+      opt.textContent = l.name || `线路 ${idx + 1}`;
+      opt.selected = idx === cur;
+      return opt;
+    }));
+  }
+  if (lineSel) {
+    lineSel.onchange = () => {
+      const idx = parseInt(lineSel.value, 10);
+      const lines = lineChoices();
+      if (!current || idx < 0 || idx >= lines.length || idx === current.lineIndex) return;
+      current.lineIndex = idx;
+      playbackFailed = false;
+      hasPlayed = false;
+      if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
+        pendingSeek = video.currentTime;
+      }
+      errEl.textContent = `已切换至线路 ${idx + 1}/${lines.length}`;
+      attach({ url: lines[idx].url, media: lines[idx].media }).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
+    };
+  }
   function armStall() {
     clearTimeout(stallTimer);
     const mine = token;
@@ -166,6 +201,7 @@
     playbackFailed = false;
     hasPlayed = false;
     errEl.textContent = `正在切换线路 ${next + 1}/${lines.length}`;
+    syncLines();
     attach({ url: lines[next].url, media: lines[next].media }).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
   }
 
@@ -174,12 +210,14 @@
     progressReady = false;
     playbackFailed = false;
     hasPlayed = false;
+    outroTriggered = false;
     current = playback;
     if (current) current.lineIndex = 0;
     lastProgressAt = 0; pendingSeek = playback.position || 0;
     titleEl.textContent = playback.title || '正在播放';
     root.hidden = false;
     syncButtons();
+    syncLines();
     attach(playback).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
   }
 
@@ -207,13 +245,27 @@
   };
   goBtn.onclick = () => tryPlay();
   video.addEventListener('loadedmetadata', () => {
-    if (pendingSeek > 0 && Number.isFinite(video.duration) && pendingSeek < video.duration - 3) video.currentTime = pendingSeek;
-    pendingSeek = 0; progressReady = true;
+    if (pendingSeek > 0 && Number.isFinite(video.duration) && pendingSeek < video.duration - 3) {
+      video.currentTime = pendingSeek;
+    } else if (current?.skipIntro > 0 && Number.isFinite(video.duration) && current.skipIntro < video.duration - 3) {
+      video.currentTime = current.skipIntro;
+    }
+    pendingSeek = 0;
+    progressReady = true;
   });
   video.addEventListener('timeupdate', () => {
     if (suppressVideoError || playbackFailed) return;
     if (video.currentTime >= 0.2) { hasPlayed = true; clearTimeout(stallTimer); }
     reportProgress();
+    if (!outroTriggered && current?.skipOutro > 0 && Number.isFinite(video.duration) && video.duration > current.skipOutro + 10) {
+      if (video.duration - video.currentTime <= current.skipOutro) {
+        outroTriggered = true;
+        if (current.playlistId && current.index + 1 < current.count) {
+          reportProgress(true);
+          go(current.index + 1);
+        }
+      }
+    }
   });
   video.addEventListener('pause', () => { if (!suppressVideoError && !playbackFailed) reportProgress(true); });
   window.addEventListener('pagehide', () => { if (!playbackFailed) reportProgress(true); });
