@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"modernc.org/quickjs"
 )
@@ -27,9 +28,15 @@ type moduleImport struct {
 // cutImport removes one leading import statement. names is the clause before
 // from, including braces. spec is the module specifier.
 func cutImport(src string) (spec, names, rest string, ok bool) {
-	trimmed := strings.TrimLeft(src, " \t\r\n")
+	trimmed := skipLeadingTrivia(src)
 	if !strings.HasPrefix(trimmed, "import") {
 		return "", "", src, false
+	}
+	if len(trimmed) > len("import") {
+		nextCh := trimmed[len("import")]
+		if nextCh != ' ' && nextCh != '\t' && nextCh != '\r' && nextCh != '\n' && nextCh != '{' && nextCh != '*' && nextCh != '"' && nextCh != '\'' {
+			return "", "", src, false
+		}
 	}
 	body := trimmed[len("import"):]
 	q1 := strings.IndexAny(body, `"'`)
@@ -50,6 +57,28 @@ func cutImport(src string) (spec, names, rest string, ok bool) {
 		after = after[1:]
 	}
 	return spec, names, after, true
+}
+
+func skipLeadingTrivia(src string) string {
+	s := strings.TrimPrefix(src, "\uFEFF")
+	for {
+		s = strings.TrimLeft(s, " \t\r\n")
+		if strings.HasPrefix(s, "//") {
+			if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+				s = s[nl+1:]
+				continue
+			}
+			return ""
+		}
+		if strings.HasPrefix(s, "/*") {
+			if end := strings.Index(s[2:], "*/"); end >= 0 {
+				s = s[2+end+2:]
+				continue
+			}
+			return ""
+		}
+		return s
+	}
 }
 
 func absolutizeExtJSON(api string, raw json.RawMessage) string {
@@ -96,33 +125,114 @@ func PrefetchScripts(ctx context.Context, client *http.Client, cfg *Config) erro
 	if cfg == nil {
 		return nil
 	}
-	scripts := map[string][]byte{}
-	for _, site := range cfg.Sites {
+	var (
+		mu       sync.Mutex
+		scripts  = map[string][]byte{}
+		inflight = map[string]*prefetchCall{}
+	)
+	fetchOnce := func(rawURL string, headers map[string]string) ([]byte, error) {
+		mu.Lock()
+		if b, ok := scripts[rawURL]; ok && len(b) > 0 {
+			mu.Unlock()
+			return b, nil
+		}
+		if c, ok := inflight[rawURL]; ok {
+			mu.Unlock()
+			<-c.done
+			return c.body, c.err
+		}
+		c := &prefetchCall{done: make(chan struct{})}
+		inflight[rawURL] = c
+		mu.Unlock()
+
+		body, err := fetchURLHeaders(ctx, client, rawURL, headers)
+
+		mu.Lock()
+		c.body, c.err = body, err
+		if err == nil && len(body) > 0 {
+			scripts[rawURL] = body
+		}
+		delete(inflight, rawURL)
+		close(c.done)
+		mu.Unlock()
+		return body, err
+	}
+
+	var prefetchDeps func(baseURL, src string, depth int) error
+	prefetchDeps = func(baseURL, src string, depth int) error {
+		if depth > 4 {
+			return errors.New("脚本依赖嵌套过深")
+		}
+		rest := src
+		for {
+			spec, _, next, ok := cutImport(rest)
+			if !ok {
+				break
+			}
+			if _, builtin := builtinModuleSpec(spec); builtin {
+				rest = next
+				continue
+			}
+			abs, err := resolveAsset(baseURL, spec)
+			if err != nil {
+				return err
+			}
+			body, err := fetchOnce(abs, nil)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path.Base(spec), err)
+			}
+			if err := prefetchDeps(abs, string(body), depth+1); err != nil {
+				return err
+			}
+			rest = next
+		}
+		return nil
+	}
+
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i := range cfg.Sites {
+		site := &cfg.Sites[i]
 		if site.Kind != "drpy" || site.Unsupported {
 			continue
 		}
-		body, err := fetchURLHeaders(ctx, client, site.API, site.Header)
-		if err != nil {
-			return fmt.Errorf("下载 JavaScript 站点「%s」脚本失败: %w", site.Name, err)
-		}
-		scripts[site.API] = body
-		if err := prefetchModuleDeps(ctx, client, site.API, string(body), scripts, 0); err != nil {
-			return fmt.Errorf("下载 JavaScript 站点「%s」依赖失败: %w", site.Name, err)
-		}
-		var extStr string
-		if json.Unmarshal([]byte(absolutizeExtJSON(site.API, site.Ext)), &extStr) == nil {
-			extStr = strings.TrimSpace(extStr)
-			if strings.HasPrefix(extStr, "http://") || strings.HasPrefix(extStr, "https://") {
-				if _, ok := scripts[extStr]; !ok {
-					extBody, err := fetchURLHeaders(ctx, client, extStr, site.Header)
+		wg.Add(1)
+		go func(site *Source) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				site.Unsupported = true
+				site.Reason = fmt.Sprintf("下载 JavaScript 站点脚本失败: %v", ctx.Err())
+				return
+			}
+			body, err := fetchOnce(site.API, site.Header)
+			if err != nil {
+				site.Unsupported = true
+				site.Reason = fmt.Sprintf("下载 JavaScript 站点脚本失败: %v", err)
+				return
+			}
+			if err := prefetchDeps(site.API, string(body), 0); err != nil {
+				site.Unsupported = true
+				site.Reason = fmt.Sprintf("下载 JavaScript 站点依赖失败: %v", err)
+				return
+			}
+			var extStr string
+			if json.Unmarshal([]byte(absolutizeExtJSON(site.API, site.Ext)), &extStr) == nil {
+				extStr = strings.TrimSpace(extStr)
+				if shouldPrefetchExt(site.API, extStr) {
+					_, err := fetchOnce(extStr, site.Header)
 					if err != nil {
-						return fmt.Errorf("下载 JavaScript 站点「%s」扩展规则失败: %w", site.Name, err)
+						site.Unsupported = true
+						site.Reason = fmt.Sprintf("下载 JavaScript 扩展规则失败: %v", err)
+						return
 					}
-					scripts[extStr] = extBody
 				}
 			}
-		}
+		}(site)
 	}
+	wg.Wait()
 	if len(scripts) == 0 {
 		cfg.Scripts = nil
 		cfg.ScriptSHA256 = ""
@@ -133,33 +243,10 @@ func PrefetchScripts(ctx context.Context, client *http.Client, cfg *Config) erro
 	return nil
 }
 
-func prefetchModuleDeps(ctx context.Context, client *http.Client, baseURL, src string, scripts map[string][]byte, depth int) error {
-	if depth > 4 {
-		return errors.New("脚本依赖嵌套过深")
-	}
-	rest := src
-	for {
-		spec, _, next, ok := cutImport(rest)
-		if !ok {
-			break
-		}
-		abs, err := resolveAsset(baseURL, spec)
-		if err != nil {
-			return err
-		}
-		if _, seen := scripts[abs]; !seen {
-			body, err := fetchURLHeaders(ctx, client, abs, nil)
-			if err != nil {
-				return fmt.Errorf("%s: %w", path.Base(spec), err)
-			}
-			scripts[abs] = body
-			if err := prefetchModuleDeps(ctx, client, abs, string(body), scripts, depth+1); err != nil {
-				return err
-			}
-		}
-		rest = next
-	}
-	return nil
+type prefetchCall struct {
+	done chan struct{}
+	body []byte
+	err  error
 }
 
 // VerifyCachedScripts checks that all drpy sites and their dependencies in cfg
@@ -184,7 +271,7 @@ func VerifyCachedScripts(cfg *Config) error {
 		var extStr string
 		if json.Unmarshal([]byte(absolutizeExtJSON(site.API, site.Ext)), &extStr) == nil {
 			extStr = strings.TrimSpace(extStr)
-			if strings.HasPrefix(extStr, "http://") || strings.HasPrefix(extStr, "https://") {
+			if shouldPrefetchExt(site.API, extStr) {
 				if b, ok := cfg.Scripts[extStr]; !ok || len(b) == 0 {
 					return errors.New("缓存缺少已确认的 JavaScript 扩展规则，请刷新订阅")
 				}
@@ -208,6 +295,10 @@ func verifyCachedDeps(baseURL, src string, scripts map[string][]byte, depth int)
 		spec, _, next, ok := cutImport(rest)
 		if !ok {
 			break
+		}
+		if _, builtin := builtinModuleSpec(spec); builtin {
+			rest = next
+			continue
 		}
 		abs, err := resolveAsset(baseURL, spec)
 		if err != nil {
@@ -245,6 +336,25 @@ func ComputeScriptSHA256(scripts map[string][]byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func shouldPrefetchExt(api, extStr string) bool {
+	extStr = strings.TrimSpace(extStr)
+	if !strings.HasPrefix(extStr, "http://") && !strings.HasPrefix(extStr, "https://") {
+		return false
+	}
+	lower := strings.ToLower(extStr)
+	if strings.HasSuffix(lower, ".js") || strings.HasSuffix(lower, ".json") ||
+		strings.HasSuffix(lower, ".txt") || strings.HasSuffix(lower, ".mjs") ||
+		strings.HasSuffix(lower, ".cjs") {
+		return true
+	}
+	apiLower := strings.ToLower(api)
+	if strings.Contains(apiLower, "drpy") && !strings.HasSuffix(extStr, "/") &&
+		!strings.Contains(lower, "/api.php") && !strings.Contains(lower, "/provide/vod") {
+		return true
+	}
+	return false
+}
+
 func fetchScriptAsset(ctx context.Context, opt Options, client *http.Client, raw string, headers map[string]string) ([]byte, error) {
 	if opt.PinnedScripts != nil {
 		if b, ok := opt.PinnedScripts[raw]; ok && len(b) > 0 {
@@ -257,7 +367,18 @@ func fetchScriptAsset(ctx context.Context, opt Options, client *http.Client, raw
 	return fetchURLHeaders(ctx, client, raw, headers)
 }
 
+func sanitizeScript(src string) string {
+	src = strings.ReplaceAll(src, "let d = [];", "var d = [];")
+	src = strings.ReplaceAll(src, "let d=[];", "var d=[];")
+	src = strings.ReplaceAll(src, "let d = []", "var d = []")
+	src = strings.ReplaceAll(src, "const TYPE =", "var TYPE =")
+	src = strings.ReplaceAll(src, "const MY_PAGE =", "var MY_PAGE =")
+	src = strings.ReplaceAll(src, "const MY_CATE =", "var MY_CATE =")
+	return src
+}
+
 func (e *qjsEngine) prepareSpider(ctx context.Context, baseURL, src string) (string, error) {
+	src = sanitizeScript(src)
 	var prelude strings.Builder
 	rest := src
 	seen := map[string]bool{}
@@ -277,6 +398,7 @@ func (e *qjsEngine) prepareSpider(ctx context.Context, baseURL, src string) (str
 		rest = next
 	}
 	rest = strings.Replace(rest, "export default", "globalThis.__drpy =", 1)
+	rest, _ = stripNamedExports(rest)
 	return prelude.String() + rest, nil
 }
 
@@ -286,7 +408,7 @@ func importBinding(names, global string) string {
 		return ""
 	}
 	if strings.HasPrefix(names, "{") {
-		return "const " + names + " = globalThis." + global + ";"
+		return "const " + convertImportDestructuring(names) + " = globalThis." + global + ";"
 	}
 	if strings.HasPrefix(names, "*") {
 		alias := strings.TrimSpace(strings.TrimPrefix(names, "*"))
@@ -299,9 +421,39 @@ func importBinding(names, global string) string {
 	return "const " + names + " = globalThis." + global + ".default;"
 }
 
+func convertImportDestructuring(clause string) string {
+	start := strings.IndexByte(clause, '{')
+	end := strings.LastIndexByte(clause, '}')
+	if start < 0 || end <= start {
+		return clause
+	}
+	var parts []string
+	for _, item := range strings.Split(clause[start+1:end], ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if orig, alias, ok := strings.Cut(item, " as "); ok {
+			parts = append(parts, strings.TrimSpace(orig)+": "+strings.TrimSpace(alias))
+		} else {
+			parts = append(parts, item)
+		}
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
+}
+
 func (e *qjsEngine) evalDependency(ctx context.Context, baseURL, spec string, seen map[string]bool, depth int) (string, error) {
 	if depth > 4 {
 		return "", errors.New("脚本依赖嵌套过深")
+	}
+	if global, ok := builtinModuleSpec(spec); ok {
+		if !seen[global] {
+			seen[global] = true
+			if _, err := e.vm.Eval(qjsCatShim+"\n;0", quickjs.EvalGlobal); err != nil {
+				return "", fmt.Errorf("%s: %w", path.Base(spec), err)
+			}
+		}
+		return global, nil
 	}
 	abs, err := resolveAsset(baseURL, spec)
 	if err != nil {
@@ -316,7 +468,7 @@ func (e *qjsEngine) evalDependency(ctx context.Context, baseURL, spec string, se
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", path.Base(spec), err)
 	}
-	text := string(body)
+	text := sanitizeScript(string(body))
 	var nested strings.Builder
 	rest := text
 	for {

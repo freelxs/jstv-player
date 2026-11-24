@@ -58,7 +58,7 @@
   </div>
 
   <div class="pane" data-pane="subs">
-    <p class="hint">支持 JS 插件、M3U/TXT 直播、TVBox 直播/点播配置，以及 Kazumi 规则仓库（如 GitHub 仓库地址或规则 JSON）。多仓配置会先选择一条线路。直播列表与 Kazumi 规则不需要 Node.js；点播里的 JavaScript 站点需要 Node。csp_XBPQ、csp_XYQHiker 和 csp_AppYs / csp_AppYsV2 由 ext 规则在桌面和网页模式运行；其余 JAR、DEX 和 Python 站点只展示、不运行。</p>
+    <p class="hint">支持 JS 插件、M3U/TXT 直播、TVBox 直播/点播配置，以及 Kazumi 规则仓库（如 GitHub 仓库地址或规则 JSON）。多仓配置会先选择一条线路。点播里的 JavaScript 站点默认由内置 QuickJS 运行，Python 站点由本机 Python 3 运行，csp_XBPQ、csp_XYQHiker、csp_AppYs / csp_AppYsV2 与 csp_Bili 原生运行；其余 Android JAR / DEX 站点只展示、不运行。</p>
     <ul id="subList" class="sub-list"></ul>
     <form id="subForm" class="sub-form">
       <input id="subFormId" type="hidden">
@@ -125,7 +125,7 @@
   <div class="pane" data-pane="about" hidden>
     <div class="update-box">
       <div class="update-row">
-        <p id="appVersion" class="hint small">JSTV Player 0.6.9</p>
+        <p id="appVersion" class="hint small">JSTV Player 0.7.0</p>
         <div class="update-actions">
           <button type="button" class="btn" id="btnCheckUpdate">检查更新</button>
           <button type="button" class="primary" id="btnInstallUpdate" hidden>立即更新</button>

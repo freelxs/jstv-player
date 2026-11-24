@@ -29,6 +29,7 @@ type Server struct {
 	mu      sync.Mutex
 	ln      net.Listener
 	engines map[string]scriptEngine
+	pyHost  *pythonHost
 	lives   map[int][]Channel
 	srv     *http.Server
 }
@@ -36,10 +37,12 @@ type Server struct {
 // Options configures the local adapter.
 type Options struct {
 	Node                string
+	Python              string
 	Dir                 string
 	Log                 func(string)
 	InheritEnv          bool
 	HTTP                *http.Client
+	Hosts               map[string]string
 	AllowLAN            bool
 	RestrictLAN         bool
 	AllowedLoopbackAddr string
@@ -61,6 +64,20 @@ func NewServer(cfg *Config, opt Options) *Server {
 	}
 	if opt.PinnedScripts == nil && len(cfg.Scripts) > 0 {
 		opt.PinnedScripts = cfg.Scripts
+	}
+	if opt.Hosts == nil && len(cfg.Hosts) > 0 {
+		opt.Hosts = cfg.Hosts
+	}
+	if strings.TrimSpace(opt.Python) == "" {
+		opt.Python = FindPython("")
+	}
+	if opt.Python == "" {
+		for i := range sites {
+			if sites[i].Kind == "python" && !sites[i].Unsupported {
+				sites[i].Unsupported = true
+				sites[i].Reason = "未找到 Python 3 运行时，安装 Python 3 后即可打开"
+			}
+		}
 	}
 	client := opt.HTTP
 	if client == nil {
@@ -118,6 +135,8 @@ func (s *Server) Stop() {
 	s.ln = nil
 	engines := s.engines
 	s.engines = map[string]scriptEngine{}
+	py := s.pyHost
+	s.pyHost = nil
 	s.mu.Unlock()
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -130,11 +149,31 @@ func (s *Server) Stop() {
 	for _, e := range engines {
 		e.stop()
 	}
+	if py != nil {
+		py.stop()
+	}
 }
 
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/config" && r.Method == http.MethodGet {
 		writeJSON(w, http.StatusOK, map[string]any{"video": map[string]any{"sites": s.Sites()}})
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/tvbox/pyproxy/") {
+		id := strings.TrimPrefix(r.URL.Path, "/tvbox/pyproxy/")
+		idx, err := strconv.Atoi(strings.TrimPrefix(id, "s"))
+		if err != nil || idx < 0 || idx >= len(s.cfg.Sites) {
+			http.NotFound(w, r)
+			return
+		}
+		s.mu.Lock()
+		py := s.pyHost
+		s.mu.Unlock()
+		if py == nil {
+			http.NotFound(w, r)
+			return
+		}
+		py.serveProxy(w, r, s.sites[idx].Key)
 		return
 	}
 	if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/tvbox/") {
@@ -193,8 +232,92 @@ func (s *Server) dispatch(ctx context.Context, src Source, action string, body m
 		return s.crawl(ctx, src, action, body, true)
 	case "appys":
 		return s.appys(ctx, src, action, body)
+	case "bili":
+		return s.bili(ctx, src, action, body)
+	case "python":
+		return s.python(ctx, src, action, body)
 	default:
 		return nil, http.StatusNotImplemented, errors.New(src.Reason)
+	}
+}
+
+func (s *Server) ensurePythonHost(ctx context.Context) (*pythonHost, error) {
+	s.mu.Lock()
+	if s.pyHost != nil && s.pyHost.alive() {
+		h := s.pyHost
+		s.mu.Unlock()
+		return h, nil
+	}
+	s.mu.Unlock()
+	h, err := startPythonHost(ctx, s.opt, s.cfg.Hosts)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		h.stop()
+		return nil, errors.New("订阅已停止")
+	}
+	if s.pyHost != nil && s.pyHost.alive() {
+		h.stop()
+		return s.pyHost, nil
+	}
+	s.pyHost = h
+	return h, nil
+}
+
+func (s *Server) python(ctx context.Context, src Source, action string, body map[string]any) (any, int, error) {
+	if action == "init" {
+		return map[string]any{}, http.StatusOK, nil
+	}
+	host, err := s.ensurePythonHost(ctx)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	scriptPath, err := host.ensureScript(ctx, s.client, s.opt, src)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	proxyBase := ""
+	if base := s.Base(); base != "" && src.LocalAPI != "" {
+		id := strings.TrimPrefix(src.LocalAPI, "/tvbox/")
+		proxyBase = base + "/tvbox/pyproxy/" + id
+	}
+	switch action {
+	case "home":
+		home, err := host.call(ctx, scriptPath, src, proxyBase, "home", map[string]any{"filter": true})
+		if err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+		obj := asMap(home)
+		if vod, err := host.call(ctx, scriptPath, src, proxyBase, "homeVod", map[string]any{}); err == nil {
+			if list, ok := asMap(vod)["list"].([]any); ok && len(list) > 0 {
+				if cur, ok := obj["list"].([]any); !ok || len(cur) == 0 {
+					obj["list"] = list
+				}
+			}
+		}
+		return obj, http.StatusOK, nil
+	case "category":
+		out, err := host.call(ctx, scriptPath, src, proxyBase, "category", map[string]any{
+			"tid": scalar(body["id"]), "pg": positive(body["page"]), "filter": true, "extend": stringMap(body["filters"]),
+		})
+		return out, http.StatusBadGateway, err
+	case "detail":
+		out, err := host.call(ctx, scriptPath, src, proxyBase, "detail", map[string]any{"id": scalar(body["id"])})
+		return out, http.StatusBadGateway, err
+	case "search":
+		out, err := host.call(ctx, scriptPath, src, proxyBase, "search", map[string]any{"wd": scalar(body["wd"]), "quick": false, "pg": positive(body["page"])})
+		return out, http.StatusBadGateway, err
+	case "play":
+		out, err := host.call(ctx, scriptPath, src, proxyBase, "play", map[string]any{"flag": scalar(body["flag"]), "id": scalar(body["id"]), "flags": []any{}})
+		if err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+		return coercePlay(asMap(out), src.Header), http.StatusOK, nil
+	default:
+		return nil, http.StatusNotFound, errors.New("未知操作")
 	}
 }
 

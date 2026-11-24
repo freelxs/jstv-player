@@ -273,6 +273,7 @@ func rewriteDrpy(src string) (string, error) {
 		return "", errors.New("下载到的脚本不是 drpy 模块")
 	}
 	src = strings.ReplaceAll(src, "assets://js/lib/", "./")
+	src = sanitizeScript(src)
 	return src, nil
 }
 
@@ -342,9 +343,19 @@ func fetchURLHeaders(ctx context.Context, client *http.Client, raw string, heade
 		body, status, err = doFetch(ctx, client, raw, retry)
 	}
 	if err != nil {
+		if direct := unwrapGitHubProxy(raw); direct != "" && direct != raw {
+			if alt, st, err2 := doFetch(ctx, client, direct, headers); err2 == nil && st == http.StatusOK && len(alt) > 0 && (!scriptPath(raw) || !looksLikeHTML(alt)) {
+				return alt, nil
+			}
+		}
 		return nil, err
 	}
 	if status != http.StatusOK {
+		if direct := unwrapGitHubProxy(raw); direct != "" && direct != raw {
+			if alt, st, err2 := doFetch(ctx, client, direct, headers); err2 == nil && st == http.StatusOK && len(alt) > 0 && (!scriptPath(raw) || !looksLikeHTML(alt)) {
+				return alt, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %d", status)
 	}
 	if len(body) == 0 {

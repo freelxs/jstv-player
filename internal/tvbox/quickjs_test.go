@@ -211,6 +211,100 @@ func TestParseHTMLDocumentCapsLargeInput(t *testing.T) {
 	}
 }
 
+func TestQuickJSCatVodAsyncAndVirtualCatModule(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cat_spider.js":
+			fmt.Fprint(w, `/*
+@header({ title: '测试', lang: 'cat' })
+*/
+import { Crypto as CryptoJS, _ } from 'assets://js/lib/cat.js';
+let skey = '';
+async function init(cfg) { skey = cfg.skey; }
+async function home() {
+  const h = CryptoJS.MD5('abc').toString(CryptoJS.enc.Hex);
+  const arr = _.uniq(['a', 'a', 'b']);
+  return JSON.stringify({ class: [{ type_id: h, type_name: skey + ':' + arr.join(',') }] });
+}
+async function homeVod() { return JSON.stringify({ list: [] }); }
+async function category() { return JSON.stringify({ list: [] }); }
+async function detail() { return JSON.stringify({ list: [] }); }
+async function search() { return JSON.stringify({ list: [] }); }
+async function play() { return JSON.stringify({ parse: 0, url: '' }); }
+export function __jsEvalReturn() { return { init, home, homeVod, category, detail, search, play }; }
+`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg, err := Parse([]byte(`{"sites":[{"key":"cat1","name":"Cat","type":3,"api":"`+srv.URL+`/cat_spider.js"}]}`), srv.URL+"/sub.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PrefetchScripts(ctx, srv.Client(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sites[0].Unsupported {
+		t.Fatalf("unexpected unsupported: %s", cfg.Sites[0].Reason)
+	}
+	eng, err := startQuickJS(ctx, Options{Dir: t.TempDir(), HTTP: srv.Client(), PinnedScripts: cfg.Scripts}, srv.Client(), cfg.Sites[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+	home, err := eng.call(ctx, "home", map[string]any{"filter": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c0 := asMap(asMap(home)["class"].([]any)[0])
+	if c0["type_id"] != "900150983cd24fb0d6963f7d28e17f72" || c0["type_name"] != "cat1:a,b" {
+		t.Fatalf("unexpected catvod home: %+v", c0)
+	}
+}
+
+func TestQuickJSLocalDrpyThreeArgProtocol(t *testing.T) {
+	script := `
+function init() {}
+function home() {
+  const emptyBefore = local.get('drpy_site', 'cookie');
+  local.set('drpy_site', 'cookie', 'sid=42');
+  const after = local.get('drpy_site', 'cookie');
+  local.delete('drpy_site', 'cookie');
+  const cleared = local.get('drpy_site', 'cookie');
+  return JSON.stringify({ class: [{ type_id: emptyBefore + '|' + after + '|' + cleared, type_name: 'ok' }] });
+}
+function homeVod() { return ''; }
+function category() { return ''; }
+function detail() { return ''; }
+function search() { return ''; }
+function play() { return ''; }
+export default { init, home, homeVod, category, detail, search, play };
+`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	eng, err := startQuickJS(ctx, Options{
+		Dir:           t.TempDir(),
+		PinnedScripts: map[string][]byte{"https://example.com/s.js": []byte(script)},
+	}, nil, Source{API: "https://example.com/s.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.stop()
+	home, err := eng.call(ctx, "home", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c0 := asMap(asMap(home)["class"].([]any)[0])
+	if c0["type_id"] != "|sid=42|" {
+		t.Fatalf("expected |sid=42|, got %q", c0["type_id"])
+	}
+}
+
 const qjsSpider = `
 function init(ext) { local.set('name', ext && ext.name ? ext.name : ''); }
 function home() {

@@ -457,8 +457,10 @@ func classify(s *Source) {
 			return
 		case strings.Contains(path, ".py") || (strings.HasPrefix(s.API, "py_") && extMentionsPy(s.Ext)):
 			s.Kind = "python"
-			s.Unsupported = true
-			s.Reason = "Python 站点需要单独的 Python 运行时，当前版本没有内置，所以这个站点不能运行"
+			if pythonScriptURL(*s) == "" {
+				s.Unsupported = true
+				s.Reason = "Python 站点缺少可下载的 .py 脚本地址"
+			}
 			return
 		default:
 			if kind, ok := nativeClass(s.API); ok {
@@ -486,12 +488,14 @@ func nativeClass(api string) (string, bool) {
 		name = name[:i]
 	}
 	switch strings.TrimSpace(name) {
-	case "csp_XBPQ":
+	case "csp_XBPQ", "csp_XBPQGuard":
 		return "xbpq", true
-	case "csp_AppYs", "csp_AppYsV2":
+	case "csp_AppYs", "csp_AppYsV2", "csp_AppYsGuard", "csp_AppYsV2Guard":
 		return "appys", true
-	case "csp_XYQHiker", "csp_XYQHikerAL", "csp_XYQBiu":
+	case "csp_XYQHiker", "csp_XYQHikerAL", "csp_XYQBiu", "csp_XYQHikerGuard", "csp_XYQHikerALGuard", "csp_XYQBiuGuard":
 		return "xyq", true
+	case "csp_Bili", "csp_BiliGuard", "csp_BiliBili", "csp_BiliBiliGuard":
+		return "bili", true
 	default:
 		return "", false
 	}
