@@ -52,14 +52,35 @@ func main() {
 	_ = os.MkdirAll(dir, 0o755)
 	rt := app.New(dir, webFS, false)
 	rt.SetAppVersion(embeddedAppVersion())
-	rt.EnableDesktopIntegration(app.DefaultDesktopHooks())
+	var mainWinMu sync.Mutex
+	var mainWin *mygo.Window
+
+	hooks := app.DefaultDesktopHooks()
+	hooks.EmbedBuiltin = func(title, page, base string) bool {
+		mainWinMu.Lock()
+		target := mainWin
+		mainWinMu.Unlock()
+		if target == nil {
+			return false
+		}
+		titleJSON, _ := json.Marshal(title)
+		pageJSON, _ := json.Marshal(page)
+		baseJSON, _ := json.Marshal(base)
+		script := "(function(){ if (window.__jstvEmbedBuiltin) return !!window.__jstvEmbedBuiltin(" + string(titleJSON) + ", " + string(pageJSON) + ", " + string(baseJSON) + "); return false; })()"
+		res, err := target.Page().Eval(script)
+		if err != nil {
+			return false
+		}
+		if b, ok := res.(bool); ok {
+			return b
+		}
+		return false
+	}
+	rt.EnableDesktopIntegration(hooks)
 	mygo.Bind(rt.Player)
 	mygo.NowPlaying.OnCommand(func(cmd mygo.MediaCommand, pos time.Duration) {
 		rt.HandleMediaCommand(cmd, pos)
 	})
-
-	var mainWinMu sync.Mutex
-	var mainWin *mygo.Window
 	mygo.App.OnSecondInstance(func(_ []string, _ string) {
 		mainWinMu.Lock()
 		win := mainWin

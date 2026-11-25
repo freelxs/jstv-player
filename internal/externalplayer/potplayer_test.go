@@ -58,15 +58,15 @@ func TestPotPlayerArgs(t *testing.T) {
 
 func TestPickDefaultPlayer(t *testing.T) {
 	cases := []struct {
-		goos     string
-		pot, mpv bool
-		want     string
+		goos                  string
+		pot, mpv              bool
+		want                  string
 	}{
 		{"darwin", false, true, "builtin"},
-		{"windows", true, true, "potplayer"},
-		{"windows", false, true, "mpv"},
+		{"darwin", false, false, "builtin"},
+		{"windows", true, true, "builtin"},
 		{"windows", false, false, "builtin"},
-		{"linux", true, true, "mpv"},
+		{"linux", true, true, "builtin"},
 		{"linux", false, false, "builtin"},
 	}
 	for _, c := range cases {

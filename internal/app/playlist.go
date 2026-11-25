@@ -208,6 +208,15 @@ func (p *Player) serveEpisodes(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(b)
+	case r.URL.Path == "/artplayer.js":
+		b, err := fs.ReadFile(p.assets, "webassets/artplayer.js")
+		if err != nil {
+			http.Error(w, "播放器组件缺失", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(b)
 	case r.URL.Path == "/player/close":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -644,15 +653,37 @@ func builtinPlayerPage(items []builtinItem, start int, skipIntro, skipOutro int)
 	}
 	hint, _ := json.Marshal(builtinPlaybackHint())
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + html.EscapeString(title) + `</title>
-<style>html,body{margin:0;height:100%;background:#000;color:#fff;font:13px system-ui,sans-serif}video{width:100%;height:100%;background:#000}
-#bar{position:fixed;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;padding:8px 12px;background:linear-gradient(#000c,#0000);z-index:2}
-#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}button,#ls{background:#fff2;color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:#000;color:#fff;font:13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;user-select:none}
+#playerWrap{position:relative;width:100%;height:100%;background:#000;overflow:hidden}
+#artplayer{width:100%;height:100%;background:#000}
+.art-video-player{width:100%;height:100%}
+#bar{position:absolute;top:0;left:0;right:0;height:44px;display:flex;gap:8px;align-items:center;padding:0 12px;background:linear-gradient(rgba(0,0,0,0.85),rgba(0,0,0,0));z-index:80;transition:opacity .25s ease}
+#bar.bar-hidden{opacity:0;pointer-events:none}
+#t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500}
+button,#ls{background:rgba(255,255,255,0.14);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;backdrop-filter:blur(6px);transition:background .15s}
+button:hover,#ls:hover{background:rgba(255,255,255,0.24)}
 #ls{outline:none;font:inherit}#ls option{background:#222;color:#fff}
-button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:42%}
-#go{position:fixed;left:50%;top:56%;transform:translate(-50%,-50%);background:#fff;color:#111;font-size:15px;padding:10px 18px;z-index:3}</style></head>
-<body><video controls autoplay playsinline crossorigin="anonymous"></video><button id="go" type="button" hidden>点击播放</button>
-<div id="bar"><span id="t"></span><span id="e"></span><select id="ls" title="切换线路" hidden></select><button id="p" type="button">上一集</button><button id="n" type="button">下一集</button><button id="c" type="button">关闭</button></div>
+button:disabled{opacity:.35;cursor:default}#e{color:#f88;max-width:38%;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#go{position:fixed;left:50%;top:52%;transform:translate(-50%,-50%);background:#38bdf8;color:#0f172a;font-weight:600;font-size:14px;padding:9px 18px;border-radius:6px;border:0;cursor:pointer;z-index:100}
+</style></head>
+<body>
+<div id="playerWrap">
+  <div id="artplayer"></div>
+  <div id="bar">
+    <span id="t"></span>
+    <span id="e"></span>
+    <select id="ls" title="切换线路" hidden></select>
+    <button id="p" type="button">上一集</button>
+    <button id="n" type="button">下一集</button>
+    <button id="fs" type="button">全屏</button>
+    <button id="c" type="button">关闭</button>
+  </div>
+  <button id="go" type="button" hidden>点击播放</button>
+</div>
 <script src="hls.min.js"></script>
+<script src="artplayer.js"></script>
 <script>
 const L=` + payload + `;
 const START=` + strconv.Itoa(start) + `;
@@ -660,10 +691,80 @@ const HINT=` + string(hint) + `;
 const SKIP_INTRO=` + strconv.Itoa(skipIntro) + `;
 const SKIP_OUTRO=` + strconv.Itoa(skipOutro) + `;
 let i=-1, token=0, hls=null, pf=-1, suppress=false, failed=false, played=false, stallTimer=0, progressId='', progressAt=0, pendingSeek=0, progressReady=false, outroTriggered=false;
-const v=document.querySelector('video');
+let art=null;
+try{
+  art = new Artplayer({
+    container: '#artplayer',
+    url: '',
+    theme: '#38bdf8',
+    volume: 0.8,
+    isLive: false,
+    muted: false,
+    autoplay: true,
+    pip: true,
+    autoSize: false,
+    autoMini: false,
+    screenshot: true,
+    setting: true,
+    loop: false,
+    flip: true,
+    playbackRate: true,
+    aspectRatio: true,
+    hotkey: true,
+    fullscreen: true,
+    fullscreenWeb: true,
+    subtitleOffset: false,
+    miniProgressBar: true,
+    mutex: true,
+    backdrop: true,
+    playsInline: true,
+    autoPlayback: false,
+    airplay: true,
+    lang: 'zh-cn',
+    moreVideoAttr: {
+      controls: false,
+      crossOrigin: 'anonymous',
+      playsinline: 'true',
+      'webkit-playsinline': 'true'
+    },
+    customType: {
+      m3u8: function(video, url, instance){
+        attachHlsToVideo(video, url, instance);
+      }
+    }
+  });
+}catch(e){
+  console.error('Artplayer init error:', e);
+}
+const v=(art&&art.video)||document.querySelector('video')||document.createElement('video');
 const err=document.getElementById('e');
 const goBtn=document.getElementById('go');
 const lineSel=document.getElementById('ls');
+const topBar=document.getElementById('bar');
+const wrap=document.getElementById('playerWrap')||document.body;
+
+if(art&&art.template&&art.template.$player){
+  art.template.$player.appendChild(topBar);
+}
+
+let barHideTimer=0;
+function showTopBar(){
+  clearTimeout(barHideTimer);
+  topBar.classList.remove('bar-hidden');
+  if(v&&!v.paused){
+    barHideTimer=setTimeout(function(){topBar.classList.add('bar-hidden');},3000);
+  }
+}
+wrap.addEventListener('mousemove',showTopBar);
+wrap.addEventListener('touchstart',showTopBar);
+topBar.addEventListener('mouseenter',function(){clearTimeout(barHideTimer);topBar.classList.remove('bar-hidden');});
+topBar.addEventListener('mouseleave',showTopBar);
+if(art){
+  art.on('controls',function(state){
+    if(state) showTopBar();
+    else if(v&&!v.paused) topBar.classList.add('bar-hidden');
+  });
+}
 function showErr(m){err.textContent=m||HINT;}
 function reportProgress(final=false){
  if(!progressReady||!progressId||!Number.isFinite(v.duration)||v.duration<=0)return;
@@ -676,11 +777,25 @@ function syncNowPlaying(){
 }
 window.__jstvMediaCmd=function(cmd,pos){
  if(cmd==='play') tryPlay();
- else if(cmd==='pause') v.pause();
+ else if(cmd==='pause') { if(art) art.pause(); else if(v) v.pause(); }
  else if(cmd==='next'&&i+1<L.length) go(i+1);
  else if(cmd==='prev'&&i>0) go(i-1);
- else if(cmd==='seek'&&Number.isFinite(pos)){v.currentTime=Math.max(0,pos);syncNowPlaying();}
+ else if(cmd==='seek'&&Number.isFinite(pos)){
+   if(art) art.currentTime=Math.max(0,pos);
+   else if(v) v.currentTime=Math.max(0,pos);
+   syncNowPlaying();
+ }
  else if(cmd==='stop') document.getElementById('c').click();
+};
+window.__jstvGo=function(idx){
+  go(idx);
+};
+window.__jstvCanJump=function(idx){
+  return typeof idx==='number'&&idx>=0&&idx<L.length;
+};
+window.__jstvDestroy=function(){
+  destroyHls();
+  if(art&&typeof art.destroy==='function'){try{art.destroy(false);}catch(e){}}
 };
 function sync(){
   document.getElementById('p').disabled=i<=0;
@@ -688,10 +803,12 @@ function sync(){
   const label=L.length&&i>=0?(L[i].t+'  ('+(i+1)+'/'+L.length+')'):'';
   document.getElementById('t').textContent=label;
   if(i>=0&&L[i]) document.title=L[i].t||'';
+  try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:'jstv-episode-change',index:i},'*');}catch(e){}
 }
 function destroyHls(){
   clearTimeout(stallTimer);
   suppress=true;
+  if(art&&art.hls){try{art.hls.destroy();}catch(e){}art.hls=null;}
   if(hls){hls.destroy();hls=null;}
   v.pause();
   v.removeAttribute('src');
@@ -705,11 +822,17 @@ function failPlayback(msg){
   }
   progressReady=false;
   destroyHls();
+  if(art&&art.notice){art.notice.show=msg||('播放失败，已停止连播。'+HINT.replace(/^播放失败[，,]?/,''));}
   showErr(msg||('播放失败，已停止连播。'+HINT.replace(/^播放失败[，,]?/,'')));
   syncNowPlaying();
 }
 function tryPlay(){
   goBtn.hidden=true;
+  if(art){
+    const p=art.play();
+    if(p&&p.catch) p.catch(function(){goBtn.hidden=false;});
+    return;
+  }
   const pending=v.play();
   if(pending&&pending.catch) pending.catch(function(){goBtn.hidden=false;});
 }
@@ -764,8 +887,39 @@ function failLine(mine){
  syncLines();
  destroyHls(); attach(list[lineAt], item.m, mine); arm(mine);
 }
+function attachHlsToVideo(video,url,instance){
+  const mine=token;
+  if(video.canPlayType('application/vnd.apple.mpegurl')){
+    suppress=false;
+    video.src=url;
+    tryPlay();
+    return;
+  }
+  if(window.Hls&&window.Hls.isSupported()){
+    if(instance&&instance.hls){try{instance.hls.destroy();}catch(e){}instance.hls=null;}
+    hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
+    hls.on(window.Hls.Events.ERROR,function(_,data){if(!data||!data.fatal)return;failLine(mine);});
+    hls.on(window.Hls.Events.MANIFEST_PARSED,function(){if(mine===token)tryPlay();});
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    if(instance) instance.hls=hls;
+    setTimeout(function(){suppress=false;},0);
+    return;
+  }
+  failPlayback('当前窗口不能播放 HLS（没有 Media Source Extensions），已停止连播。'+HINT.replace(/^播放失败[，,]?/,''));
+}
 function attach(url,media,mine){
   const hlsLike=media==='hls'||isHls(url);
+  suppress=false;
+  if(art){
+    art.type=hlsLike?'m3u8':'';
+    art.option.type=hlsLike?'m3u8':'';
+    art.url=url;
+    if(!hlsLike){
+      tryPlay();
+    }
+    return;
+  }
   if(hlsLike&&v.canPlayType('application/vnd.apple.mpegurl')){suppress=false;v.src=url;tryPlay();return;}
   if(hlsLike&&window.Hls&&window.Hls.isSupported()){
     hls=new window.Hls({enableWorker:false,lowLatencyMode:false});
@@ -802,10 +956,11 @@ v.addEventListener('loadedmetadata',function(){
   }
   pendingSeek=0;progressReady=true;syncNowPlaying();
 });
-v.addEventListener('play',()=>{if(!suppress)syncNowPlaying();});
+v.addEventListener('play',()=>{if(!suppress){goBtn.hidden=true;syncNowPlaying();showTopBar();}});
 v.addEventListener('seeked',()=>{if(!suppress)syncNowPlaying();});
-v.addEventListener('pause',()=>{if(!suppress&&!failed){reportProgress(true);syncNowPlaying();}});
+v.addEventListener('pause',()=>{if(!suppress&&!failed){reportProgress(true);syncNowPlaying();showTopBar();}});
 window.addEventListener('pagehide',()=>{if(!failed)reportProgress(true);});
+window.addEventListener('beforeunload',()=>{destroyHls();if(!failed)reportProgress(true);});
 v.addEventListener('timeupdate',function(){
   if(suppress||failed)return;
   if(v.currentTime>=0.2){played=true;clearTimeout(stallTimer);}
@@ -830,10 +985,24 @@ v.addEventListener('ended',function(){
   reportProgress(true);
   if(i+1<L.length)go(i+1);
 });
-v.addEventListener('error',function(){if(suppress||failed)return;if(!v.getAttribute('src')&&!hls)return;failLine(token);});
+v.addEventListener('error',function(){if(suppress||failed)return;if(!v.getAttribute('src')&&!hls&&(!art||!art.hls))return;failLine(token);});
 document.getElementById('p').onclick=function(){go(i-1);};
 document.getElementById('n').onclick=function(){go(i+1);};
-document.getElementById('c').onclick=function(){reportProgress(true);progressId='';token++;destroyHls();fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});};
+document.getElementById('fs').onclick=function(){
+  if(art){
+    art.fullscreen=!art.fullscreen;
+    return;
+  }
+  const isFs=!!(document.fullscreenElement||document.webkitFullscreenElement);
+  if(isFs){if(document.exitFullscreen)document.exitFullscreen();else if(document.webkitExitFullscreen)document.webkitExitFullscreen();}
+  else{const req=wrap.requestFullscreen||wrap.webkitRequestFullscreen;if(req)req.call(wrap);}
+};
+document.getElementById('c').onclick=function(){
+  reportProgress(true);progressId='';token++;destroyHls();
+  if(art&&typeof art.destroy==='function'){try{art.destroy(false);}catch(e){}}
+  fetch('player/close',{method:'POST',mode:'no-cors'}).catch(function(){});
+  try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:'jstv-close-player'},'*');}catch(e){}
+};
 goBtn.onclick=function(){tryPlay();};
 if(L.length) go(START); else showErr('没有可播放的地址');
 </script></body></html>`

@@ -157,6 +157,7 @@ func newWebHandler(runtime *app.Runtime, auth *authStore, assets fs.FS) http.Han
 	protected.HandleFunc("GET /bridge.js", s.serveAsset("webassets/bridge.js", "text/javascript; charset=utf-8"))
 	protected.HandleFunc("GET /web-player.js", s.serveAsset("webassets/web-player.js", "text/javascript; charset=utf-8"))
 	protected.HandleFunc("GET /vendor/hls.min.js", s.serveAsset("webassets/hls.min.js", "text/javascript; charset=utf-8"))
+	protected.HandleFunc("GET /vendor/artplayer.js", s.serveAsset("webassets/artplayer.js", "text/javascript; charset=utf-8"))
 	protected.Handle("GET /", http.HandlerFunc(s.serveFrontend))
 	mux.Handle("/", s.requireAuth(protected))
 	return securityHeaders(mux)

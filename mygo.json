@@ -2,7 +2,7 @@
   "name": "XsPlayer",
   "slug": "xsplayer",
   "identifier": "com.freelxs.xsplayer",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "frontendDist": "web",
   "updates": {
     "publicKey": "CwckqwPqaQychkQ/tSB10IpfVm7db5q+ZpPtO+Vp9H4=",

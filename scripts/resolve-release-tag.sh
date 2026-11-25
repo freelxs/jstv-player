@@ -7,13 +7,6 @@ ref="${GITHUB_REF:-}"
 
 if [[ -z "$release_tag" && "$event_name" == push && "$ref" == refs/tags/v* ]]; then
   release_tag="${ref#refs/tags/}"
-elif [[ -z "$release_tag" && "$event_name" == push && "$ref" == refs/heads/main ]]; then
-  version="${SOURCE_VERSION:-}"
-  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo 'Main push source version must look like MAJOR.MINOR.PATCH.' >&2
-    exit 1
-  fi
-  release_tag="v$version"
 fi
 
 if [[ -n "$release_tag" && ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

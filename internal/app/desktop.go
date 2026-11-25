@@ -25,6 +25,7 @@ type DesktopHooks struct {
 	Relaunch            func(args ...string)
 	OpenExternal        func(u string) error
 	CompileContentRules func(id, rules string) (*mygo.ContentRules, error)
+	EmbedBuiltin        func(title, page, base string) bool
 }
 
 // DefaultDesktopHooks returns hooks backed by the live MyGo desktop runtime.

@@ -86,7 +86,7 @@ func MpvArgsWithScript(u, title, script string) []string {
 	// prefetch-playlist: open the next 连播 entry before this one ends.
 	// osd-playing-msg / term-playing-msg empty: never print the entry URL.
 	args := []string{"--force-window=immediate", "--demuxer-lavf-o=extension_picky=0", "--prefetch-playlist=yes", "--osd-playing-msg=", "--term-playing-msg="}
-	args = append(args, mpvOSDFontArgs(runtime.GOOS)...)
+	args = append(args, MpvOSDFontArgs(runtime.GOOS)...)
 	if strings.TrimSpace(script) != "" {
 		args = append(args, "--scripts-append="+script)
 	}
@@ -99,13 +99,13 @@ func MpvArgsWithScript(u, title, script string) []string {
 	return append(args, "--", u)
 }
 
-// mpvOSDFontArgs pins an installed font with CJK glyphs. On macOS mpv's
+// MpvOSDFontArgs pins an installed font with CJK glyphs. On macOS mpv's
 // default sans-serif resolves to Helvetica, while libass's CoreText fallback
 // points at the private PingFangUI.ttc that it cannot open. Playlist titles
 // and the OSC title therefore render Chinese, Japanese, and Korean as boxes.
 // Windows and Linux are checked for an installed CJK font before overriding
 // mpv's default.
-func mpvOSDFontArgs(goos string) []string {
+func MpvOSDFontArgs(goos string) []string {
 	var font string
 	switch goos {
 	case "darwin":
@@ -188,25 +188,13 @@ func pickFontconfigCJKFont(out string) string {
 	return first
 }
 
-// DefaultPlayer prefers an installed external player on Windows and Linux.
-// The built-in player can play HLS there too (hls.js, when the web view has
-// Media Source Extensions and codecs), but mpv or PotPlayer does not depend
-// on that. macOS keeps the built-in player, which can play HLS natively.
-// SenPlayer and a custom player are opt-in. This runs only when no player
-// has been saved.
+// DefaultPlayer defaults to the built-in in-window player ("builtin") for
+// the unified dual-column playback experience across all platforms.
 func DefaultPlayer() string {
 	return PickDefaultPlayer(runtime.GOOS, FindPotPlayer() != "", FindExe(MpvCandidates()...) != "")
 }
 
 func PickDefaultPlayer(goos string, hasPot, hasMPV bool) string {
-	switch {
-	case goos == "darwin":
-		return "builtin"
-	case goos == "windows" && hasPot:
-		return "potplayer"
-	case hasMPV:
-		return "mpv"
-	}
 	return "builtin"
 }
 

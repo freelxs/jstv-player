@@ -8,6 +8,8 @@ const html = fs.readFileSync(path.join(root, 'web', 'index.html'), 'utf8');
 const js = fs.readFileSync(path.join(root, 'web', 'app.js'), 'utf8');
 
 test('playback settings offer SenPlayer and a custom player', () => {
+  assert.match(html, /<option value="builtin">内置播放器（内嵌双栏 · 推荐）<\/option>/);
+  assert.doesNotMatch(html, /value="libmpv"/);
   assert.match(html, /<option value="senplayer" data-os="mac">SenPlayer（macOS）<\/option>/);
   assert.match(html, /<option value="custom">自定义播放器<\/option>/);
   assert.match(html, /id="sCustomPlayer"/);

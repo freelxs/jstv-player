@@ -50,7 +50,10 @@ function makeApp(callImpl = async () => ({})) {
   };
   const channels = [];
   const signals = [];
-  const window = { mygo: {
+  const windowListeners = {};
+  const window = {
+    addEventListener: (name, fn) => { windowListeners[name] = fn; },
+    mygo: {
     call: (method, ...args) => callImpl(method.replace('Player.', ''), ...args),
     callWith: (method, args, opts) => {
       if (opts && opts.signal && Array.isArray(args) && args.some((a) => channels.includes(a))) {
@@ -71,7 +74,7 @@ function makeApp(callImpl = async () => ({})) {
   const context = { document, window, navigator: { userAgent: 'mock' }, BrowseRequestToken: createRequestToken, youtubeLoginHelp,
     AbortController, setTimeout, clearTimeout, URL, console, Promise };
   vm.runInNewContext(code, context, { filename: 'app.js' });
-  return { app: context.app, el: get, channels, signals };
+  return { app: context.app, el: get, channels, signals, window, windowListeners };
 }
 
 const site = (name, api = name) => ({ name, key: name, api });
@@ -664,4 +667,86 @@ test('SearchAll reuses already rendered site grids across streaming chunks', asy
   finish();
   await done;
   assert.equal(harness.el('#view').children[1], firstGrid);
+});
+
+test('openDetail creates dual-column layout with #playerStage and vertical episodes list', async () => {
+  const harness = makeApp(async (method) => {
+    if (method === 'Detail') {
+      return {
+        vod: { vod_name: '测试影片', vod_pic: 'https://example.com/p.jpg' },
+        lines: [{ flag: '官方', episodes: [{ name: '第1集', id: '1' }, { name: '第2集', id: '2' }] }],
+      };
+    }
+    return [];
+  });
+  await harness.app.openDetail(site('示例', 'demo'), 'item-1');
+  const descendants = (el) => [el, ...(el.children || []).flatMap(descendants)];
+  const all = descendants(harness.el('#view'));
+  const stage = all.find((n) => n.attributes && n.attributes.id === 'playerStage');
+  assert.ok(stage, 'expected #playerStage in detail view');
+  const linesHead = all.find((n) => n.classList && n.classList.contains('lines-head'));
+  assert.ok(linesHead, 'expected .lines-head in detail view');
+  const eps = all.filter((n) => n.classList && n.classList.contains('ep'));
+  assert.equal(eps.length, 2);
+  assert.equal(eps[0].textContent, '第1集');
+});
+
+test('play switches episode in-place when embedded player is active on the same line', async () => {
+  let playEpisodesCalls = 0;
+  const harness = makeApp(async (method) => {
+    if (method === 'PlayEpisodes') {
+      playEpisodesCalls++;
+      return [];
+    }
+    return [];
+  });
+  const line = { flag: '线路1', episodes: [{ name: '第1集', id: 'e1' }, { name: '第2集', id: 'e2' }] };
+  const stage = harness.el('#playerStage');
+  let jumpedTo = -1;
+  const iframe = new MockElement('iframe');
+  iframe.className = 'embedded-player-frame';
+  iframe.contentWindow = {
+    __jstvCanJump: (idx) => idx >= 0 && idx < line.episodes.length,
+    __jstvGo: (idx) => { jumpedTo = idx; },
+  };
+  stage.querySelector = (sel) => (sel.includes('embedded-player-frame') ? iframe : null);
+  stage.dataset.activeVodId = 'vod-1';
+  stage.dataset.activeFlag = '线路1';
+
+  await harness.app.play(site('示例'), line, 1, 'vod-1', '节目', null);
+
+  assert.equal(playEpisodesCalls, 0, 'should not call PlayEpisodes backend on in-place episode jump');
+  assert.equal(jumpedTo, 1, 'should have invoked __jstvGo(1)');
+});
+
+test('embedded player lifecycle cleans up old iframe and handles jstv-close-player', async () => {
+  const harness = makeApp();
+  const stage = harness.el('#playerStage');
+  let destroyed = false;
+  let videoPaused = false;
+  let placeholderRestored = false;
+  const oldIframe = new MockElement('iframe');
+  oldIframe.className = 'embedded-player-frame';
+  oldIframe.contentWindow = {
+    __jstvDestroy: () => { destroyed = true; },
+    document: {
+      querySelector: (sel) => {
+        if (sel === 'video') return { pause: () => { videoPaused = true; }, removeAttribute: () => {}, load: () => {} };
+        return null;
+      }
+    }
+  };
+  stage.querySelector = (sel) => (sel.includes('embedded-player-frame') ? oldIframe : null);
+  stage.__jstvRestorePlaceholder = () => { placeholderRestored = true; };
+
+  const mounted = harness.window.__jstvEmbedBuiltin('测试标题', '<html><head></head><body><video></video></body></html>', 'http://127.0.0.1:50444/');
+  assert.ok(mounted);
+  assert.ok(destroyed, 'old player __jstvDestroy should be called');
+  assert.ok(videoPaused, 'old video should be paused');
+  assert.equal(oldIframe.isConnected, false, 'old iframe should be removed from DOM');
+
+  if (typeof harness.windowListeners.message === 'function') {
+    harness.windowListeners.message({ data: { type: 'jstv-close-player' } });
+    assert.ok(placeholderRestored, 'placeholder should be restored on close');
+  }
 });

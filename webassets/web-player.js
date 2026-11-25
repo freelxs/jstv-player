@@ -5,7 +5,7 @@
   const root = document.createElement('div');
   root.className = 'web-player';
   root.hidden = true;
-  root.innerHTML = '<div class="web-player-bar"><strong class="web-player-title"></strong><span class="web-player-err"></span><select class="web-player-line" hidden></select><button type="button" data-act="prev">上一集</button><button type="button" data-act="next">下一集</button><button type="button" data-act="close">关闭</button></div><video controls playsinline></video><button type="button" class="web-player-go" hidden>点击播放</button>';
+  root.innerHTML = '<div class="web-player-bar"><strong class="web-player-title"></strong><span class="web-player-err"></span><select class="web-player-line" hidden></select><button type="button" data-act="prev">上一集</button><button type="button" data-act="next">下一集</button><button type="button" data-act="fs">全屏</button><button type="button" data-act="close">关闭</button></div><video controls playsinline></video><button type="button" class="web-player-go" hidden>点击播放</button>';
   document.body.append(root);
   const video = root.querySelector('video');
   const titleEl = root.querySelector('.web-player-title');
@@ -14,6 +14,19 @@
   const lineSel = root.querySelector('.web-player-line');
   const prevBtn = root.querySelector('[data-act="prev"]');
   const nextBtn = root.querySelector('[data-act="next"]');
+  const fsBtn = root.querySelector('[data-act="fs"]');
+  if (fsBtn) {
+    fsBtn.onclick = () => {
+      const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (isFs) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      } else {
+        const req = root.requestFullscreen || root.webkitRequestFullscreen;
+        if (req) req.call(root);
+      }
+    };
+  }
   let hls = null;
   let hlsPromise = null;
   let current = null;
@@ -215,10 +228,28 @@
     if (current) current.lineIndex = 0;
     lastProgressAt = 0; pendingSeek = playback.position || 0;
     titleEl.textContent = playback.title || '正在播放';
+    const stage = typeof document.querySelector === 'function' ? document.querySelector('#playerStage') : null;
+    if (stage && typeof stage.append === 'function') {
+      if (root.parentElement !== stage) {
+        if (typeof stage.replaceChildren === 'function') stage.replaceChildren(root);
+        else stage.append(root);
+      }
+      if (root.classList) root.classList.add('embedded');
+      else if (!root.className.includes('embedded')) root.className += ' embedded';
+    } else {
+      if (root.classList) root.classList.remove('embedded');
+      else root.className = (root.className || '').replace(/\bembedded\b/g, '').trim();
+      if (document.body && root.parentElement !== document.body && typeof document.body.append === 'function') {
+        document.body.append(root);
+      }
+    }
     root.hidden = false;
     syncButtons();
     syncLines();
     attach(playback).then(() => armStall()).catch((err) => failPlayback((err.message || '播放失败') + '，已停止连播'));
+    if (typeof window.__jstvOnEpisodeChange === 'function' && playback) {
+      window.__jstvOnEpisodeChange(playback.index);
+    }
   }
 
   async function go(index) {
@@ -242,6 +273,15 @@
     destroyHls();
     root.hidden = true;
     current = null;
+    if (root.className && root.className.includes('embedded')) {
+      const stage = root.parentElement;
+      if (stage && typeof stage.__jstvRestorePlaceholder === 'function') {
+        stage.__jstvRestorePlaceholder();
+      }
+    }
+    if (typeof window.__jstvOnEpisodeChange === 'function') {
+      window.__jstvOnEpisodeChange(-1);
+    }
   };
   goBtn.onclick = () => tryPlay();
   video.addEventListener('loadedmetadata', () => {

@@ -185,7 +185,41 @@ function toast(msg, { ms = 3500, err = false, busy = false } = {}) {
 const hideToast = () => { clearTimeout(toast.h); $('#toast').hidden = true; };
 
 // ---- view states ----
-function setView(...kids) { const v = $('#view'); v.replaceChildren(...kids.filter((k) => k != null && k !== false)); v.classList.remove('fade'); void v.offsetWidth; v.classList.add('fade'); }
+function cleanUpEmbeddedPlayer() {
+  const stage = typeof document?.querySelector === 'function' ? document.querySelector('#playerStage') : null;
+  if (stage) {
+    const iframe = typeof stage.querySelector === 'function' ? stage.querySelector('iframe.embedded-player-frame') : null;
+    if (iframe) {
+      try {
+        if (iframe.contentWindow) {
+          if (typeof iframe.contentWindow.__jstvDestroy === 'function') {
+            iframe.contentWindow.__jstvDestroy();
+          }
+          const v = iframe.contentWindow.document?.querySelector('video');
+          if (v) {
+            v.pause();
+            v.removeAttribute?.('src');
+            v.load?.();
+          }
+        }
+      } catch (e) {}
+      iframe.srcdoc = '';
+      if (typeof iframe.remove === 'function') iframe.remove();
+    }
+    if (stage.dataset) {
+      delete stage.dataset.activeVodId;
+      delete stage.dataset.activeFlag;
+    }
+  }
+}
+function setView(...kids) {
+  cleanUpEmbeddedPlayer();
+  const v = $('#view');
+  v.replaceChildren(...kids.filter((k) => k != null && k !== false));
+  v.classList.remove('fade');
+  void v.offsetWidth;
+  v.classList.add('fade');
+}
 function stateBox({ ico = 'film', title, text, error = false, actions = [] }) {
   return el('div', { class: 'state' + (error ? ' error' : '') },
     el('div', { class: 'ico' }, icon(ico)), el('h4', {}, title), text ? el('p', {}, text) : null,
@@ -643,7 +677,47 @@ async function openDetail(site, id) {
     const meta = [v.vod_year, v.vod_area, v.type_name, v.vod_remarks].filter(Boolean).map((x) => el('span', {}, String(x)));
     const desc = String(v.vod_content || '').replace(/<[^>]+>/g, '').trim();
     let watched = !!(hist && hist.watched);
-    const hero = el('div', { class: 'hero' }, bg, cover, el('div', { class: 'info' },
+    const lines = d.lines || [];
+
+    const playerStage = el('div', { id: 'playerStage', class: 'player-stage' });
+    function renderStagePlaceholder() {
+      const hasHist = hist && hist.flag;
+      const histEpName = (hasHist && hist.name) ? hist.name : '';
+      const firstEpName = (lines[0]?.episodes?.[0]?.name) || '';
+      const resumeText = hasHist
+        ? `继续播放 ${histEpName}${hist.position > 0 ? ' · ' + formatClock(hist.position) : ''}`
+        : (firstEpName ? `从 ${firstEpName} 开始播放` : '点击播放');
+
+      const stageCover = el('div', { class: 'stage-cover' + (isConfigImage(v.vod_pic) ? ' code' : '') });
+      if (v.vod_pic) {
+        stageCover.append(el('img', { src: posterURL(v.vod_pic), referrerpolicy: 'no-referrer', alt: '' }));
+      }
+      const placeholder = el('div', { class: 'stage-placeholder' },
+        el('div', { class: 'stage-backdrop', style: v.vod_pic ? `background-image:url("${String(posterURL(v.vod_pic)).replace(/"/g, '%22')}")` : '' }),
+        el('div', { class: 'stage-content' },
+          stageCover,
+          el('div', { class: 'stage-meta' },
+            el('h3', { class: 'stage-title' }, v.vod_name || ''),
+            el('p', { class: 'stage-hint' }, hasHist ? `上次看到：${histEpName}` : '高清流畅 · 自动连播'),
+            lines.length && lines[0].episodes?.length ? el('button', {
+              class: 'stage-play-btn primary',
+              type: 'button',
+              onclick: () => {
+                const curLine = (lines.find((x) => hist && x.flag === hist.flag)) || lines[0];
+                const nextIdx = (hist && curLine.episodes[hist.index]) ? hist.index : 0;
+                highlightPlaying(curLine.flag, nextIdx);
+                play(site, curLine, nextIdx, vodId, v.vod_name, null);
+              }
+            }, icon('play'), resumeText) : null
+          )
+        )
+      );
+      playerStage.replaceChildren(placeholder);
+    }
+    playerStage.__jstvRestorePlaceholder = renderStagePlaceholder;
+    renderStagePlaceholder();
+
+    const hero = el('div', { class: 'hero' }, bg, playerStage, cover, el('div', { class: 'info' },
       el('h2', {}, v.vod_name || ''), meta.length ? el('div', { class: 'meta' }, meta) : null,
       v.vod_actor ? el('p', { class: 'cast' }, '主演：' + v.vod_actor) : null,
       v.vod_director ? el('p', { class: 'cast' }, '导演：' + v.vod_director) : null,
@@ -659,15 +733,42 @@ async function openDetail(site, id) {
       const pos = hist && hist.position > 0 ? ' · ' + formatClock(hist.position) : '';
       return el('div', { class: 'resume' }, el('button', { class: 'primary', onclick: (e) => play(site, l, next, vodId, v.vod_name, null) }, icon('play'), `继续播放 ${l.episodes[next].name}${pos}`));
     }
-    const lines = d.lines || [];
     const body = el('div', { id: 'lines' });
+
+    function highlightPlaying(flag, idx) {
+      const epBtns = $$('#lines .ep');
+      epBtns.forEach((b) => {
+        const isMatch = b.dataset.flag === flag && Number(b.dataset.index) === idx;
+        b.classList.toggle('playing', isMatch);
+        const badge = b.querySelector('.playing-badge');
+        if (isMatch) {
+          if (!badge) b.append(el('span', { class: 'ep-badge playing-badge' }, '播放中'));
+          try { b.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { b.scrollIntoView(); }
+        } else if (badge) {
+          badge.remove();
+        }
+      });
+    }
+    window.__jstvHighlightPlaying = highlightPlaying;
+    window.__jstvOnEpisodeChange = (index) => {
+      const activeFlag = playerStage.dataset.activeFlag || (lines && lines[lineIdx]?.flag);
+      if (activeFlag && index >= 0) highlightPlaying(activeFlag, index);
+      else if (index < 0) $$('#lines .ep.playing').forEach((b) => { b.classList.remove('playing'); b.querySelector('.playing-badge')?.remove(); });
+    };
+
     if (lines.length) {
+      const linesHead = el('div', { class: 'lines-head' },
+        el('div', { class: 'lines-title' },
+          el('strong', {}, '选集'),
+          el('span', { class: 'lines-count' }, lines[lineIdx] ? `共 ${lines[lineIdx].episodes.length} 集` : '')
+        )
+      );
       const tabButtons = lines.length > 1
         ? lines.map((l, i) => el('button', { class: i === lineIdx ? 'active' : '', onclick: () => { lineIdx = i; drawLine(true); } }, l.flag))
         : [];
       const tabs = lines.length > 1 ? el('div', { class: 'line-tabs' }, tabButtons) : el('div', { class: 'section-h' }, lines[0].flag);
       const eps = el('div', { class: 'eps' });
-      body.append(tabs, eps);
+      body.append(linesHead, tabs, eps);
       const focusActiveTab = (clicked) => {
         const activeBtn = tabButtons[lineIdx];
         if (!activeBtn) return;
@@ -683,7 +784,25 @@ async function openDetail(site, id) {
         tabButtons.forEach((btn, i) => btn.classList.toggle('active', i === lineIdx));
         body.querySelector?.('.quality-pick')?.remove();
         const line = lines[lineIdx];
-        eps.replaceChildren(...line.episodes.map((ep, i) => el('button', { class: 'ep' + (hist && hist.flag === line.flag && hist.index === i ? ' last' : ''), title: ep.name, onclick: (e) => play(site, line, i, vodId, v.vod_name, e.currentTarget) }, ep.name)));
+        const countEl = body.querySelector?.('.lines-count');
+        if (countEl) countEl.textContent = `共 ${line.episodes.length} 集`;
+        eps.replaceChildren(...line.episodes.map((ep, i) => {
+          const isLast = hist && hist.flag === line.flag && hist.index === i;
+          const btn = el('button', {
+            class: 'ep' + (isLast ? ' last' : ''),
+            title: ep.name,
+            onclick: (e) => {
+              highlightPlaying(line.flag, i);
+              play(site, line, i, vodId, v.vod_name, e.currentTarget);
+            }
+          },
+            el('span', { class: 'ep-name' }, ep.name),
+            isLast ? el('span', { class: 'ep-badge' }, '上次观看') : null
+          );
+          btn.dataset.flag = line.flag;
+          btn.dataset.index = String(i);
+          return btn;
+        }));
         tabs.scrollLeft = prevScroll;
         focusActiveTab(clicked);
       };
@@ -712,6 +831,25 @@ async function play(site, line, idx, vodId, title, btn, quality) {
     btn?.classList.remove('busy');
     return;
   }
+  const stage = typeof document?.querySelector === 'function' ? document.querySelector('#playerStage') : null;
+  const iframe = (stage && typeof stage.querySelector === 'function') ? stage.querySelector('iframe.embedded-player-frame') : null;
+  if (stage && iframe && iframe.contentWindow &&
+      stage.dataset?.activeVodId === vodId &&
+      stage.dataset?.activeFlag === flag &&
+      typeof iframe.contentWindow.__jstvCanJump === 'function' &&
+      iframe.contentWindow.__jstvCanJump(idx)) {
+    btn?.classList.remove('busy');
+    $$('.ep.last').forEach((b) => b.classList.remove('last'));
+    btn?.classList.add('last');
+    btn?.classList.add('played');
+    if (typeof window.__jstvHighlightPlaying === 'function') {
+      window.__jstvHighlightPlaying(flag, idx);
+    } else if (typeof window.__jstvOnEpisodeChange === 'function') {
+      window.__jstvOnEpisodeChange(idx);
+    }
+    iframe.contentWindow.__jstvGo(idx);
+    return;
+  }
   toast('解析播放地址…', { ms: 0, busy: true });
   try {
     // With 连播 the Go side opens the player with this and the following
@@ -721,6 +859,15 @@ async function play(site, line, idx, vodId, title, btn, quality) {
     $('.quality')?.remove();
     $$('.ep.last').forEach((b) => b.classList.remove('last'));
     btn?.classList.add('last');
+    if (stage && stage.dataset) {
+      stage.dataset.activeVodId = vodId;
+      stage.dataset.activeFlag = flag;
+    }
+    if (typeof window.__jstvHighlightPlaying === 'function') {
+      window.__jstvHighlightPlaying(flag, idx);
+    } else if (typeof window.__jstvOnEpisodeChange === 'function') {
+      window.__jstvOnEpisodeChange(idx);
+    }
     if (!streams.length) {
       toast(idx < line.episodes.length - 1 ? `正在连播：从 ${ep.name} 起共 ${line.episodes.length - idx} 集` : '正在打开播放器…');
     } else if (streams.length === 1) {
@@ -736,7 +883,9 @@ async function play(site, line, idx, vodId, title, btn, quality) {
     }
     btn?.classList.add('played');
   } catch (e) { toast(errMsg(e), { err: true, ms: 6000 }); }
-  btn?.classList.remove('busy');
+  finally {
+    btn?.classList.remove('busy');
+  }
 }
 
 // ---- settings sheet ----
@@ -948,6 +1097,84 @@ const btnSidebarUpdate = $('#btnSidebarUpdate');
 if (btnSidebarUpdate) btnSidebarUpdate.onclick = () => openUpdateDialog(true);
 window.__jstvOpenUpdate = () => openUpdateDialog(true);
 window.__jstvOpenSettings = () => openSettings('subs');
+
+window.__jstvEmbedBuiltin = (title, page, base) => {
+  const stage = typeof document?.querySelector === 'function' ? document.querySelector('#playerStage') : null;
+  if (!stage) return false;
+  const oldIframe = typeof stage.querySelector === 'function' ? stage.querySelector('iframe.embedded-player-frame') : null;
+  if (oldIframe) {
+    try {
+      if (oldIframe.contentWindow) {
+        if (typeof oldIframe.contentWindow.__jstvDestroy === 'function') {
+          oldIframe.contentWindow.__jstvDestroy();
+        }
+        const v = oldIframe.contentWindow.document?.querySelector('video');
+        if (v) {
+          v.pause();
+          v.removeAttribute?.('src');
+          v.load?.();
+        }
+      }
+    } catch (e) {}
+    oldIframe.srcdoc = '';
+    if (typeof oldIframe.remove === 'function') oldIframe.remove();
+  }
+  const iframe = document.createElement('iframe');
+  iframe.className = 'embedded-player-frame';
+  iframe.setAttribute('allow', 'fullscreen; autoplay');
+  iframe.setAttribute('frameborder', '0');
+  let content = page;
+  if (base && !content.includes('<base ')) {
+    content = content.replace('<head>', `<head><base href="${base}">`);
+  }
+  iframe.srcdoc = content;
+  stage.replaceChildren(iframe);
+  return true;
+};
+
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('message', (e) => {
+    if (!e || !e.data) return;
+    if (e.data.type === 'jstv-close-player') {
+      const stage = typeof document?.querySelector === 'function' ? document.querySelector('#playerStage') : null;
+      if (stage) {
+        const iframe = typeof stage.querySelector === 'function' ? stage.querySelector('iframe.embedded-player-frame') : null;
+        if (iframe) {
+          try {
+            if (iframe.contentWindow) {
+              if (typeof iframe.contentWindow.__jstvDestroy === 'function') {
+                iframe.contentWindow.__jstvDestroy();
+              }
+              const v = iframe.contentWindow.document?.querySelector('video');
+              if (v) {
+                v.pause();
+                v.removeAttribute?.('src');
+                v.load?.();
+              }
+            }
+          } catch (err) {}
+          iframe.srcdoc = '';
+          if (typeof iframe.remove === 'function') iframe.remove();
+        }
+        if (stage.dataset) {
+          delete stage.dataset.activeVodId;
+          delete stage.dataset.activeFlag;
+        }
+        if (typeof stage.__jstvRestorePlaceholder === 'function') {
+          stage.__jstvRestorePlaceholder();
+        }
+      }
+      $$('#lines .ep.playing').forEach((b) => {
+        b.classList.remove('playing');
+        b.querySelector('.playing-badge')?.remove();
+      });
+    } else if (e.data.type === 'jstv-episode-change' && typeof e.data.index === 'number') {
+      if (typeof window.__jstvOnEpisodeChange === 'function') {
+        window.__jstvOnEpisodeChange(e.data.index);
+      }
+    }
+  });
+}
 window.__jstvReloadSource = () => loadSource(() => call('ForceRefreshSource'));
 function siteForAPI(api, fallbackName) {
   return st.sites.find((x) => x.api === api) || { api, name: fallbackName || '媒体库' };

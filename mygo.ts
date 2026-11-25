@@ -139,6 +139,10 @@ export interface Settings {
    * media: {vid} and {res} are substituted. Empty disables the bridge.
    */
   bridgeTemplate: string;
+  /** SkipIntro is the number of seconds to skip from the beginning of an episode (0 disables). */
+  skipIntro?: number;
+  /** SkipOutro is the number of seconds before the end of an episode to advance to the next (0 disables). */
+  skipOutro?: number;
   /** DisableContinuous turns off 连播 (playing the following episodes). */
   disableContinuous: boolean;
   /**
@@ -254,6 +258,8 @@ export interface WebPlayback {
   count: number;
   progressId?: string;
   position?: number;
+  skipIntro?: number;
+  skipOutro?: number;
   /**
    * Lines are alternate addresses for this playback, first one included.
    * The page switches on error or when nothing starts within 15 seconds.

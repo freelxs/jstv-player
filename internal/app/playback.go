@@ -88,6 +88,18 @@ func (p *Player) openBuiltin(title, page string) {
 		return
 	}
 	base := playbackPageBase(p.eps.base)
+	if p.desktop.EmbedBuiltin != nil && p.desktop.EmbedBuiltin(title, page, base) {
+		p.builtinMu.Lock()
+		old := p.builtinWin
+		p.builtinWin = nil
+		p.builtinMu.Unlock()
+		if old != nil {
+			old.Close()
+		}
+		p.setBuiltinAwake(true)
+		p.updateNowPlaying(builtinPlayerState{Title: title, Playing: true})
+		return
+	}
 	mygo.RunOnMain(func() {
 		p.builtinMu.Lock()
 		old := p.builtinWin

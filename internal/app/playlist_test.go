@@ -102,6 +102,9 @@ func TestBuiltinPlaylistPage(t *testing.T) {
 	if !strings.Contains(page, "hls.min.js") || !strings.Contains(page, "enableWorker:false") || !strings.Contains(page, "direct=1") || !strings.Contains(page, "player/close") {
 		t.Fatal("built-in page is missing the hls.js player")
 	}
+	if !strings.Contains(page, "artplayer.js") || !strings.Contains(page, "new Artplayer") || !strings.Contains(page, `id="artplayer"`) {
+		t.Fatal("built-in page is missing the artplayer component")
+	}
 	for _, control := range []string{">上一集<", ">下一集<", ">关闭<"} {
 		if !strings.Contains(page, control) {
 			t.Fatalf("built-in page is missing %s", control)
@@ -148,6 +151,19 @@ func TestEpisodeServerServesHlsJS(t *testing.T) {
 	closed.Body.Close()
 	if closed.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatal(closed.StatusCode)
+	}
+
+	artResp, err := http.Get(p.eps.base + "/artplayer.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artBody, _ := io.ReadAll(artResp.Body)
+	artResp.Body.Close()
+	if artResp.StatusCode != http.StatusOK || !strings.Contains(artResp.Header.Get("Content-Type"), "javascript") || !bytes.Contains(artBody, []byte("Artplayer")) {
+		t.Fatalf("%d %s %d", artResp.StatusCode, artResp.Header.Get("Content-Type"), len(artBody))
+	}
+	if artResp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("artplayer.js is not readable by the player page")
 	}
 }
 

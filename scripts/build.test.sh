@@ -22,11 +22,9 @@ grep -Fq 'node-version: 24' "$WORKFLOW" || fail "frontend tests must use Node 24
 grep -Fq 'release_tag:' "$WORKFLOW" || fail "workflow dispatch must expose optional release_tag"
 grep -Fq 'RELEASE_TAG_INPUT: ${{ inputs.release_tag' "$WORKFLOW" || fail "release tag must enter shell through an environment variable"
 grep -Fq '[[ -n "$release_tag" && ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]' "$SOURCE_ROOT/scripts/resolve-release-tag.sh" || fail "release tag must be restricted to numeric v-prefixed versions"
-grep -Fq 'branches: [main]' "$WORKFLOW" || fail "automatic releases must only run for main pushes"
+grep -Fq "tags: ['v*']" "$WORKFLOW" || fail "releases must trigger on version tag pushes"
 grep -Fq 'group: jstv-player-release-${{ needs.resolve-release.outputs.release_tag }}' "$WORKFLOW" || fail "release jobs must serialize per version tag"
 grep -Fq 'cancel-in-progress: false' "$WORKFLOW" || fail "release workflows must not cancel in-progress releases"
-grep -Fq 'git push origin "refs/tags/$TAG"' "$WORKFLOW" || fail "main release must create its version tag after builds"
-grep -Fq "git config user.name 'github-actions[bot]'" "$WORKFLOW" || fail "annotated release tags must configure their Git author"
 grep -Fq 'bash scripts/validate-release-tag.sh "$TAG"' "$WORKFLOW" || fail "release job must revalidate the remote tag immediately before publishing"
 grep -Fq 'ls_status" -ne 2' "$SOURCE_ROOT/scripts/validate-release-tag.sh" || fail "tag validation must distinguish missing refs from remote query errors"
 grep -Fq 'source_sha: ${{ steps.validate.outputs.source_sha }}' "$WORKFLOW" || fail "resolver must expose the immutable validated source commit"
@@ -43,14 +41,11 @@ resolve_tag() {
     SOURCE_VERSION="$version" RELEASE_TAG_INPUT="$input" \
     bash "$SOURCE_ROOT/scripts/resolve-release-tag.sh"
 }
-[[ "$(resolve_tag push refs/heads/main 0.3.3 '')" == v0.3.3 ]] || fail "main push must automatically release its source version"
+[[ -z "$(resolve_tag push refs/heads/main 0.3.3 '')" ]] || fail "main push must not automatically release"
 [[ "$(resolve_tag push refs/tags/v0.3.2 '' '')" == v0.3.2 ]] || fail "tag pushes must retain release behavior"
 [[ "$(resolve_tag workflow_dispatch refs/heads/main '' v0.3.2)" == v0.3.2 ]] || fail "manual release input must remain supported"
 [[ -z "$(resolve_tag push refs/heads/feature/test 0.3.3 '')" ]] || fail "feature branch pushes must not release"
 [[ -z "$(resolve_tag pull_request refs/heads/main 0.3.3 '')" ]] || fail "pull requests must not release"
-if resolve_tag push refs/heads/main invalid '' >/dev/null 2>&1; then
-  fail "malformed main source version must fail validation"
-fi
 if resolve_tag workflow_dispatch refs/heads/main '' 'v0.3.2;touch /tmp/not-allowed' >/dev/null 2>&1; then
   fail "malformed release tag input must fail validation"
 fi

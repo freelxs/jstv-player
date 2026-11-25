@@ -2,7 +2,6 @@ name: Build
 
 on:
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -310,26 +309,12 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/validate-release-tag.sh "$TAG"
-          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
-            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          fi
           if git show-ref --verify --quiet "refs/tags/$TAG"; then
             [[ "$(git rev-parse "$TAG^{commit}")" == "$SOURCE_SHA" ]]
-          else
-            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]
-            [[ "$SOURCE_SHA" == "$GITHUB_SHA" ]]
-            [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists. Existing releases and assets are never overwritten; bump mygo.json for a new release." >&2
             exit 1
-          fi
-          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
-            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]] || { echo "Tag $TAG disappeared before publishing." >&2; exit 1; }
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git tag -a "$TAG" -m "Release $TAG"
-            git push origin "refs/tags/$TAG"
           fi
           bash scripts/generate-checksums.sh release-assets
           gh release create "$TAG" release-assets/* --generate-notes --verify-tag --repo "$GITHUB_REPOSITORY"

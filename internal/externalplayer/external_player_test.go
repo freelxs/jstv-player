@@ -97,7 +97,7 @@ func TestPlayerUsesPlaylist(t *testing.T) {
 }
 
 func TestMPVOSDFontArgs(t *testing.T) {
-	if got := mpvOSDFontArgs("darwin"); len(got) != 1 || got[0] != "--osd-font=Hiragino Sans GB" {
+	if got := MpvOSDFontArgs("darwin"); len(got) != 1 || got[0] != "--osd-font=Hiragino Sans GB" {
 		t.Fatalf("darwin OSD font = %v", got)
 	}
 }

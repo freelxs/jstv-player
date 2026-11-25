@@ -22,7 +22,7 @@
 - 应用启动时验证完整性和已批准清单后默认使用最后成功缓存版本；“重新加载”和“强制下载刷新”均绕过缓存直接拉取最新订阅。新版启动失败时，可显式确认并回退原缓存版本
 - 分类筛选 UI：支持 `home.filters` 中按分类 ID 提供的字符串选项格式；无效或缺失 metadata 时安全隐藏筛选控件
 - 详情页、多线路剧集列表、多清晰度选择
-- 播放：内置播放器（窗口里的 HTML5 `<video>` + hls.js，和网页模式同一套）、mpv（三个平台）、PotPlayer（仅 Windows）、IINA（仅 macOS）、SenPlayer（仅 macOS）、自定义播放器、系统默认；需要请求头的流经本地代理转发
+- 播放：默认内置播放器（内嵌双栏布局：左侧 16:9 播放画面 + 右侧选集列表，深度贴合系统窗口与分屏）、外部播放器（mpv、PotPlayer、IINA、SenPlayer、自定义播放器、系统默认）；需要请求头的流经本地代理转发
 - **连播**：点某一集后，同一线路的后续剧集自动接着播放。若这一集返回多个清晰度，选定一个后按该清晰度连播，后面每一集仍在播到时才向插件解析（mpv / IINA / PotPlayer / 自定义播放器通过本地 M3U 播放列表；内置播放器在窗口里用上一集 / 下一集切换，播完自动下一集，也可以回到更早的集）。SenPlayer 和系统播放器的启动方式只接受一个地址，连播会退回当前这一集。设置 → 播放里可关闭。当前一集播放时会在后台提前解析并预热下一集，mpv / IINA 还会在快结束时提前打开下一项，换集不卡顿。启动 IINA 时传入仅用于该次启动的 `disableOSDFileStartMsg` 偏好覆盖，不写入 IINA 全局偏好。记住每部剧上次看到的集数，详情页可“继续播放”
 - 浅色 / 深色模式跟随系统；海报网格、骨架屏加载、空状态和错误状态（带重试）
 - 插件或点播站点返回网页（`parse:1`、`jx` 或 `text/html`）时，先从页面里的 video/source、MacCMS `player_` 对象、iframe 和媒体地址提取直链，再用配置里的 `parses`（type 0 网页、type 1 JSON，按 flag 匹配）。桌面模式最后用隐藏的 WebView 嗅探媒体请求，在播放器里播放，12 秒没有结果会给出明确错误。网页模式不做嗅探。解析成功的地址进入连播队列
@@ -38,7 +38,7 @@
 - macOS 12+（Apple Silicon / Intel 通用包）、Windows 10/11 x64（需要 WebView2，Windows 11 自带）、Linux x64（需要 GTK 3 和 WebKitGTK 4.1）。Linux 上用内置播放器看 HLS 时，WebKitGTK 还需要 GStreamer 解码插件：`gstreamer1.0-plugins-good`、`gstreamer1.0-plugins-bad`、`gstreamer1.0-libav`。Debian 包把这三项列为依赖。AC3 等专利编码另需 `gstreamer1.0-plugins-ugly`。Fedora 上对应包名是 `gstreamer1-plugins-good`、`gstreamer1-plugins-bad-free` 和 `gstreamer1-libav`。
 - Node.js 18+（CatPaw 插件需要；TVBox 的 `.js` 站点优先用内置 QuickJS，失败时才需要 Node。原生直播不需要）。可用 `--with-node` 构建包内置 Node；选择顺序为设置中的显式路径、包内 Node、系统 Node。精简包仍要求系统 Node，也可在设置里填写路径。
 - 推荐安装 mpv：macOS `brew install mpv`，Windows `scoop install mpv`（或放进 PATH），Ubuntu `sudo apt install mpv`。macOS 也可用 [IINA](https://iina.io) 或 [SenPlayer](https://apps.apple.com/app/senplayer-media-player/id6443975850)。
-- 内置播放器在桌面窗口里播放，用的是和网页模式同一套 HTML5 `<video>` 与 hls.js。macOS 的 web view 能直接播 HLS，会走系统解码；Windows WebView2 和 Linux WebKitGTK 在有 Media Source Extensions 时由 hls.js 把 HLS 转成 fMP4。没有 MSE 或缺少解码插件时，窗口里会提示改用外部播放器。因为这一点，还没保存过播放器设置时，Windows 仍优先 PotPlayer、然后 mpv、最后内置；Linux 优先 mpv、然后内置。macOS 仍默认内置。已经保存的选择不会被改掉。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
+- 桌面端与网页模式默认均使用**内置播放器（内嵌双栏布局）**：视频完全嵌在主窗口内部，原生支持 macOS 窗口平铺（Tiling）、台前调度（Stage Manager）、分屏、多显示器与全屏，无需外部独立弹窗，也不会出现窗口无法置顶或与主界面脱节的问题。若偏好独立窗口或外部解码渲染，也可在「设置 → 播放」中选用外部播放器（macOS 推荐 IINA / SenPlayer / mpv，Windows 推荐 PotPlayer / mpv，Linux 推荐 mpv）。PotPlayer 会在 PATH、注册表（App Paths 和 PotPlayer 自己的 ProgramPath）、`Program Files` / `Program Files (x86)` 下的 `DAUM\PotPlayer` 等目录里查找 `PotPlayerMini64.exe` / `PotPlayerMini.exe`。SenPlayer 先看 `/Applications/SenPlayer.app` 和 `~/Applications/SenPlayer.app`，再按 bundle id `com.wuziqi.SenPlayer` 用 Spotlight 查找。找到后用 `open -b` 打开 `senplayer://x-callback-url/play?url=`，地址是本地代理 URL，请求头由代理加上。这个 scheme 只播放一个地址，所以不会把连播 M3U 交给 SenPlayer。
 - 设置 → 播放里可以选「自定义播放器」，用系统文件对话框选择 macOS `.app`、Windows `.exe` 或 Linux 可执行文件，并可选附加参数。参数里的 `{url}` 会换成代理地址或连播 M3U；不写 `{url}` 时地址追加在参数末尾。程序以参数列表启动，不经过 shell。路径必须存在且能启动，否则保存和播放都会提示错误。
 - 所有外部播放器拿到的都是本地代理地址，请求头由代理加上。默认播放器只在还没保存过播放器设置时生效；已经保存过的设置不会被改动，SenPlayer 和自定义播放器也不会被自动选上。可在设置 → 播放里切换。
 
